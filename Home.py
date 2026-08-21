@@ -75,6 +75,9 @@ LIVE_DASHBOARDS = [
     {"title": "Major Exporters",
      "desc": "Corn exports by major origin — US Census/FGIS + vessel lineup.",
      "page": "apps/major_exporters/corn_exporter_dashboard.py", "url_path": "major-exporters"},
+    {"title": "Teams Broadcast",
+     "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
+     "page": "apps/teams_broadcast/app.py", "url_path": "teams-broadcast"},
 ]
 
 COMING_SOON = [
