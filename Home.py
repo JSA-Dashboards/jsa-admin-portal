@@ -53,29 +53,37 @@ for _key in _ENV_SECRET_KEYS:
 require_admin_login()
 
 # ── Landing page ──────────────────────────────────────────────────────────────
+# Order here is display order — dashboards are grouped by "category" on the
+# home page, in the order each category is first seen.
 LIVE_DASHBOARDS = [
-    {"title": "Basis Tracker",
+    {"title": "Basis Tracker", "category": "Cash Grain",
      "desc": "ADM + Mendota cash grain basis, rail FOB, river FOB, trends.",
      "page": "apps/basis_tracker/app.py", "url_path": "basis-tracker"},
-    {"title": "River FOB Portal",
+    {"title": "River FOB Portal", "category": "Cash Grain",
      "desc": "CIF NOLA, barge freight, and location FOB values by river reach.",
      "page": "apps/river_fob/app.py", "url_path": "river-fob"},
-    {"title": "RMA Production Map",
+    {"title": "Rail Freight", "category": "Cash Grain",
+     "desc": "USDA agtransport rail shipments — railroad, state & destination detail.",
+     "page": "apps/rail_freight/app.py", "url_path": "rail-freight"},
+
+    {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",
      "page": "apps/rma_map/app.py", "url_path": "rma-map"},
-    {"title": "Crop Conditions & Yield Model",
-     "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
-     "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
-    {"title": "Rail Shipments",
-     "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
-     "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},
-    {"title": "Domestic Production",
+    {"title": "Domestic Production", "category": "Supply & Demand",
      "desc": "USDA NASS corn production — national overview and state-level detail.",
      "page": "apps/domestic_production/app.py", "url_path": "domestic-production"},
-    {"title": "Major Exporters",
+    {"title": "Crop Conditions & Yield Model", "category": "Supply & Demand",
+     "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
+     "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
+
+    {"title": "Major Exporters", "category": "Grain Flows",
      "desc": "Corn exports by major origin — US Census/FGIS + vessel lineup.",
      "page": "apps/major_exporters/corn_exporter_dashboard.py", "url_path": "major-exporters"},
-    {"title": "Teams Broadcast",
+    {"title": "Rail Shipments", "category": "Grain Flows",
+     "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
+     "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},
+
+    {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
      "page": "apps/teams_broadcast/app.py", "url_path": "teams-broadcast"},
 ]
@@ -157,11 +165,22 @@ def render_home():
         )
 
     st.write("")
-    cols = st.columns(3)
-    for i, d in enumerate(LIVE_DASHBOARDS):
-        with cols[i % 3]:
-            with st.container(key=f"tile_{i}"):
-                st.page_link(d["page"], label=d["title"])
+
+    categories = []
+    for d in LIVE_DASHBOARDS:
+        if d["category"] not in categories:
+            categories.append(d["category"])
+
+    tile_i = 0
+    for cat in categories:
+        st.markdown(f"### {cat}")
+        cat_dashboards = [d for d in LIVE_DASHBOARDS if d["category"] == cat]
+        cols = st.columns(3)
+        for i, d in enumerate(cat_dashboards):
+            with cols[i % 3]:
+                with st.container(key=f"tile_{tile_i}"):
+                    st.page_link(d["page"], label=d["title"])
+            tile_i += 1
 
     st.caption("Pilot migrated the first three dashboards into this shell — the rest follow the same pattern.")
     soon_cols = st.columns(3)
