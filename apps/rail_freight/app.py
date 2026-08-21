@@ -38,18 +38,18 @@ BASE = Path(__file__).parent
 
 # JSA brand palette
 C = {
-    "BG":      "#0e1614",
-    "CARD":    "#162019",
-    "CARD2":   "#1e2e2a",
-    "BORDER":  "#243328",
+    "BG":      "#f6f8f7",
+    "CARD":    "#ffffff",
+    "CARD2":   "#eef3f0",
+    "BORDER":  "#d7e2dc",
     "PRIMARY": "#4a5d58",
-    "TEXT":    "#d4e8e4",
-    "DIM":     "#7a9990",
-    "MID":     "#a8c5bf",
-    "POS":     "#4ade80",
-    "NEG":     "#f87171",
-    "BLUE":    "#4aa3dc",
-    "GOLD":    "#fbbf24",
+    "TEXT":    "#32373c",
+    "DIM":     "#5f7267",
+    "MID":     "#4b5a54",
+    "POS":     "#16a34a",
+    "NEG":     "#dc2626",
+    "BLUE":    "#0693e3",
+    "GOLD":    "#b45309",
 }
 
 # Railroad colors

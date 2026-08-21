@@ -44,25 +44,25 @@ EASTERN_STATES = ["IL", "IN", "OH", "MI", "KY"]
 
 PLOT_BASE = dict(
     paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(14,22,20,0.6)",
-    font_color="#d4e8e4",
-    xaxis=dict(gridcolor="#1e2e2a", linecolor="#2d4440"),
-    yaxis=dict(gridcolor="#1e2e2a", linecolor="#2d4440"),
-    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#2d4440"),
+    plot_bgcolor="rgba(0,0,0,0)",
+    font_color="#32373c",
+    xaxis=dict(gridcolor="#e2e8e4", linecolor="#d7e2dc"),
+    yaxis=dict(gridcolor="#e2e8e4", linecolor="#d7e2dc"),
+    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#d7e2dc"),
     margin=dict(t=50, b=40, l=40, r=20),
 )
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stAppViewContainer"] { background: #0e1614; }
+[data-testid="stAppViewContainer"] { background: #f6f8f7; }
 [data-testid="stHeader"]            { background: transparent; }
 .block-container                    { padding-top: 1.2rem; }
 div[data-testid="stTabs"] button[aria-selected="true"] {
-    border-bottom: 2px solid #4a5d58; color: #d4e8e4;
+    border-bottom: 2px solid #4a5d58; color: #32373c;
 }
 div[data-testid="metric-container"] {
-    background: #162019; border: 1px solid #2d4440;
+    background: #ffffff; border: 1px solid #d7e2dc;
     border-radius: 10px; padding: 14px;
 }
 </style>
@@ -633,7 +633,7 @@ with tab_summary:
     st.plotly_chart(fig_yoy, use_container_width=True)
 
 st.markdown(
-    f'<div style="margin-top:40px;padding:14px 20px;border-top:1px solid #2d3035;'
+    f'<div style="margin-top:40px;padding:14px 20px;border-top:1px solid #d7e2dc;'
     f'color:#6b7280;font-size:0.70rem;line-height:1.6;">'
     f'Trading commodity futures, options on futures, cash commodities, and over-the-counter '
     f'derivative products involves substantial risk of loss and may not be suitable for all investors. '

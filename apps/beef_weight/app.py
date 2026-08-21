@@ -12,15 +12,15 @@ JSA_GREEN    = "#5e7164"   # exact logo monogram green
 JSA_GREEN_LT = "#8db89a"   # lightened for dark-bg readability
 JSA_CHARCOAL = "#333132"   # logo text color
 
-DM_BG       = "#0d1210"    # near-black with green tint
-DM_SURFACE  = "#141c18"    # card / sidebar surface
-DM_SURFACE2 = "#1a2620"    # chart background
-DM_BORDER   = "#253328"    # borders — JSA green tint
-DM_TEXT     = "#e8ede9"    # primary text — slight warm white
-DM_MUTED    = "#7a9485"    # muted text — sage
-COL_POS     = "#8db89a"    # positive delta — JSA light green
-COL_NEG     = "#e07070"    # negative delta — muted red
-COL_NEU     = "#7a9485"
+DM_BG       = "#f6f8f7"    # light, faint green tint
+DM_SURFACE  = "#ffffff"    # card / sidebar surface
+DM_SURFACE2 = "#eef3f0"    # chart background
+DM_BORDER   = "#d7e2dc"    # borders — JSA green tint
+DM_TEXT     = "#32373c"    # primary text — JPSI charcoal
+DM_MUTED    = "#5f7267"    # muted text — sage
+COL_POS     = "#16a34a"    # positive delta — green
+COL_NEG     = "#dc2626"    # negative delta — red
+COL_NEU     = "#5f7267"
 
 JPSI_GREEN  = JSA_GREEN_LT  # alias used throughout
 

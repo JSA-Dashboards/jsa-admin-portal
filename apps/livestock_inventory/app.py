@@ -19,15 +19,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
-DM_BG       = "#0e1614"
-DM_SURFACE  = "#162019"
-DM_SURFACE2 = "#1e2e2a"
-DM_BORDER   = "#243328"
-DM_TEXT     = "#e4e8f0"
-DM_MUTED    = "#7a9990"
-JPSI_GREEN  = "#4ade80"
-POS         = "#4ade80"
-NEG         = "#f87171"
+DM_BG       = "#f6f8f7"
+DM_SURFACE  = "#ffffff"
+DM_SURFACE2 = "#eef3f0"
+DM_BORDER   = "#d7e2dc"
+DM_TEXT     = "#32373c"
+DM_MUTED    = "#5f7267"
+JPSI_GREEN  = "#16a34a"
+POS         = "#16a34a"
+NEG         = "#dc2626"
 
 # Sequential scale for choropleths (dark-friendly)
 SEQ_SCALE = [
