@@ -1,0 +1,22 @@
+# JSA Home Page — reconciled union of basis-tracker-streamlit, river-fob-portal,
+# and rma-production-map's requirements. plotly is pinned <6 because river-fob's
+# PNG export needs kaleido==0.2.1, which fails headless on plotly>=6.
+streamlit>=1.40.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.18.0,<6
+kaleido==0.2.1
+altair>=5.0
+vl-convert-python>=1.7
+geopandas>=1.0.0
+shapely>=2.0.0
+openpyxl>=3.1.0
+psycopg2-binary>=2.9.9
+python-dotenv>=1.0.1
+pydantic>=2.0.0
+holidays>=0.50
+requests>=2.31.0
+httpx==0.27.0
+beautifulsoup4==4.12.3
+pillow>=11.0.0
+reportlab>=4.0

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "streamlit",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless=true", "--server.port=8501"],
+      "port": 8501
+    },
+    {
+      "name": "streamlit-view",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "view_app.py", "--server.headless=true", "--server.port=8502"],
+      "port": 8502
+    }
+  ]
+}

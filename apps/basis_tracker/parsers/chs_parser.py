@@ -1,0 +1,144 @@
+"""
+CHS Illinois Bushel API → NewSnapshotRequest parser.
+
+Converts the JSON response from:
+  POST https://api.bushelpowered.com/api/markets/aggregator/bids/v1/GetBidsList
+into NewSnapshotRequest objects, one per (location, commodity) group.
+"""
+from typing import Optional
+from models import NewSnapshotRequest, SnapshotRow
+
+# Normalize Bushel commodity display names → canonical grain names
+COMMODITY_MAP: dict[str, str] = {
+    "corn":       "Corn",
+    "soybeans":   "Soybeans",
+    "soybean":    "Soybeans",
+    "wheat, srw": "Wheat",
+    "wheat srw":  "Wheat",
+    "wheat hrw":  "Wheat",
+    "wheat":      "Wheat",
+}
+
+GRAIN_PREFIX: dict[str, str] = {
+    "Corn":     "CN",
+    "Soybeans": "SB",
+    "Wheat":    "WH",
+}
+
+# Skip pseudo-locations that aren't real elevators, plus CHS delivery points
+# named after other companies' plants that we track via their own provider
+# (e.g. ADM Clinton, GPC Muscatine) so we don't duplicate them.
+SKIP_LOCATION_NAMES = {"futures-only", "adm clinton", "gpc muscatine",
+                       "ottawa river mkt", "adm cedar rapids"}
+
+# AGP plant delivery points sometimes appear in the CHS feed. We track AGP via
+# the AGP company website instead, so drop any CHS location that is an AGP plant.
+def _is_agp_location(name: str) -> bool:
+    return name.strip().lower().startswith("agp")
+
+# Some CHS feed locations share a display name (two distinct "Morris" UUIDs —
+# Morris, IL on the Illinois River vs Morris, MN). The feed exposes no state, so
+# map their stable UUIDs to disambiguated names to keep their bids separate.
+LOCATION_ID_OVERRIDES = {
+    "8df590fd-be6a-4bef-8c61-e2684c7e2663": "Morris, IL",
+    "6f7e42d6-398c-40ea-a1a9-aa5053b20b11": "Morris, MN",
+}
+
+# A few CHS delivery points are third-party plants we track under their OWN
+# company name. Map the UUID to (provider, location) so their bids join that
+# series instead of showing under "CHS".
+PROVIDER_OVERRIDES = {
+    "763c2bfb-10d8-44ca-9f4d-50e3a6647964": ("Absolute Energy", "St. Ansgar, IA"),
+}
+
+
+def _basis_to_cents(value_str: str) -> Optional[int]:
+    """Convert USD/bu string (e.g., '-0.03', '0.24') to integer cents (-3, 24)."""
+    try:
+        return int(round(float(value_str) * 100))
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_grain(display_name: str) -> str:
+    """Map Bushel displayName to canonical grain, falling back to title-case."""
+    key = display_name.strip().lower()
+    return COMMODITY_MAP.get(key, display_name.strip().title())
+
+
+def parse_bids_response(
+    bids_data: dict,
+    location_ids: set[str],
+    timestamp: str,
+) -> list[NewSnapshotRequest]:
+    """
+    Parse the full GetBidsList response into a list of NewSnapshotRequest objects.
+
+    Each (location × commodity-group) becomes one snapshot so grains stay
+    separate, matching the convention used by ADM and POET data.
+
+    Args:
+        bids_data:    Parsed JSON from GetBidsList endpoint.
+        location_ids: Set of UUID strings to include (Illinois filter).
+                      Pass an empty set to include all locations.
+        timestamp:    ISO-8601 UTC string, e.g. "2026-06-10T00:00:00Z".
+
+    Returns:
+        List of NewSnapshotRequest objects (may be empty).
+    """
+    snapshots: list[NewSnapshotRequest] = []
+
+    for loc in bids_data.get("locations", []):
+        loc_id   = loc.get("id", "")
+        loc_name = LOCATION_ID_OVERRIDES.get(loc_id, loc.get("name", "").strip())
+
+        # Apply Illinois filter
+        if location_ids and loc_id not in location_ids:
+            continue
+
+        # Skip pseudo-locations
+        if loc_name.lower() in SKIP_LOCATION_NAMES:
+            continue
+
+        # Skip AGP plant delivery points — use AGP website bids instead
+        if _is_agp_location(loc_name):
+            continue
+
+        for group in loc.get("groups", []):
+            grain = _normalize_grain(group.get("displayName", ""))
+
+            rows: list[SnapshotRow] = []
+            for bid in group.get("bids", []):
+                # bid.id is a stable short code like "CNCAR000OXOX" — use as row_id
+                bid_id        = bid.get("id", "")
+                delivery_month = bid.get("description", "")
+                basis_str     = bid.get("basisPrice")
+                futures_sym   = bid.get("futuresSymbol") or ""
+
+                basis_cents = _basis_to_cents(basis_str) if basis_str is not None else None
+
+                grain_pfx = GRAIN_PREFIX.get(grain, grain[:2].upper() if grain else "XX")
+                row_id    = f"{grain_pfx}_{bid_id}" if bid_id else f"{grain_pfx}_{delivery_month}"
+
+                rows.append(SnapshotRow(
+                    id=row_id,
+                    grain=grain,
+                    deliveryMonth=delivery_month,
+                    futuresSymbol=futures_sym,
+                    basisCents=basis_cents,
+                    isSpot=False,
+                ))
+
+            if not rows:
+                continue
+
+            _prov, _loc = PROVIDER_OVERRIDES.get(loc_id, ("CHS", loc_name))
+            snapshots.append(NewSnapshotRequest(
+                timestamp=timestamp,
+                provider=_prov,
+                location=_loc,
+                source="web",
+                rows=rows,
+            ))
+
+    return snapshots

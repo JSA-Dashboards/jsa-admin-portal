@@ -1,0 +1,15 @@
+# JPSI brand theme (jpsi.com): dark #32373c, blue #0693e3
+# Shared across all merged dashboards (matches basis-tracker's and
+# river-fob-portal's own config.toml, already consistent between the two;
+# rma-production-map's inline CSS still renders its own accent on top).
+[theme]
+base = "light"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#eef4f8"
+primaryColor = "#0693e3"
+textColor = "#32373c"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
