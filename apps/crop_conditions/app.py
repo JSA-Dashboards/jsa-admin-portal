@@ -8531,8 +8531,8 @@ with _tab_validation:
                         "Current Weight":   _cal_reg["weights_current"][bc],
                         "Empirical Weight": _cal_reg["weights_empirical"][bc],
                         "β (yield_dev / pp)": round(_co, 4),
-                        "SE":               round(_se, 4) if not np.isnan(_se) else "N/A",
-                        "t-stat":           round(_t,  2)  if not np.isnan(_t)  else "N/A",
+                        "SE":               round(_se, 4) if not np.isnan(_se) else np.nan,
+                        "t-stat":           round(_t,  2)  if not np.isnan(_t)  else np.nan,
                         "Sig.":             _sig,
                     })
                 st.dataframe(
