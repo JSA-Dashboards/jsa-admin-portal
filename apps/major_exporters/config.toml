@@ -1,0 +1,10 @@
+[theme]
+# JSA / JPSI brand theme — charcoal dark with sage green accent
+primaryColor       = "#4a6741"        # JSA sage green (monogram color)
+backgroundColor    = "#1e2124"        # Deepest charcoal (matches header/table)
+secondaryBackgroundColor = "#2a2f35"  # Mid-tone panel (matches stat cells)
+textColor          = "#e8edf2"        # Off-white body text
+font               = "sans serif"
+
+[server]
+headless = true

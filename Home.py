@@ -72,6 +72,9 @@ LIVE_DASHBOARDS = [
     {"title": "Domestic Production",
      "desc": "USDA NASS corn production — national overview and state-level detail.",
      "page": "apps/domestic_production/app.py", "url_path": "domestic-production"},
+    {"title": "Major Exporters",
+     "desc": "Corn exports by major origin — US Census/FGIS + vessel lineup.",
+     "page": "apps/major_exporters/corn_exporter_dashboard.py", "url_path": "major-exporters"},
 ]
 
 COMING_SOON = [

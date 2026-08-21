@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:mso="urn:schemas-microsoft-com:office:office" xmlns:msdt="uuid:C2F41010-65B3-11d1-A29F-00AA00C14882">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JSA — Snapshot Visualization Prototypes</title>
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #13171b;
+    color: #d0d8e0;
+    font-family: Arial, sans-serif;
+    padding: 28px 32px;
+  }
+  h1 { color: #fff; font-size: 21px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: #5a6878; font-size: 12.5px; margin-bottom: 36px; }
+  .section { margin-bottom: 52px; }
+  .section-header {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 10px; padding-bottom: 10px;
+    border-bottom: 2px solid #2e353d;
+  }
+  .badge {
+    background: #4a7c59; color: #fff; font-size: 11px; font-weight: 700;
+    padding: 3px 9px; border-radius: 4px; letter-spacing: 0.4px;
+    white-space: nowrap;
+  }
+  .section-title { color: #fff; font-size: 17px; font-weight: 700; }
+  .desc {
+    color: #8a9aaa; font-size: 12.5px; line-height: 1.65;
+    max-width: 900px; margin-bottom: 14px;
+  }
+  .desc strong { color: #d0d8e0; }
+  .chart-wrap {
+    background: #1a1e22; border: 1px solid #2e353d; border-radius: 8px; overflow: hidden;
+  }
+  hr { border: none; border-top: 1px solid #2e353d; margin: 44px 0; }
+</style>
+
+<!--[if gte mso 9]><xml>
+<mso:CustomDocumentProperties>
+<mso:ItemRetentionFormula msdt:dt="string"></mso:ItemRetentionFormula>
+<mso:_dlc_policyId msdt:dt="string"></mso:_dlc_policyId>
+</mso:CustomDocumentProperties>
+</xml><![endif]-->
+</head>
+<body>
+
+<h1>JSA Export Dashboard — Visualization Prototypes</h1>
+<p class="subtitle">Sample data: Corn exporters · CY 2024/25 YTD through March · USDA Oct–Sep MY</p>
+
+<!-- 1. Quadrant Scatter -->
+<div class="section">
+  <div class="section-header">
+    <span class="badge">OPTION 1</span>
+    <span class="section-title">Quadrant Scatter — "Where's the Outlier?"</span>
+  </div>
+  <p class="desc">
+    Each country is a <strong>bubble</strong>. X-axis = % vs Olympic Avg · Y-axis = % vs Last Year ·
+    <strong>Bubble size = MYTD volume</strong> (bigger = more trade, higher importance).
+    Four quadrants tell the story instantly — bottom-left is your red flag zone.
+    Mixed-signal countries (one metric positive, one negative) land in the off-diagonal quadrants.
+    <br><em>Best for: instantly spotting true outliers vs mixed signals, weighted by trade importance.</em>
+  </p>
+  <div class="chart-wrap"><div id="c1"></div></div>
+</div>
+<hr>
+
+<!-- 2. Traffic Light Scorecard -->
+<div class="section">
+  <div class="section-header">
+    <span class="badge">OPTION 2</span>
+    <span class="section-title">Traffic Light Scorecard Grid</span>
+  </div>
+  <p class="desc">
+    Rows = countries · Columns = metrics (Monthly vs LY, Monthly vs Avg, MYTD vs LY, MYTD vs Avg).
+    Each cell is <strong>color-coded green / yellow / red</strong> with the % printed inside.
+    Thresholds: &gt;+5% = green · −5% to +5% = yellow · &lt;−5% = red.
+    Countries that are red across all four columns are your priority watches.
+    <br><em>Best for: scanning multiple metrics across all countries at once — no digging required.</em>
+  </p>
+  <div class="chart-wrap"><div id="c2"></div></div>
+</div>
+<hr>
+
+<!-- 3. Lollipop -->
+<div class="section">
+  <div class="section-header">
+    <span class="badge">OPTION 3</span>
+    <span class="section-title">Lollipop Dot Plot — Cleaner Bar Chart</span>
+  </div>
+  <p class="desc">
+    Same ranking as the current bar chart but rendered as <strong>thin lines + dots</strong> — less visual noise,
+    both metrics shown per country simultaneously. Circle = % vs Avg · Diamond = % vs LY.
+    Countries sorted highest to lowest by % vs Avg.
+    <br><em>Best for: a tidier version of what's already built — same info, cleaner look with 10+ countries.</em>
+  </p>
+  <div class="chart-wrap"><div id="c3"></div></div>
+</div>
+<hr>
+
+<!-- 4. Running Pace -->
+<div class="section">
+  <div class="section-header">
+    <span class="badge">OPTION 4</span>
+    <span class="section-title">Running Pace Chart — "Are We On Track?"</span>
+  </div>
+  <p class="desc">
+    Cumulative MYTD shipments as a <strong>% of the full-year Olympic average pace</strong>, plotted month by month.
+    The 100% dashed line = perfectly on pace. Countries above are running hot; below = falling off.
+    Unlike the snapshot charts, this shows <strong>when</strong> a deviation started and whether it's widening or recovering.
+    <br><em>Best for: understanding trajectory over the year, not just where things stand today.</em>
+  </p>
+  <div class="chart-wrap"><div id="c4"></div></div>
+</div>
+
+<script>
+const BORDER = "#2e353d", LABEL = "#aab4c0", MID = "#1d2227";
+const base = {
+  paper_bgcolor: "#1a1e22",
+  plot_bgcolor:  MID,
+  font: { family: "Arial", color: "#d0d8e0", size: 11 },
+};
+
+// ── shared sample data ────────────────────────────────────────────────────────
+const countries = ["Brazil","Argentina","Ukraine","United States","Major Exporters","Total Non-US"];
+const pct_avg   = [ 12.4,   -8.1,   -15.3,    6.2,   3.8,  -2.1];
+const pct_ly    = [  8.7,   -5.3,   -22.1,   11.4,   1.2,  -7.4];
+const vol       = [ 4820,   1640,     950,    3210, 10200,  6980];
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHART 1 — Quadrant Scatter
+// ══════════════════════════════════════════════════════════════════════════════
+(function(){
+  const colors = pct_avg.map((x,i) => {
+    if(x>=0 && pct_ly[i]>=0) return "#4caf50";
+    if(x< 0 && pct_ly[i]< 0) return "#ef5350";
+    return "#f9a825";
+  });
+
+  Plotly.newPlot("c1", [{
+    x: pct_avg, y: pct_ly,
+    mode: "markers+text",
+    type: "scatter",
+    text: countries,
+    textposition: pct_ly.map(v => v>=0 ? "top center" : "bottom center"),
+    textfont: { color: "#d0d8e0", size: 11 },
+    marker: {
+      size: vol.map(v => Math.sqrt(v/28)),
+      color: colors, opacity: 0.88,
+      line: { color:"#fff", width:1.5 },
+    },
+    hovertemplate: "<b>%{text}</b><br>% vs Avg: %{x:+.1f}%<br>% vs LY: %{y:+.1f}%<extra></extra>",
+    showlegend: false,
+  }], {
+    ...base,
+    height: 460,
+    margin: { l:70, r:50, t:60, b:60 },
+    xaxis: {
+      title:{text:"% vs Olympic Average", font:{color:LABEL,size:12}},
+      zeroline:false, gridcolor:BORDER, ticksuffix:"%", tickfont:{color:LABEL},
+    },
+    yaxis: {
+      title:{text:"% vs Last Year", font:{color:LABEL,size:12}},
+      zeroline:false, gridcolor:BORDER, ticksuffix:"%", tickfont:{color:LABEL},
+    },
+    shapes: [
+      // quadrant fills
+      {type:"rect", x0:-60,x1:0,y0:-60,y1:0, fillcolor:"rgba(239,83,80,0.06)",  line:{width:0}},
+      {type:"rect", x0:0,x1:60,y0:0,y1:60,   fillcolor:"rgba(76,175,80,0.06)",   line:{width:0}},
+      {type:"rect", x0:0,x1:60,y0:-60,y1:0,  fillcolor:"rgba(249,168,37,0.04)", line:{width:0}},
+      {type:"rect", x0:-60,x1:0,y0:0,y1:60,  fillcolor:"rgba(249,168,37,0.04)", line:{width:0}},
+      // zero lines
+      {type:"line",x0:0,x1:0,y0:-60,y1:60, xref:"x",yref:"y", line:{color:"#8a9aaa",width:1.2,dash:"dot"}},
+      {type:"line",x0:-60,x1:60,y0:0,y1:0, xref:"x",yref:"y", line:{color:"#8a9aaa",width:1.2,dash:"dot"}},
+    ],
+    annotations: [
+      {x:0.99,y:0.99,xref:"paper",yref:"paper",text:"🟢 Outperforming both",showarrow:false,font:{size:10,color:"#4caf50"},xanchor:"right",yanchor:"top"},
+      {x:0.01,y:0.01,xref:"paper",yref:"paper",text:"🔴 Underperforming both",showarrow:false,font:{size:10,color:"#ef5350"},xanchor:"left",yanchor:"bottom"},
+      {x:0.99,y:0.01,xref:"paper",yref:"paper",text:"🟡 Mixed signal",showarrow:false,font:{size:10,color:"#f9a825"},xanchor:"right",yanchor:"bottom"},
+      {x:0.01,y:0.99,xref:"paper",yref:"paper",text:"🟡 Mixed signal",showarrow:false,font:{size:10,color:"#f9a825"},xanchor:"left",yanchor:"top"},
+      {x:0.5,y:1.06,xref:"paper",yref:"paper",text:"Bubble size = MYTD volume — larger bubbles represent bigger trade flows",showarrow:false,font:{size:10,color:"#5a6878"},xanchor:"center"},
+    ],
+  }, {responsive:true, displayModeBar:false});
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHART 2 — Traffic Light Scorecard
+// ══════════════════════════════════════════════════════════════════════════════
+(function(){
+  // [monthly_ly, monthly_avg, mytd_ly, mytd_avg]
+  const vals = [
+    [ 10.2,  14.1,   8.7,  12.4],
+    [ -4.8,  -6.3,  -5.3,  -8.1],
+    [-19.4, -17.2, -22.1, -15.3],
+    [  9.1,   4.8,  11.4,   6.2],
+    [  2.3,   5.1,   1.2,   3.8],
+    [ -8.2,  -0.9,  -7.4,  -2.1],
+  ];
+  const metrics = ["Monthly<br>vs LY","Monthly<br>vs Avg","MYTD<br>vs LY","MYTD<br>vs Avg"];
+
+  const fill = v => v> 5?"rgba(76,175,80,0.80)":v< -5?"rgba(239,83,80,0.80)":"rgba(249,168,37,0.70)";
+  const fmt  = v => (v>=0?"+":"")+v.toFixed(1)+"%";
+
+  Plotly.newPlot("c2", [{
+    type:"table",
+    header:{
+      values:["<b>Country</b>",...metrics.map(m=>"<b>"+m+"</b>")],
+      fill:{color:"#151a1f"},
+      font:{color:LABEL,size:11,family:"Arial"},
+      line:{color:BORDER,width:1},
+      align:"center", height:38,
+    },
+    cells:{
+      values:[
+        countries.map(c=>"<b>"+c+"</b>"),
+        ...metrics.map((_,mi)=>vals.map(r=>"<b>"+fmt(r[mi])+"</b>")),
+      ],
+      fill:{color:[
+        countries.map(()=>"#1d2227"),
+        ...metrics.map((_,mi)=>vals.map(r=>fill(r[mi]))),
+      ]},
+      font:{color:[
+        countries.map(()=>"#aab4c0"),
+        ...metrics.map(()=>vals.map(()=>"#fff")),
+      ]},
+      line:{color:BORDER,width:1},
+      align:["left","center","center","center","center"],
+      height:42,
+    },
+  }], {
+    ...base,
+    height:360,
+    margin:{l:20,r:20,t:52,b:20},
+    annotations:[{
+      text:"Thresholds:  🟢 > +5%     🟡 −5% to +5%     🔴 < −5%",
+      xref:"paper",yref:"paper",x:0,y:1.1,
+      showarrow:false,font:{size:10.5,color:"#8a9aaa"},xanchor:"left",
+    }],
+  }, {responsive:true, displayModeBar:false});
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHART 3 — Lollipop
+// ══════════════════════════════════════════════════════════════════════════════
+(function(){
+  const sorted = countries.map((c,i)=>({c,avg:pct_avg[i],ly:pct_ly[i]}))
+                           .sort((a,b)=>a.avg-b.avg);
+  const labs = sorted.map(d=>d.c);
+  const avgs = sorted.map(d=>d.avg);
+  const lys  = sorted.map(d=>d.ly);
+  const ac   = avgs.map(v=>v>=0?"#4caf50":"#ef5350");
+  const lc   = lys.map(v=>v>=0?"#4caf50":"#ef5350");
+
+  const shapes=[];
+  labs.forEach((_,i)=>{
+    shapes.push({type:"line",xref:"x",yref:"y",x0:0,x1:avgs[i],y0:i+0.14,y1:i+0.14,line:{color:ac[i],width:3}});
+    shapes.push({type:"line",xref:"x",yref:"y",x0:0,x1:lys[i], y0:i-0.14,y1:i-0.14,line:{color:lc[i],width:3,dash:"dot"}});
+  });
+  shapes.push({type:"line",xref:"x",yref:"y",x0:0,x1:0,y0:-0.5,y1:labs.length-0.5,line:{color:"#8a9aaa",width:1.2}});
+
+  Plotly.newPlot("c3",[
+    {
+      x:avgs, y:labs.map((_,i)=>i+0.14),
+      mode:"markers+text", type:"scatter", name:"% vs Olympic Avg",
+      marker:{color:ac,size:11,symbol:"circle"},
+      text:avgs.map(v=>(v>=0?"+":"")+v.toFixed(1)+"%"),
+      textposition:avgs.map(v=>v>=0?"middle right":"middle left"),
+      textfont:{color:ac,size:10},
+    },
+    {
+      x:lys, y:labs.map((_,i)=>i-0.14),
+      mode:"markers+text", type:"scatter", name:"% vs Last Year",
+      marker:{color:lc,size:9,symbol:"diamond"},
+      text:lys.map(v=>(v>=0?"+":"")+v.toFixed(1)+"%"),
+      textposition:lys.map(v=>v>=0?"middle right":"middle left"),
+      textfont:{color:lc,size:10},
+    },
+  ],{
+    ...base,
+    height:340,
+    margin:{l:140,r:90,t:50,b:40},
+    shapes,
+    xaxis:{zeroline:false,gridcolor:BORDER,ticksuffix:"%",tickfont:{color:LABEL}},
+    yaxis:{
+      tickmode:"array",tickvals:labs.map((_,i)=>i),ticktext:labs,
+      tickfont:{color:LABEL,size:11},gridcolor:BORDER,
+      range:[-0.6,labs.length-0.4],
+    },
+    legend:{orientation:"h",yanchor:"bottom",y:1.02,xanchor:"left",x:0,font:{color:LABEL,size:11},bgcolor:"rgba(0,0,0,0)"},
+  },{responsive:true,displayModeBar:false});
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHART 4 — Running Pace
+// ══════════════════════════════════════════════════════════════════════════════
+(function(){
+  const months=["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"];
+  // simulated cumulative % of full-year Olympic avg pace (actual data through Mar, projected after)
+  const pace={
+    "Brazil":         [3.5,7.2,13.1,22.4,35.8,55.1,null,null,null,null,null,null],
+    "Argentina":      [2.1,4.8, 8.6,13.4,20.7,28.9,null,null,null,null,null,null],
+    "Ukraine":        [7.2,14.8,21.9,28.5,33.2,37.5,null,null,null,null,null,null],
+    "United States":  [5.8,11.6,17.7,23.9,30.6,38.4,null,null,null,null,null,null],
+    "Major Exporters":[4.8, 9.9,16.1,22.6,29.8,38.0,null,null,null,null,null,null],
+  };
+  // Olympic avg pace reference (normalised: month i = % of full year expected by that month)
+  const refPace=[4.1,8.5,13.9,20.2,27.4,35.2,44.0,54.3,65.1,76.8,88.6,100];
+
+  // Convert raw cumulative to % of pace
+  // pace% = (actual_cum / expected_cum_at_that_month) * 100
+  const palette=["#43a047","#29b6f6","#fdd835","#f9a825","#7e57c2"];
+  const ctries=Object.keys(pace);
+
+  // raw cumulative (index matched to months through Mar = index 5)
+  const rawRef=[4.1,8.5,13.9,20.2,27.4,35.2,44.0,54.3,65.1,76.8,88.6,100];
+
+  const traces=ctries.map((c,i)=>{
+    const raw=pace[c];
+    const paceVals=raw.map((v,mi)=>v===null?null:+(v/rawRef[mi]*100).toFixed(1));
+    return {
+      x:months, y:paceVals,
+      mode:"lines+markers", name:c,
+      line:{color:palette[i],width:2.5},
+      marker:{size:6,color:palette[i]},
+      connectgaps:false,
+      hovertemplate:`<b>${c}</b><br>%{x}: %{y:.1f}% of pace<extra></extra>`,
+    };
+  });
+
+  // 100% reference line
+  traces.push({
+    x:months, y:months.map(()=>100),
+    mode:"lines", name:"On-Pace (100%)",
+    line:{color:"#8a9aaa",width:1.8,dash:"dash"},
+    hoverinfo:"skip",
+  });
+
+  Plotly.newPlot("c4",traces,{
+    ...base,
+    height:400,
+    margin:{l:70,r:50,t:60,b:50},
+    xaxis:{gridcolor:BORDER,tickfont:{color:LABEL}},
+    yaxis:{
+      title:{text:"% of Olympic Avg Annual Pace",font:{color:LABEL,size:12}},
+      gridcolor:BORDER,ticksuffix:"%",tickfont:{color:LABEL},zeroline:false,
+      range:[50,160],
+    },
+    legend:{orientation:"h",yanchor:"bottom",y:1.02,xanchor:"left",x:0,font:{color:LABEL,size:10.5},bgcolor:"rgba(0,0,0,0)"},
+    shapes:[{
+      type:"rect",x0:"Apr",x1:"Sep",y0:0,y1:1,xref:"x",yref:"paper",
+      fillcolor:"rgba(255,255,255,0.025)",line:{width:0},
+    }],
+    annotations:[
+      {x:"Jun",y:1.07,xref:"x",yref:"paper",text:"No data yet →",showarrow:false,font:{size:10,color:"#5a6878"}},
+      {x:"Feb",y:1.07,xref:"x",yref:"paper",text:"← Reported",showarrow:false,font:{size:10,color:"#5a6878"}},
+    ],
+  },{responsive:true,displayModeBar:false});
+})();
+</script>
+</body>
+</html>
