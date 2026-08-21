@@ -69,11 +69,14 @@ LIVE_DASHBOARDS = [
     {"title": "Rail Shipments",
      "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
      "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},
+    {"title": "Domestic Production",
+     "desc": "USDA NASS corn production — national overview and state-level detail.",
+     "page": "apps/domestic_production/app.py", "url_path": "domestic-production"},
 ]
 
 COMING_SOON = [
-    "Domestic Production", "Beef Weight", "Beef Cutout",
-    "Livestock Inventory", "WASDE", "Vessel Lineup", "Fertilizer Transport",
+    "Beef Weight", "Beef Cutout",
+    "Livestock Inventory", "WASDE", "Vessel Lineup",
     "High/Low Model",
 ]
 
