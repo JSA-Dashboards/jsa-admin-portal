@@ -83,14 +83,23 @@ LIVE_DASHBOARDS = [
      "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
      "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},
 
+    {"title": "Beef Weight", "category": "Livestock",
+     "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live.",
+     "page": "apps/beef_weight/app.py", "url_path": "beef-weight"},
+    {"title": "Beef Cutout", "category": "Livestock",
+     "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume.",
+     "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout"},
+    {"title": "Livestock Inventory", "category": "Livestock",
+     "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production.",
+     "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory"},
+
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
      "page": "apps/teams_broadcast/app.py", "url_path": "teams-broadcast"},
 ]
 
 COMING_SOON = [
-    "Beef Weight", "Beef Cutout",
-    "Livestock Inventory", "WASDE", "Vessel Lineup",
+    "WASDE", "Vessel Lineup",
     "High/Low Model",
 ]
 
