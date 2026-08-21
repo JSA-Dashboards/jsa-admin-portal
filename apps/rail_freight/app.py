@@ -1,5 +1,5 @@
 """
-JSA Grain Rail Shipments Dashboard
+JSA Rail Freight Dashboard
 ====================================
 Data source: USDA AMS agtransport.usda.gov (live API, cached 1 hr)
 Run: streamlit run streamlit_app.py
@@ -339,7 +339,7 @@ st.markdown(f"""
        onerror="this.style.display='none'">
   <div style="flex:1;">
     <div style="color:{C['TEXT']}; font-size:1.1rem; font-weight:600; letter-spacing:0.03em;">
-        Grain Rail Shipments Dashboard {_src_badge}
+        Rail Freight Dashboard {_src_badge}
     </div>
     <div style="color:{C['DIM']}; font-size:0.75rem; margin-top:2px;">
         USDA Agricultural Marketing Service &middot; John Stewart &amp; Associates
