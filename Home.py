@@ -82,6 +82,9 @@ LIVE_DASHBOARDS = [
     {"title": "Rail Shipments", "category": "Grain Flows",
      "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
      "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},
+    {"title": "Vessel Lineup", "category": "Grain Flows",
+     "desc": "Export vessel lineup by region — USG, PNW, TXG — and commodity.",
+     "page": "apps/vessel_lineup/app.py", "url_path": "vessel-lineup"},
 
     {"title": "Beef Weight", "category": "Livestock",
      "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live.",
@@ -99,7 +102,7 @@ LIVE_DASHBOARDS = [
 ]
 
 COMING_SOON = [
-    "WASDE", "Vessel Lineup",
+    "WASDE",
     "High/Low Model",
 ]
 
