@@ -2760,47 +2760,36 @@ with tab_railfob:
                               color="#000000")
                    .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("Bid:Q"), text="MktYear:N"))
 
+        # Muted sage theme (matches the rail email): shaded 5-yr range band + dashed
+        # 5-yr average, brick-red forward curve with value labels, bold current year.
+        # No individual year lines / prev-year hero — the band carries the history.
         _layers = ([_wm] if _wm else []) + [_zero]
-        # 5-yr range band (gray) area, behind everything.
         if not _rband.empty:
             _layers.append(
-                _alt.Chart(_rband).mark_area(color="#9ca3af", opacity=0.22)
+                _alt.Chart(_rband).mark_area(color="#c4d7bd", opacity=0.55)
                 .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("lo:Q", title="Bid (¢)",
                                                         scale=_ry_scale), y2="hi:Q"))
-        # Older marketing years — faded thin context lines behind the heroes.
-        if not _hist_old.empty:
-            _layers.append(_alt.Chart(_hist_old).mark_line(strokeWidth=1.3, opacity=0.45)
-                           .encode(x=_x, y=_y, color=_hist_color, tooltip=_tip))
-        # Most recent COMPLETE year — HERO blue, thick, with an end-label.
-        if not _hist_prev.empty:
-            _layers.append(_alt.Chart(_hist_prev).mark_line(strokeWidth=4, color=_PREV_CLR)
-                           .encode(x=_x, y=_y, tooltip=_tip))
-            _layers.append(_alt.Chart(_hist_prev.nlargest(1, "MktWeek"))
-                           .mark_text(align="left", dx=6, fontSize=10, fontWeight="bold",
-                                      color=_PREV_CLR)
-                           .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("Bid:Q"), text="MktYear:N"))
-        # 5-yr average — HERO amber, bold heavy-dash, drawn OVER the year lines.
-        if not _rband.empty:
             _layers.append(
-                _alt.Chart(_rband).mark_line(color=_AVG_CLR, strokeDash=[8, 4], strokeWidth=3)
+                _alt.Chart(_rband).mark_line(color="#4b6a4b", strokeDash=[7, 4], strokeWidth=2)
                 .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("avg:Q", scale=_ry_scale)))
             _r_avg_end = _rband.nlargest(1, "MktWeek").assign(_lbl="5-yr avg")
             _layers.append(
-                _alt.Chart(_r_avg_end).mark_text(align="left", dx=6, fontSize=10,
-                                                 fontWeight="bold", color=_AVG_CLR)
+                _alt.Chart(_r_avg_end).mark_text(align="left", dx=6, fontSize=9,
+                                                 fontWeight="bold", color="#4b6a4b")
                 .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("avg:Q", scale=_ry_scale), text="_lbl:N"))
-        # Forward curve — dashed same-colour (black) line of the latest rundown. The
-        # next-marketing-year stretch is drawn as a separate segment (starts back at
-        # the Sep/left side) so it never draws a line back across the whole chart.
+        # Forward curve — dashed brick-red line + points + value labels.
         _rfwd_tip = [_alt.Tooltip("MktWeek:Q", title="Week"),
                      _alt.Tooltip("Bid:Q", title="Fwd bid (¢)", format=".0f")]
         for _seg in (_rfwd_cur, _rfwd_nxt):
             if _seg is not None and not _seg.empty:
                 _layers += [
-                    _alt.Chart(_seg).mark_line(strokeWidth=2, color="#000000", strokeDash=[6, 4])
+                    _alt.Chart(_seg).mark_line(strokeWidth=2, color="#c0392b", strokeDash=[6, 3])
                     .encode(x=_x, y=_y),
-                    _alt.Chart(_seg).mark_point(filled=True, color="#000000", size=34)
+                    _alt.Chart(_seg).mark_point(filled=True, color="#c0392b", size=34)
                     .encode(x=_x, y=_y, tooltip=_rfwd_tip),
+                    _alt.Chart(_seg).mark_text(align="center", dy=-9, fontSize=8, fontWeight="bold",
+                                               color="#c0392b")
+                    .encode(x=_x, y=_y, text=_alt.Text("Bid:Q", format="+.0f")),
                 ]
         # Current year — thickest black line, drawn OVER everything.
         _layers += [_cur_ln, _cur_lb]
@@ -2812,7 +2801,7 @@ with tab_railfob:
                                               align="center", baseline="top")
                    .encode(x=_alt.X("MktWeek:Q"), y=_alt.value(6), text="code:N")] + _layers
 
-        _rail_title = f"{_RAIL_DISPLAY.get(_mk, _mk)} · {_pd_sel} · Corn"
+        _rail_title = f"{_RAIL_DISPLAY.get(_mk, _mk)} · {_pd_sel} · Spot Corn Basis Seasonal"
         st.markdown(
             '<div style="margin-top:8px;margin-bottom:2px;font-size:14px;color:#1e293b;'
             'font-weight:800;letter-spacing:.01em">' + _rail_title + '</div>'
@@ -2821,8 +2810,9 @@ with tab_railfob:
             'Seasonal Bid — Marketing Year (Sep–Aug)'
             + '&nbsp;&nbsp;<span style="font-weight:400;text-transform:none">'
             + (f'<b style="color:#000">{_curr_yr} = black</b>' if _curr_yr else '')
-            + (f'  ·  <b style="color:#2563eb">{_prev_yr} = blue</b>' if _prev_yr else '')
-            + (f'  ·  <b style="color:#d97706">5-yr avg = amber dash</b>' if not _rband.empty else '')
+            + ('  ·  <b style="color:#4b6a4b">5-yr avg = dashed</b>'
+               '  ·  <b style="color:#8bab7f">5-yr range = shaded</b>' if not _rband.empty else '')
+            + '  ·  <b style="color:#c0392b">Forward = red</b>'
             + '</span></div>', unsafe_allow_html=True)
         _rail_chart = _alt.layer(*_layers).properties(height=_H, padding=_CHART_PAD)
         st.altair_chart(_rail_chart, use_container_width=True)
@@ -4297,45 +4287,25 @@ with tab_bids:
                 )
 
                 _s_layers = ([_s_wm] if _s_wm else []) + [_s_zero]
-                # 5-yr range band (gray shade) — furthest back.
+                # Muted sage (matches the rail email): shaded 5-yr range band + dashed
+                # 5-yr average, brick-red forward curve with value labels, bold current
+                # year. No individual year lines / prev-year hero.
                 if not _band.empty:
                     _s_layers.append(
-                        _alt.Chart(_band).mark_area(color="#9ca3af", opacity=0.22)
+                        _alt.Chart(_band).mark_area(color="#c4d7bd", opacity=0.55)
                         .encode(x=_x_s, y=_alt.Y("lo:Q", title="Basis (¢)",
                                                  scale=_y_scale), y2="hi:Q"))
-                # Older marketing years — faded thin context lines behind the heroes.
-                if not _hist_old.empty:
                     _s_layers.append(
-                        _alt.Chart(_hist_old).mark_line(strokeWidth=1.3, opacity=0.45)
-                        .encode(x=_x_s, y=_y_s, color=_hist_color, tooltip=_tip_s))
-                # Most recent COMPLETE year — HERO blue, thick, with an end-label.
-                if not _hist_prev.empty:
-                    _s_layers.append(
-                        _alt.Chart(_hist_prev).mark_line(strokeWidth=4, color=_PREV_CLR)
-                        .encode(x=_x_s, y=_y_s, tooltip=_tip_s))
-                    _s_layers.append(
-                        _alt.Chart(_hist_prev.nlargest(1, "MktWeek"))
-                        .mark_text(align="left", dx=6, fontSize=10, fontWeight="bold",
-                                   color=_PREV_CLR)
-                        .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("Basis:Q"), text="MktYear:N"))
-                # 5-yr average — HERO amber, bold heavy-dash, drawn OVER the year lines.
-                if not _band.empty:
-                    _s_layers.append(
-                        _alt.Chart(_band).mark_line(color=_AVG_CLR, strokeDash=[8, 4],
-                                                    strokeWidth=3)
+                        _alt.Chart(_band).mark_line(color="#4b6a4b", strokeDash=[7, 4], strokeWidth=2)
                         .encode(x=_x_s, y=_alt.Y("avg:Q", scale=_y_scale),
                                 tooltip=[_alt.Tooltip("MktWeek:Q", title="Week"),
                                          _alt.Tooltip("avg:Q", title="5-yr avg", format=".0f")]))
                     _s_avg_end = _band.nlargest(1, "MktWeek").assign(_lbl="5-yr avg")
                     _s_layers.append(
                         _alt.Chart(_s_avg_end)
-                        .mark_text(align="left", dx=6, fontSize=10, fontWeight="bold",
-                                   color=_AVG_CLR)
-                        .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("avg:Q", scale=_y_scale),
-                                text="_lbl:N"))
-                # Forward-curve extension — DASHED same-colour (black) continuation of the
-                # current-year line via posted forward bids. Bids that roll past Aug start
-                # the next marketing year (a fresh dashed segment at the Sep side).
+                        .mark_text(align="left", dx=6, fontSize=9, fontWeight="bold", color="#4b6a4b")
+                        .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("avg:Q", scale=_y_scale), text="_lbl:N"))
+                # Forward curve — dashed brick-red line + points + value labels.
                 if not _df_fwdc.empty:
                     _cur_fwd = _df_fwdc[_df_fwdc["MktYearNum"] == _max_yr][["MktWeek", "Basis"]]
                     if not _cur_fwd.empty and not _curr.empty:
@@ -4347,11 +4317,14 @@ with tab_bids:
                     for _seg in (_cur_fwd, _nxt_fwd):
                         if _seg is not None and not _seg.empty:
                             _s_layers += [
-                                _alt.Chart(_seg).mark_line(strokeWidth=2, color="#000000",
-                                                           strokeDash=[6, 4])
+                                _alt.Chart(_seg).mark_line(strokeWidth=2, color="#c0392b",
+                                                           strokeDash=[6, 3])
                                 .encode(x=_x_s, y=_y_s),
-                                _alt.Chart(_seg).mark_point(filled=True, color="#000000", size=34)
+                                _alt.Chart(_seg).mark_point(filled=True, color="#c0392b", size=34)
                                 .encode(x=_x_s, y=_y_s, tooltip=_fwd_tip),
+                                _alt.Chart(_seg).mark_text(align="center", dy=-9, fontSize=8,
+                                                           fontWeight="bold", color="#c0392b")
+                                .encode(x=_x_s, y=_y_s, text=_alt.Text("Basis:Q", format="+.0f")),
                             ]
 
                 # Current year — thickest black line, drawn OVER everything.
@@ -4394,16 +4367,13 @@ with tab_bids:
                     _s_layers = [_s_vlines, _s_vlbls] + _s_layers
 
                 _leg = (f'<b style="color:#000">{_curr_yr} = black</b>' if _curr_yr else '')
-                if _prev_yr:
-                    _leg += (('  ·  ' if _leg else '')
-                             + f'<b style="color:#2563eb">{_prev_yr} = blue</b>')
                 if _byrs:
                     _leg += (('  ·  ' if _leg else '')
-                             + f'<b style="color:#d97706">5-yr avg = amber dash</b>'
-                             + f' · range = gray band ({_byrs[0]}–{_byrs[-1]})')
+                             + '<b style="color:#4b6a4b">5-yr avg = dashed</b>'
+                             + f'  ·  <b style="color:#8bab7f">5-yr range = shaded ({_byrs[0]}–{_byrs[-1]})</b>')
                 if not _df_fwdc.empty:
-                    _leg += '  ·  forward = dashed ●'
-                _seas_title = f"{loc_key} · Spot · {grain}"
+                    _leg += '  ·  <b style="color:#c0392b">forward = red ●</b>'
+                _seas_title = f"{loc_key} · Spot {grain} Basis Seasonal"
                 st.markdown(
                     '<div style="margin-top:24px;margin-bottom:2px;font-size:14px;'
                     'color:#1e293b;font-weight:800;letter-spacing:.01em">'
