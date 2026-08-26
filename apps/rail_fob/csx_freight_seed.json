@@ -1,0 +1,2002 @@
+[
+ {
+  "state": "IL",
+  "origin_group": "IL CASEY - EXP",
+  "train_type": "Express",
+  "buying_station": "EFFINGHAM EQUITY | IL MARTINSVILLE",
+  "eville_gafl": 472,
+  "eville_altkyla": 472,
+  "columbus": 816,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL CASEY - EXP",
+  "train_type": "Express",
+  "buying_station": "TOTAL GRAIN MARKETING LLC | IL CASEY",
+  "eville_gafl": 472,
+  "eville_altkyla": 472,
+  "columbus": 816,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL CHICAGO - EXP Rule 11",
+  "train_type": "Express",
+  "buying_station": "CHICAGO | Rule 11 Origin",
+  "eville_gafl": 831,
+  "eville_altkyla": 831,
+  "columbus": 1129,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL CRUGER (TPW)- EXP",
+  "train_type": "Express",
+  "buying_station": "GRAINLAND COOP | IL CRUGER",
+  "eville_gafl": 765,
+  "eville_altkyla": 765,
+  "columbus": 1129,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL DANVILLE - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM GRAIN CO | IL HOOPESTON",
+  "eville_gafl": 489,
+  "eville_altkyla": 489,
+  "columbus": 883,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL EAST ST LOUIS - EXP Rule 11",
+  "train_type": "Express",
+  "buying_station": "EAST ST LOUIS | Rule 11 Origin",
+  "eville_gafl": 415,
+  "eville_altkyla": 415,
+  "columbus": 600,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL ENFIELD (EVWR) - EXP",
+  "train_type": "Express",
+  "buying_station": "LANDUS COOPERATIVE | IL MCLEANSBORO",
+  "eville_gafl": 317,
+  "eville_altkyla": 317,
+  "columbus": 615,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL ENFIELD (EVWR) - EXP",
+  "train_type": "Express",
+  "buying_station": "BUNGE-SCF GRAIN LLC | IL MCLEANSBORO",
+  "eville_gafl": 317,
+  "eville_altkyla": 317,
+  "columbus": 615,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL MEADOWS (TPW) - EXP",
+  "train_type": "Express",
+  "buying_station": "PRARIE CENTRAL COOP | MEADOWS, IL",
+  "eville_gafl": 765,
+  "eville_altkyla": 765,
+  "columbus": 1129,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL METCALF (DREI) - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM GRAIN CO | IL OAKLAND",
+  "eville_gafl": 537,
+  "eville_altkyla": 537,
+  "columbus": 871,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEOGA (DREI) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "TOTAL GRAIN MARKETING LLC | IL NEOGA",
+  "eville_gafl": 1075,
+  "eville_altkyla": 1075,
+  "columbus": 1226,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEWMAN (DREI) - EXP",
+  "train_type": "Express",
+  "buying_station": "AC GRAIN LLC | IN DANA",
+  "eville_gafl": 537,
+  "eville_altkyla": 537,
+  "columbus": 871,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEWMAN (DREI) - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM | IL TUSCOLA",
+  "eville_gafl": 537,
+  "eville_altkyla": 537,
+  "columbus": 871,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEWMAN (DREI) - EXP",
+  "train_type": "Express",
+  "buying_station": "EFFINGHAM EQUITY | IL HARRIS SPUR",
+  "eville_gafl": 537,
+  "eville_altkyla": 537,
+  "columbus": 871,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEWMAN (DREI) - EXP",
+  "train_type": "Express",
+  "buying_station": "TOPFLIGHT | IL PIERSON",
+  "eville_gafl": 537,
+  "eville_altkyla": 537,
+  "columbus": 871,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL OBLONG (INRD) - EXP",
+  "train_type": "Express",
+  "buying_station": "TOTAL GRAIN MARKETING LLC | IL OBLONG",
+  "eville_gafl": 556,
+  "eville_altkyla": 556,
+  "columbus": 854,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL OBLONG (INRD) - EXP",
+  "train_type": "Express",
+  "buying_station": "TOTAL GRAIN MARKETING LLC | IL LIS",
+  "eville_gafl": 556,
+  "eville_altkyla": 556,
+  "columbus": 854,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL OLNEY - EXP",
+  "train_type": "Express",
+  "buying_station": "CONSOLIDATED GRAIN & BARGE CO | IL OLNEY",
+  "eville_gafl": 230,
+  "eville_altkyla": 230,
+  "columbus": 488,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL WATSEKA - EXP",
+  "train_type": "Express",
+  "buying_station": "HERITAGE FS INC | IL ST ANNE",
+  "eville_gafl": 539,
+  "eville_altkyla": 539,
+  "columbus": 933,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN ANDERSON - EXP",
+  "train_type": "Express",
+  "buying_station": "KOKOMO GRAIN COMPANY INC | IN EMPORIA",
+  "eville_gafl": 576,
+  "eville_altkyla": 576,
+  "columbus": 548,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN CLYMERS (TPW) - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM GRAIN CO | IN LOGANSPORT",
+  "eville_gafl": 702,
+  "eville_altkyla": 702,
+  "columbus": 1080,
+  "highlighted": true
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN EDINBURGH (LIRC) - EXP",
+  "train_type": "Express",
+  "buying_station": "KOKOMO GRAIN COMPANY INC | IN EDINBURGH",
+  "eville_gafl": 629,
+  "eville_altkyla": 629,
+  "columbus": 796,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN HAMLET (CFE) - EXP",
+  "train_type": "Express",
+  "buying_station": "STARKE COUNTY FARM BUREAU COOPERATIVE | IN HAMLET",
+  "eville_gafl": 1006,
+  "eville_altkyla": 1353,
+  "columbus": 662,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN INDIANAPOLIS - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM GRAIN CO | IN INDIANAPOLIS",
+  "eville_gafl": 380,
+  "eville_altkyla": 380,
+  "columbus": 454,
+  "highlighted": true
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAFAYETTE - EXP",
+  "train_type": "Express",
+  "buying_station": "BUNGE USA GRAIN LLC | IN HAW CREEK SIDING",
+  "eville_gafl": 492,
+  "eville_altkyla": 492,
+  "columbus": 716,
+  "highlighted": true
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAFAYETTE - EXP",
+  "train_type": "Express",
+  "buying_station": "BUNGE USA GRAIN LLC | IN ROACHDALE",
+  "eville_gafl": 492,
+  "eville_altkyla": 492,
+  "columbus": 716,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAFAYETTE - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "CARGILL INC | IN LINDEN",
+  "eville_gafl": 592,
+  "eville_altkyla": 592,
+  "columbus": 816,
+  "highlighted": true
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAPAZ - EXP",
+  "train_type": "Express",
+  "buying_station": "CARGILL INC | IN MILFORD JCT",
+  "eville_gafl": 967,
+  "eville_altkyla": 967,
+  "columbus": 420,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAPAZ - EXP",
+  "train_type": "Express",
+  "buying_station": "SMITHFIELD | IN LAPAZ",
+  "eville_gafl": 967,
+  "eville_altkyla": 967,
+  "columbus": 420,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MORRISTOWN - EXP",
+  "train_type": "Express",
+  "buying_station": "LANDUS COOPERATIVE | IN RUSHVILLE",
+  "eville_gafl": 492,
+  "eville_altkyla": 492,
+  "columbus": 420,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MORRISTOWN - EXP",
+  "train_type": "Express",
+  "buying_station": "BUNGE USA GRAIN LLC | IN MAUZY",
+  "eville_gafl": 492,
+  "eville_altkyla": 492,
+  "columbus": 420,
+  "highlighted": true
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MORRISTOWN - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "BUNGE NORTH AMERICA INC | IN MORRISTOWN",
+  "eville_gafl": 592,
+  "eville_altkyla": 592,
+  "columbus": 520,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN NORTH JUDSON (CKIN) - EXP",
+  "train_type": "Express",
+  "buying_station": "KEYSTONE COOPERATIVE | IN WELLSBORO",
+  "eville_gafl": 907,
+  "eville_altkyla": 907,
+  "columbus": 695,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN SULLIVAN - EXP",
+  "train_type": "Express",
+  "buying_station": "BUNGE USA GRAIN LLC | IN SHELBURN",
+  "eville_gafl": 366,
+  "eville_altkyla": 366,
+  "columbus": 664,
+  "highlighted": true
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN TERRE HAUTE (ab sw ) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "BUNGE USA GRAIN LLC | IN TERRE HAUTE",
+  "eville_gafl": 720,
+  "eville_altkyla": 720,
+  "columbus": 1018,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY HOPKINSVILLE - EXP",
+  "train_type": "Express",
+  "buying_station": "CASKY ELEVATOR | KY HOPKINSVILLE",
+  "eville_gafl": -80,
+  "eville_altkyla": -80,
+  "columbus": 201,
+  "highlighted": true
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY SOUTH UNION (RJCM) - EXP",
+  "train_type": "Express",
+  "buying_station": "SOUTH UNION ELEVATOR | KY SOUTH UNION",
+  "eville_gafl": 456,
+  "eville_altkyla": 456,
+  "columbus": 849,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI AUBURN (LSRC) - EXP",
+  "train_type": "Express",
+  "buying_station": "THE ANDERSONS INC | MI AUBURN",
+  "eville_gafl": 1787,
+  "eville_altkyla": 1737,
+  "columbus": 1230,
+  "highlighted": true
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI AUBURN (LSRC) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "ITTNER BEAN & GRAIN | MI AUBURN",
+  "eville_gafl": 1887,
+  "eville_altkyla": 1837,
+  "columbus": 1330,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI BRECKENRIDGE (MMRR) - EXP",
+  "train_type": "Express",
+  "buying_station": "MICHIGAN AGRICULTURAL COMMODITIES INC | MI BRECKENRIDGE",
+  "eville_gafl": 1853,
+  "eville_altkyla": 1803,
+  "columbus": 1296,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI BRECKENRIDGE (MMRR) - EXP",
+  "train_type": "Express",
+  "buying_station": "THE ANDERSONS INC | MI HEMLOCK",
+  "eville_gafl": 1853,
+  "eville_altkyla": 1803,
+  "columbus": 1296,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI ELKTON (HESR) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "COOPERATIVE ELEVATOR CO | MI ELKTON",
+  "eville_gafl": 1905,
+  "eville_altkyla": 1855,
+  "columbus": 1348,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI GRAND LEDGE - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM GRAIN CO | MI GRAND LEDGE",
+  "eville_gafl": 944,
+  "eville_altkyla": 894,
+  "columbus": 530,
+  "highlighted": true
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MARLETTE (HESR) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "MICHIGAN AGRICULTURAL COMMODITIES INC | MI BROWN CITY",
+  "eville_gafl": 1929,
+  "eville_altkyla": 1879,
+  "columbus": 1372,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MARLETTE (HESR) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "MICHIGAN AGRICULTURAL COMMODITIES INC | MI MARLETTE",
+  "eville_gafl": 1929,
+  "eville_altkyla": 1879,
+  "columbus": 1372,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MIDDLETON (GLC) - EXP",
+  "train_type": "Express",
+  "buying_station": "MICHIGAN AGRICULTURAL COMMODITIES INC | MI MIDDLETON",
+  "eville_gafl": 1645,
+  "eville_altkyla": 1595,
+  "columbus": 1088,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MIDDLETON (GLC) - EXP",
+  "train_type": "Express",
+  "buying_station": "ZEELAND FARMS | MI ITHACA",
+  "eville_gafl": 1645,
+  "eville_altkyla": 1595,
+  "columbus": 1088,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MIDDLETON (GLC) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "STAR OF THE WEST MILLING CO | MI ROSEBUSH",
+  "eville_gafl": 1745,
+  "eville_altkyla": 1695,
+  "columbus": 1188,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MIDDLETON (GLC) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "STAR OF THE WEST MILLING CO | MI SHEPHERD",
+  "eville_gafl": 1745,
+  "eville_altkyla": 1695,
+  "columbus": 1188,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI NEWAYGO (MQT) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "MICHIGAN AGRICULTURAL COMMODITIES INC | MI NEWAYGO",
+  "eville_gafl": 1529,
+  "eville_altkyla": 1479,
+  "columbus": 972,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI OAKLEY (GLC) - EXP",
+  "train_type": "Express",
+  "buying_station": "THE ANDERSONS INC | MI OAKLEY",
+  "eville_gafl": 1511,
+  "eville_altkyla": 1461,
+  "columbus": 954,
+  "highlighted": true
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI RICHVILLE (HESR) - EXP",
+  "train_type": "Express",
+  "buying_station": "STAR OF THE WEST MILLING CO | MI RICHVILLE",
+  "eville_gafl": 1828,
+  "eville_altkyla": 1778,
+  "columbus": 1271,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI RIGA (IORY) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "MICHIGAN AGRICULTURAL COMMODITIES INC | MI BLISSFIELD",
+  "eville_gafl": 1148,
+  "eville_altkyla": 1383,
+  "columbus": 1187,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI RUTH (HESR) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "FARMERS COOP GRAIN CO | MI KINDE",
+  "eville_gafl": 2127,
+  "eville_altkyla": 2077,
+  "columbus": 1570,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI SAGINAW (LSRC) - EXP",
+  "train_type": "Express",
+  "buying_station": "BUNGE USA GRAIN LLC | MI CARROLLTON",
+  "eville_gafl": 1424,
+  "eville_altkyla": 1374,
+  "columbus": 867,
+  "highlighted": true
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI STANDISH (LSRC) - EXP",
+  "train_type": "Express",
+  "buying_station": "THE ANDERSONS INC | MI STANDISH",
+  "eville_gafl": 1600,
+  "eville_altkyla": 1550,
+  "columbus": 1043,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI WEBBERVILLE - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM/COUNTRYMARK LLC | MI WEBBERVILLE",
+  "eville_gafl": 894,
+  "eville_altkyla": 844,
+  "columbus": 480,
+  "highlighted": true
+ },
+ {
+  "state": "MO",
+  "origin_group": "MO ST LOUIS (ab sw)  - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "ADM | MO NORTH ST LOUIS",
+  "eville_gafl": 828,
+  "eville_altkyla": 828,
+  "columbus": 1013,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH CHILLICOTHE - EXP",
+  "train_type": "Express",
+  "buying_station": "CARGILL | OH CHILLICOTHE",
+  "eville_gafl": 462,
+  "eville_altkyla": 550,
+  "columbus": 62,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH CLARKSFIELD (WE) - EXP",
+  "train_type": "Express",
+  "buying_station": "SUNRISE COOPERATIVE INC | OH CLARKSFIELD",
+  "eville_gafl": 1353,
+  "eville_altkyla": 1311,
+  "columbus": 641,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH DESHLER - EXP",
+  "train_type": "Express",
+  "buying_station": "LEGACY FARMERS COOPERATIVE | OH DEFIANCE",
+  "eville_gafl": 868,
+  "eville_altkyla": 819,
+  "columbus": 279,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH DESHLER - EXP",
+  "train_type": "Express",
+  "buying_station": "GERALD GRAIN CENTER INC | OH HAMLER",
+  "eville_gafl": 868,
+  "eville_altkyla": 819,
+  "columbus": 279,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH DESHLER - EXP",
+  "train_type": "Express",
+  "buying_station": "LEGACY FARMERS COOPERATIVE | OH CUSTAR",
+  "eville_gafl": 868,
+  "eville_altkyla": 819,
+  "columbus": 279,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH ELGIN (RJCW) - EXP",
+  "train_type": "Express",
+  "buying_station": "MERCER LANDMARK INC | OH ELGIN",
+  "eville_gafl": 1269,
+  "eville_altkyla": 1320,
+  "columbus": 1008,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH FAYNE (IORY) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "CARGILL INC | OH BLOOMINGBURG",
+  "eville_gafl": 1099,
+  "eville_altkyla": 1099,
+  "columbus": 870,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH HARPSTER - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "SMITHFIELD | OH HARPSTER",
+  "eville_gafl": 730,
+  "eville_altkyla": 730,
+  "columbus": 248,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH KENTON - EXP",
+  "train_type": "Express",
+  "buying_station": "HERITAGE COOPERATIVE INC | OH KENTON",
+  "eville_gafl": 455,
+  "eville_altkyla": 575,
+  "columbus": 180,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH LIMA - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "SUNRISE COOPERATIVE INC | OH BOTKINS",
+  "eville_gafl": 540,
+  "eville_altkyla": 678,
+  "columbus": 482,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH LIMA (CFE) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "CARGILL INC | OH LIMA",
+  "eville_gafl": 1089,
+  "eville_altkyla": 1478,
+  "columbus": 985,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARION - EXP",
+  "train_type": "Express",
+  "buying_station": "MENNCO GRAIN | OH UPPER SANDUSKY",
+  "eville_gafl": 630,
+  "eville_altkyla": 630,
+  "columbus": 148,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARION - EXP",
+  "train_type": "Express",
+  "buying_station": "HERITAGE COOPERATIVE INC | OH UPPER SANDUSKY",
+  "eville_gafl": 630,
+  "eville_altkyla": 630,
+  "columbus": 148,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARION - EXP",
+  "train_type": "Express",
+  "buying_station": "SUNRISE COOPERATIVE INC | OH CRESTLINE",
+  "eville_gafl": 630,
+  "eville_altkyla": 630,
+  "columbus": 148,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARION - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "CENTRAL OHIO FARMERS CO-OP INC | OH MARION",
+  "eville_gafl": 730,
+  "eville_altkyla": 730,
+  "columbus": 248,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARYSVILLE - EXP",
+  "train_type": "Express",
+  "buying_station": "HERITAGE COOPERATIVE INC | OH MARYSVILLE",
+  "eville_gafl": 454,
+  "eville_altkyla": 574,
+  "columbus": 129,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MECHANICSBURG (IORY) - EXP",
+  "train_type": "Express",
+  "buying_station": "HERITAGE COOPERATIVE INC | OH MECHANICSBURG",
+  "eville_gafl": 970,
+  "eville_altkyla": 970,
+  "columbus": 601,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MELVIN (IORY) - EXP",
+  "train_type": "Express",
+  "buying_station": "PREMIER GRAIN LLC | OH MELVIN",
+  "eville_gafl": 854,
+  "eville_altkyla": 854,
+  "columbus": 485,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH METAMORA (IORY) - EXP",
+  "train_type": "Express",
+  "buying_station": "THE ANDERSONS INC | OH METAMORA",
+  "eville_gafl": 623,
+  "eville_altkyla": 862,
+  "columbus": 666,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH S CHARLESTON (IORY) - EXP",
+  "train_type": "Express",
+  "buying_station": "SUNRISE COOPERATIVE INC | OH SOUTH CHARLESTON",
+  "eville_gafl": 866,
+  "eville_altkyla": 866,
+  "columbus": 497,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH ROSSFORD - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM/COUNTRYMARK LLC | OH ROSSFORD",
+  "eville_gafl": 905,
+  "eville_altkyla": 855,
+  "columbus": 348,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH TOLEDO - EXP",
+  "train_type": "Express",
+  "buying_station": "ADM/COUNTRYMARK LLC | OH ROSSFORD",
+  "eville_gafl": 905,
+  "eville_altkyla": 855,
+  "columbus": 348,
+  "highlighted": true
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH UNIOPOLIS (IORY) - EXP",
+  "train_type": "Express",
+  "buying_station": "SUNRISE COOPERATIVE INC | OH UNIOPOLIS",
+  "eville_gafl": 501,
+  "eville_altkyla": 636,
+  "columbus": 480,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH URBANA (IORY) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "HERITAGE COOPERATIVE INC | OH URBANA",
+  "eville_gafl": 1085,
+  "eville_altkyla": 1085,
+  "columbus": 716,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH WEST LIBERTY (IORY) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "HERITAGE COOPERATIVE INC | OH WEST LIBERTY",
+  "eville_gafl": 1071,
+  "eville_altkyla": 1071,
+  "columbus": 702,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH WILLARD (ASRY) - EXP",
+  "train_type": "Express",
+  "buying_station": "CENTERRA CO-OP INC | OH MANSFIELD",
+  "eville_gafl": 887,
+  "eville_altkyla": 865,
+  "columbus": 366,
+  "highlighted": false
+ },
+ {
+  "state": "ON",
+  "origin_group": "ON WINDSOR - NONEXP (sw ab)",
+  "train_type": "Non Express",
+  "buying_station": "ARCHER DANIELS MIDLAND CO | ON WINDSOR",
+  "eville_gafl": 1684,
+  "eville_altkyla": 1634,
+  "columbus": 1127,
+  "highlighted": true
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN KENTON (WTNN) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "TYSON FARMS INC | TN DYER",
+  "eville_gafl": 1173,
+  "eville_altkyla": 1173,
+  "columbus": 1026,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN KENTON (WTNN) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "TYSON FARMS INC | TN FRUITLAND",
+  "eville_gafl": 1173,
+  "eville_altkyla": 1173,
+  "columbus": 1026,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN KENTON (WTNN) - NONEXP",
+  "train_type": "Non Express",
+  "buying_station": "TYSON FARMS INC | TN KENTON",
+  "eville_gafl": 1173,
+  "eville_altkyla": 1173,
+  "columbus": 1026,
+  "highlighted": true
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN MEMPHIS - EXP Rule 11",
+  "train_type": "Express",
+  "buying_station": "MEMPHIS | Rule 11 Origin",
+  "eville_gafl": 0,
+  "eville_altkyla": 0,
+  "columbus": -146,
+  "highlighted": true
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL CASEY - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 572,
+  "eville_altkyla": 572,
+  "columbus": 916,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL CHICAGO - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 931,
+  "eville_altkyla": 931,
+  "columbus": 1229,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL CRUGER (TPW) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1023,
+  "eville_altkyla": 1023,
+  "columbus": 1387,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL DANVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 589,
+  "eville_altkyla": 589,
+  "columbus": 983,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL EAST ST LOUIS - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 515,
+  "eville_altkyla": 515,
+  "columbus": 700,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL ENFIELD (EVWR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1178,
+  "eville_altkyla": 1178,
+  "columbus": 1476,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL MEADOWS (TPW) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1023,
+  "eville_altkyla": 1023,
+  "columbus": 1387,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL METCALF (DREI) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1125,
+  "eville_altkyla": 1125,
+  "columbus": 1276,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL MOMENCE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 723,
+  "eville_altkyla": 723,
+  "columbus": 1083,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NASHVILLE (EVWR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1300,
+  "eville_altkyla": 1300,
+  "columbus": 1548,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEOGA (DREI) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1285,
+  "eville_altkyla": 1285,
+  "columbus": 1436,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL NEWMAN (DREI) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 740,
+  "eville_altkyla": 740,
+  "columbus": 1074,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL OBLONG (INRD) TERHA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1093,
+  "eville_altkyla": 1093,
+  "columbus": 1391,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL OLNEY - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 330,
+  "eville_altkyla": 330,
+  "columbus": 588,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL SENECA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1056,
+  "eville_altkyla": 1056,
+  "columbus": 1354,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL SHELDON (TPW) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 993,
+  "eville_altkyla": 993,
+  "columbus": 1357,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL WATSEKA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 669,
+  "eville_altkyla": 669,
+  "columbus": 1033,
+  "highlighted": false
+ },
+ {
+  "state": "IL",
+  "origin_group": "IL XENIA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 405,
+  "eville_altkyla": 405,
+  "columbus": 641,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN ANDERSON - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 676,
+  "eville_altkyla": 676,
+  "columbus": 648,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN AURORA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 543,
+  "eville_altkyla": 543,
+  "columbus": 523,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN DECATUR (CFE) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1300,
+  "eville_altkyla": 1689,
+  "columbus": 1196,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN EVANSVILLE CSXT - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 0,
+  "eville_altkyla": 0,
+  "columbus": 368,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN FRANKFORT - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 651,
+  "eville_altkyla": 651,
+  "columbus": 572,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN GARRETT - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1042,
+  "eville_altkyla": 1042,
+  "columbus": 645,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN HAMLET (CFE) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1375,
+  "eville_altkyla": 1722,
+  "columbus": 1223,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN INDIANAPOLIS - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 480,
+  "eville_altkyla": 480,
+  "columbus": 554,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAFAYETTE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 592,
+  "eville_altkyla": 592,
+  "columbus": 816,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN LAPAZ - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1067,
+  "eville_altkyla": 1067,
+  "columbus": 670,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MAYSVILLE (ISRR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 659,
+  "eville_altkyla": 659,
+  "columbus": 957,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MONON - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 625,
+  "eville_altkyla": 625,
+  "columbus": 827,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MORRISTOWN - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 592,
+  "eville_altkyla": 592,
+  "columbus": 520,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN MOUNT VERNON (EVWR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1119,
+  "eville_altkyla": 1119,
+  "columbus": 1417,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN NORTH JUDSON(CKIN) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1178,
+  "eville_altkyla": 1178,
+  "columbus": 966,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN PRINCETON - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 270,
+  "eville_altkyla": 270,
+  "columbus": 443,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN SEYMOUR - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 493,
+  "eville_altkyla": 493,
+  "columbus": 565,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN SULLIVAN - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 466,
+  "eville_altkyla": 466,
+  "columbus": 764,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN TERRE HAUTE - AG (ab sw)",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 655,
+  "eville_altkyla": 655,
+  "columbus": 953,
+  "highlighted": false
+ },
+ {
+  "state": "IN",
+  "origin_group": "IN VINCENNES - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 330,
+  "eville_altkyla": 330,
+  "columbus": 538,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY BOWLING GREEN - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": -10,
+  "eville_altkyla": -10,
+  "columbus": 271,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY HOPKINSVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": -10,
+  "eville_altkyla": -10,
+  "columbus": 271,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY LOUISVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 129,
+  "eville_altkyla": 129,
+  "columbus": 296,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY WINCHESTER (RJCC) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 821,
+  "eville_altkyla": 821,
+  "columbus": 921,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY OWENSBORO - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 90,
+  "eville_altkyla": 90,
+  "columbus": 276,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY SEBREE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 48,
+  "eville_altkyla": 48,
+  "columbus": 276,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY SOUTH UNION (RJCM) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 686,
+  "eville_altkyla": 686,
+  "columbus": 1079,
+  "highlighted": false
+ },
+ {
+  "state": "KY",
+  "origin_group": "KY ALLENSVILLE (RJCM) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 686,
+  "eville_altkyla": 686,
+  "columbus": 1079,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI AUBURN (LSRC) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1962,
+  "eville_altkyla": 1912,
+  "columbus": 1405,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI BRECKENRIDGE (MMRR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 2087,
+  "eville_altkyla": 2037,
+  "columbus": 1530,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI DETROIT - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1064,
+  "eville_altkyla": 1014,
+  "columbus": 650,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI ELKTON (HESR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 2178,
+  "eville_altkyla": 2128,
+  "columbus": 1621,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI FLINT - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1136,
+  "eville_altkyla": 1086,
+  "columbus": 722,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI HARTFORD (WMI) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1698,
+  "eville_altkyla": 1648,
+  "columbus": 1166,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI GRAND LEDGE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1119,
+  "eville_altkyla": 1069,
+  "columbus": 705,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI HAMILTON - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1268,
+  "eville_altkyla": 1218,
+  "columbus": 736,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MARLETTE (HESR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 2178,
+  "eville_altkyla": 2128,
+  "columbus": 1621,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI MIDDLETON (GLC) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1842,
+  "eville_altkyla": 1792,
+  "columbus": 1285,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI NEWAYGO (MQT) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1666,
+  "eville_altkyla": 1616,
+  "columbus": 1109,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI OAKLEY (GLC) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1712,
+  "eville_altkyla": 1662,
+  "columbus": 1155,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI RIGA (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1371,
+  "eville_altkyla": 1606,
+  "columbus": 1410,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI SAGINAW (LSRC) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1599,
+  "eville_altkyla": 1549,
+  "columbus": 1042,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI STANDISH (LSRC) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1791,
+  "eville_altkyla": 1741,
+  "columbus": 1234,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI SUNFIELD - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1143,
+  "eville_altkyla": 1093,
+  "columbus": 715,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI RUTH (HESR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 2216,
+  "eville_altkyla": 2166,
+  "columbus": 1659,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI RICHVILLE (HESR) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 2118,
+  "eville_altkyla": 2068,
+  "columbus": 1561,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "MI WEBBERVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1069,
+  "eville_altkyla": 1019,
+  "columbus": 655,
+  "highlighted": false
+ },
+ {
+  "state": "MI",
+  "origin_group": "NJ BORDENTOWN - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1893,
+  "eville_altkyla": 1893,
+  "columbus": 1384,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY ALBANY - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1475,
+  "eville_altkyla": 1475,
+  "columbus": 966,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY BUFFALO - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1087,
+  "eville_altkyla": 1087,
+  "columbus": 578,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY DUNKIRK - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1073,
+  "eville_altkyla": 1073,
+  "columbus": 564,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY FINGER LAKES - AG (ab sw)",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1431,
+  "eville_altkyla": 1431,
+  "columbus": 922,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY LAKEVILLE (LAL) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1851,
+  "eville_altkyla": 1851,
+  "columbus": 1342,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY ROCHESTER - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1060,
+  "eville_altkyla": 1060,
+  "columbus": 551,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY SYRACUSE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1179,
+  "eville_altkyla": 1260,
+  "columbus": 670,
+  "highlighted": false
+ },
+ {
+  "state": "NY",
+  "origin_group": "NY WATERTOWN - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1286,
+  "eville_altkyla": 1286,
+  "columbus": 778,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH CHILLICOTHE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 562,
+  "eville_altkyla": 650,
+  "columbus": 162,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH CINCINNATI - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 620,
+  "eville_altkyla": 620,
+  "columbus": 483,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH CLARKSFIELD (WE) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1614,
+  "eville_altkyla": 1572,
+  "columbus": 1052,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH CLEVELAND - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1048,
+  "eville_altkyla": 1006,
+  "columbus": 477,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH COLUMBUS - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 424,
+  "eville_altkyla": 535,
+  "columbus": 0,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH DESHLER - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 993,
+  "eville_altkyla": 944,
+  "columbus": 519,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH ELGIN (RJCW) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1487,
+  "eville_altkyla": 1538,
+  "columbus": 1226,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH FAYNE (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1250,
+  "eville_altkyla": 1250,
+  "columbus": 1021,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH FOSTORIA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 983,
+  "eville_altkyla": 928,
+  "columbus": 427,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH GRAFTON - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 998,
+  "eville_altkyla": 956,
+  "columbus": 427,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH KENTON - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 555,
+  "eville_altkyla": 675,
+  "columbus": 280,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH LIMA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 540,
+  "eville_altkyla": 678,
+  "columbus": 482,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH LIMA (CFE) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1154,
+  "eville_altkyla": 1543,
+  "columbus": 1050,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARYSVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 554,
+  "eville_altkyla": 674,
+  "columbus": 229,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARION - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 730,
+  "eville_altkyla": 730,
+  "columbus": 248,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MARION (CFE) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1237,
+  "eville_altkyla": 1626,
+  "columbus": 1133,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MECHANICSBURG (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1295,
+  "eville_altkyla": 1295,
+  "columbus": 1066,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH MELVIN (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1251,
+  "eville_altkyla": 1251,
+  "columbus": 1022,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH METAMORA (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 807,
+  "eville_altkyla": 1046,
+  "columbus": 850,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH NEWARK (CUOH) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1658,
+  "eville_altkyla": 1658,
+  "columbus": 1272,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH ROSSFORD - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1005,
+  "eville_altkyla": 955,
+  "columbus": 448,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH S CHARLESTON (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1291,
+  "eville_altkyla": 1291,
+  "columbus": 1062,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH SIDNEY - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 731,
+  "eville_altkyla": 731,
+  "columbus": 684,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH TOLEDO - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1755,
+  "eville_altkyla": 1705,
+  "columbus": 1198,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH UNIOPOLIS (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 873,
+  "eville_altkyla": 1008,
+  "columbus": 852,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH URBANA (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1233,
+  "eville_altkyla": 1233,
+  "columbus": 1004,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH WEST LIBERTY (IORY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1244,
+  "eville_altkyla": 1244,
+  "columbus": 1015,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH WILLARD - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 798,
+  "eville_altkyla": 776,
+  "columbus": 277,
+  "highlighted": false
+ },
+ {
+  "state": "OH",
+  "origin_group": "OH WILLARD (ASRY) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1228,
+  "eville_altkyla": 1206,
+  "columbus": 707,
+  "highlighted": false
+ },
+ {
+  "state": "ON",
+  "origin_group": "ON SARNIA - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1482,
+  "eville_altkyla": 1432,
+  "columbus": 925,
+  "highlighted": false
+ },
+ {
+  "state": "ON",
+  "origin_group": "ON WINDSOR - AG (sw ab)",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1698,
+  "eville_altkyla": 1648,
+  "columbus": 1141,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN DECHERD - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": -257,
+  "eville_altkyla": -257,
+  "columbus": -53,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN KENTON (WTNN) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1199,
+  "eville_altkyla": 1199,
+  "columbus": 1053,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN MARTIN (WTNN) - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 1240,
+  "eville_altkyla": 1240,
+  "columbus": 1094,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN MEMPHIS - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": 100,
+  "eville_altkyla": 100,
+  "columbus": -46,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN NASHVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": -100,
+  "eville_altkyla": -100,
+  "columbus": -339,
+  "highlighted": false
+ },
+ {
+  "state": "TN",
+  "origin_group": "TN NEW JOHNSONVILLE - AG",
+  "train_type": "Singles",
+  "buying_station": null,
+  "eville_gafl": -10,
+  "eville_altkyla": -10,
+  "columbus": -229,
+  "highlighted": false
+ }
+]

@@ -1,0 +1,1876 @@
+[
+ {
+  "origin": "ALDEN",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3756,
+  "rate_b": 4132,
+  "rate_c": 3411,
+  "rate_d": 3752,
+  "notes": "1-2"
+ },
+ {
+  "origin": "ALDEN",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3581,
+  "rate_b": 3939,
+  "rate_c": 3236,
+  "rate_d": 3560,
+  "notes": "2-3"
+ },
+ {
+  "origin": "ALDEN",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3206,
+  "rate_b": 3527,
+  "rate_c": 2811,
+  "rate_d": 3092,
+  "notes": "2-4"
+ },
+ {
+  "origin": "ALTA",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3937,
+  "rate_b": 4331,
+  "rate_c": 3592,
+  "rate_d": 3951,
+  "notes": "1-2"
+ },
+ {
+  "origin": "ALTA",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "2-3"
+ },
+ {
+  "origin": "ALTA",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3387,
+  "rate_b": 3726,
+  "rate_c": 2992,
+  "rate_d": 3291,
+  "notes": "2-4"
+ },
+ {
+  "origin": "APLINGTON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3701,
+  "rate_b": 4071,
+  "rate_c": 3356,
+  "rate_d": 3692,
+  "notes": "1-2"
+ },
+ {
+  "origin": "AURELIA",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3938,
+  "rate_b": 4332,
+  "rate_c": 3593,
+  "rate_d": 3952,
+  "notes": "1-2"
+ },
+ {
+  "origin": "AURELIA",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3763,
+  "rate_b": 4139,
+  "rate_c": 3418,
+  "rate_d": 3760,
+  "notes": "2-3"
+ },
+ {
+  "origin": "CEDAR FALLS",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "DUBUQUE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3498,
+  "rate_b": 3848,
+  "rate_c": 3153,
+  "rate_d": 3468,
+  "notes": "1-2-5"
+ },
+ {
+  "origin": "DUNKERTON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "FONDA",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3908,
+  "rate_b": 4299,
+  "rate_c": 3563,
+  "rate_d": 3919,
+  "notes": "1-2"
+ },
+ {
+  "origin": "FOREST CITY",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GARNER",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GREENE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "HINTON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4052,
+  "rate_b": 4457,
+  "rate_c": 3707,
+  "rate_d": 4078,
+  "notes": "1-2"
+ },
+ {
+  "origin": "HINTON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3877,
+  "rate_b": 4265,
+  "rate_c": 3532,
+  "rate_d": 3885,
+  "notes": "2-3"
+ },
+ {
+  "origin": "HINTON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3502,
+  "rate_b": 3852,
+  "rate_c": 3107,
+  "rate_d": 3418,
+  "notes": "2-4"
+ },
+ {
+  "origin": "IDA GROVE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3917,
+  "rate_b": 4309,
+  "rate_c": 3572,
+  "rate_d": 3929,
+  "notes": "1-2"
+ },
+ {
+  "origin": "IDA GROVE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3742,
+  "rate_b": 4116,
+  "rate_c": 3397,
+  "rate_d": 3737,
+  "notes": "2-3"
+ },
+ {
+  "origin": "IDA GROVE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3367,
+  "rate_b": 3704,
+  "rate_c": 2972,
+  "rate_d": 3269,
+  "notes": "2-4"
+ },
+ {
+  "origin": "INDEPENDENCE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3598,
+  "rate_b": 3958,
+  "rate_c": 3253,
+  "rate_d": 3578,
+  "notes": "1-2"
+ },
+ {
+  "origin": "KNIERIM",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3859,
+  "rate_b": 4245,
+  "rate_c": 3514,
+  "rate_d": 3865,
+  "notes": "1-2"
+ },
+ {
+  "origin": "KNIERIM",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3684,
+  "rate_b": 4052,
+  "rate_c": 3339,
+  "rate_d": 3673,
+  "notes": "2-3"
+ },
+ {
+  "origin": "KNIERIM",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3309,
+  "rate_b": 3640,
+  "rate_c": 2914,
+  "rate_d": 3205,
+  "notes": "2-4"
+ },
+ {
+  "origin": "MANSON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3869,
+  "rate_b": 4256,
+  "rate_c": 3524,
+  "rate_d": 3876,
+  "notes": "1-2"
+ },
+ {
+  "origin": "MANSON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3694,
+  "rate_b": 4063,
+  "rate_c": 3349,
+  "rate_d": 3684,
+  "notes": "2-3"
+ },
+ {
+  "origin": "MANLY",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "MARBLE ROCK",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "NEW HARTFORD",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3673,
+  "rate_b": 4040,
+  "rate_c": 3328,
+  "rate_d": 3661,
+  "notes": "1-2"
+ },
+ {
+  "origin": "OELWEIN",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "OSAGE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3758,
+  "rate_b": 4134,
+  "rate_c": 3413,
+  "rate_d": 3754,
+  "notes": "1-2"
+ },
+ {
+  "origin": "POMEROY",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3891,
+  "rate_b": 4280,
+  "rate_c": 3546,
+  "rate_d": 3901,
+  "notes": "1-2"
+ },
+ {
+  "origin": "POMEROY",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3716,
+  "rate_b": 4088,
+  "rate_c": 3371,
+  "rate_d": 3708,
+  "notes": "2-3"
+ },
+ {
+  "origin": "SAINT ANSGAR",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3759,
+  "rate_b": 4135,
+  "rate_c": 3414,
+  "rate_d": 3755,
+  "notes": "1-2"
+ },
+ {
+  "origin": "STACYVILLE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 3762,
+  "rate_c": 3417,
+  "rate_d": 3417,
+  "notes": "1-2"
+ },
+ {
+  "origin": "STACYVILLE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3587,
+  "rate_b": 3587,
+  "rate_c": 3242,
+  "rate_d": 3242,
+  "notes": "2-3"
+ },
+ {
+  "origin": "TOETERVILLE",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3761,
+  "rate_b": 3761,
+  "rate_c": 3416,
+  "rate_d": 3416,
+  "notes": "1-2"
+ },
+ {
+  "origin": "VINTON",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3762,
+  "rate_b": 4138,
+  "rate_c": 3417,
+  "rate_d": 3759,
+  "notes": "1-2"
+ },
+ {
+  "origin": "YETTER",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3874,
+  "rate_b": 4261,
+  "rate_c": 3529,
+  "rate_d": 3882,
+  "notes": "1-2"
+ },
+ {
+  "origin": "YETTER",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3699,
+  "rate_b": 4069,
+  "rate_c": 3354,
+  "rate_d": 3689,
+  "notes": "2-3"
+ },
+ {
+  "origin": "YETTER",
+  "state": "IA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3324,
+  "rate_b": 3656,
+  "rate_c": 2929,
+  "rate_d": 3222,
+  "notes": "2-4"
+ },
+ {
+  "origin": "ARCOLA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2723,
+  "rate_b": 2995,
+  "rate_c": 2378,
+  "rate_d": 2616,
+  "notes": "1-2"
+ },
+ {
+  "origin": "ARCOLA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2548,
+  "rate_b": 2803,
+  "rate_c": 2203,
+  "rate_d": 2423,
+  "notes": "2-3"
+ },
+ {
+  "origin": "ASHKUM",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2863,
+  "rate_b": 3149,
+  "rate_c": 2518,
+  "rate_d": 2770,
+  "notes": "1-2"
+ },
+ {
+  "origin": "ASHKUM",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2688,
+  "rate_b": 2957,
+  "rate_c": 2343,
+  "rate_d": 2577,
+  "notes": "2-3"
+ },
+ {
+  "origin": "CHAMPAIGN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2207,
+  "rate_b": 2428,
+  "rate_c": 1862,
+  "rate_d": 2048,
+  "notes": "2-4"
+ },
+ {
+  "origin": "CHEBANSE",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2866,
+  "rate_b": 3153,
+  "rate_c": 2521,
+  "rate_d": 2773,
+  "notes": "1-2"
+ },
+ {
+  "origin": "CHEBANSE",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2691,
+  "rate_b": 2960,
+  "rate_c": 2346,
+  "rate_d": 2581,
+  "notes": "2-3"
+ },
+ {
+  "origin": "CHENOA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2874,
+  "rate_b": 3156,
+  "rate_c": 2477,
+  "rate_d": 2719,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "CHESTNUT",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2796,
+  "rate_b": 3076,
+  "rate_c": 2451,
+  "rate_d": 2696,
+  "notes": "1-2"
+ },
+ {
+  "origin": "CHICAGO",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3272,
+  "rate_b": 3599,
+  "rate_c": 2927,
+  "rate_d": 3220,
+  "notes": "1-2-5"
+ },
+ {
+  "origin": "CHICAGO",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3097,
+  "rate_b": 3407,
+  "rate_c": 2752,
+  "rate_d": 3027,
+  "notes": "2-3-7"
+ },
+ {
+  "origin": "CHICAGO",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2722,
+  "rate_b": 2994,
+  "rate_c": 2377,
+  "rate_d": 2615,
+  "notes": "2-4-7"
+ },
+ {
+  "origin": "CLIFTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2865,
+  "rate_b": 3152,
+  "rate_c": 2520,
+  "rate_d": 2772,
+  "notes": "1-2"
+ },
+ {
+  "origin": "CLINTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2812,
+  "rate_b": 3093,
+  "rate_c": 2467,
+  "rate_d": 2714,
+  "notes": "1-2"
+ },
+ {
+  "origin": "CLINTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2637,
+  "rate_b": 2901,
+  "rate_c": 2292,
+  "rate_d": 2521,
+  "notes": "2-3"
+ },
+ {
+  "origin": "CLINTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2262,
+  "rate_b": 2488,
+  "rate_c": 1917,
+  "rate_d": 2109,
+  "notes": "2-4"
+ },
+ {
+  "origin": "COCKRELL",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2532,
+  "rate_b": 2785,
+  "rate_c": 2187,
+  "rate_d": 2406,
+  "notes": "2-4"
+ },
+ {
+  "origin": "COLES",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2693,
+  "rate_b": 2962,
+  "rate_c": 2348,
+  "rate_d": 2583,
+  "notes": "1-2"
+ },
+ {
+  "origin": "COLES",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2518,
+  "rate_b": 2770,
+  "rate_c": 2173,
+  "rate_d": 2390,
+  "notes": "2-3"
+ },
+ {
+  "origin": "CRUGER",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2874,
+  "rate_b": 3156,
+  "rate_c": 2477,
+  "rate_d": 2719,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "DALTON CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2726,
+  "rate_b": 2999,
+  "rate_c": 2381,
+  "rate_d": 2619,
+  "notes": "1-2"
+ },
+ {
+  "origin": "PIERSON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2262,
+  "rate_b": 2488,
+  "rate_c": 1917,
+  "rate_d": 2109,
+  "notes": "4-7"
+ },
+ {
+  "origin": "DELAVAN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2831,
+  "rate_b": 3114,
+  "rate_c": 2516,
+  "rate_d": 2768,
+  "notes": "1-2"
+ },
+ {
+  "origin": "DORANS",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2721,
+  "rate_b": 2993,
+  "rate_c": 2406,
+  "rate_d": 2647,
+  "notes": "1-2"
+ },
+ {
+  "origin": "EFFINGHAM",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2671,
+  "rate_b": 2938,
+  "rate_c": 2356,
+  "rate_d": 2592,
+  "notes": "1-2"
+ },
+ {
+  "origin": "EFFINGHAM",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2496,
+  "rate_b": 2746,
+  "rate_c": 2181,
+  "rate_d": 2399,
+  "notes": "2-3"
+ },
+ {
+  "origin": "ELWIN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2820,
+  "rate_b": 3102,
+  "rate_c": 2505,
+  "rate_d": 2756,
+  "notes": "1-2"
+ },
+ {
+  "origin": "ELWIN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2720,
+  "rate_b": 2992,
+  "rate_c": 2405,
+  "rate_d": 2646,
+  "notes": "2-3"
+ },
+ {
+  "origin": "EMDEN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2830,
+  "rate_b": 3113,
+  "rate_c": 2515,
+  "rate_d": 2767,
+  "notes": "1-2"
+ },
+ {
+  "origin": "FARINA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2086,
+  "rate_b": 2295,
+  "rate_c": 1741,
+  "rate_d": 1915,
+  "notes": "2-4"
+ },
+ {
+  "origin": "FREEPORT",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3207,
+  "rate_b": 3528,
+  "rate_c": 2862,
+  "rate_d": 3148,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GIBSON CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2837,
+  "rate_b": 3121,
+  "rate_c": 2522,
+  "rate_d": 2774,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GIBSON CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2662,
+  "rate_b": 2928,
+  "rate_c": 2347,
+  "rate_d": 2582,
+  "notes": "2-3"
+ },
+ {
+  "origin": "GIBSON CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2287,
+  "rate_b": 2516,
+  "rate_c": 1942,
+  "rate_d": 2136,
+  "notes": "2-4"
+ },
+ {
+  "origin": "GILMAN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2831,
+  "rate_b": 3114,
+  "rate_c": 2516,
+  "rate_d": 2768,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GILMAN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2656,
+  "rate_b": 2922,
+  "rate_c": 2341,
+  "rate_d": 2575,
+  "notes": "2-3"
+ },
+ {
+  "origin": "GILMAN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2281,
+  "rate_b": 2509,
+  "rate_c": 1936,
+  "rate_d": 2130,
+  "notes": "2-4"
+ },
+ {
+  "origin": "GREEN'S SWITCH",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2820,
+  "rate_b": 3102,
+  "rate_c": 2505,
+  "rate_d": 2756,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GREEN'S SWITCH",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2645,
+  "rate_b": 2910,
+  "rate_c": 2330,
+  "rate_d": 2563,
+  "notes": "2-3"
+ },
+ {
+  "origin": "HERSCHER",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2901,
+  "rate_b": 3191,
+  "rate_c": 2586,
+  "rate_d": 2845,
+  "notes": "1-2"
+ },
+ {
+  "origin": "HERSCHER",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2726,
+  "rate_b": 2999,
+  "rate_c": 2411,
+  "rate_d": 2652,
+  "notes": "2-3"
+ },
+ {
+  "origin": "HERSCHER",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2351,
+  "rate_b": 2586,
+  "rate_c": 2006,
+  "rate_d": 2207,
+  "notes": "2-4"
+ },
+ {
+  "origin": "INDIAN OAKS",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2901,
+  "rate_b": 3191,
+  "rate_c": 2586,
+  "rate_d": 2845,
+  "notes": "1-2"
+ },
+ {
+  "origin": "LIS",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2656,
+  "rate_b": 2922,
+  "rate_c": 2341,
+  "rate_d": 2575,
+  "notes": "1-2"
+ },
+ {
+  "origin": "MATTOON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2692,
+  "rate_b": 2961,
+  "rate_c": 2377,
+  "rate_d": 2615,
+  "notes": "1-2"
+ },
+ {
+  "origin": "MATTOON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2517,
+  "rate_b": 2769,
+  "rate_c": 2202,
+  "rate_d": 2422,
+  "notes": "2-3"
+ },
+ {
+  "origin": "MOUND CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2404,
+  "rate_b": 2644,
+  "rate_c": 2089,
+  "rate_d": 2298,
+  "notes": "1-2"
+ },
+ {
+  "origin": "MOUND CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2304,
+  "rate_b": 2534,
+  "rate_c": 1989,
+  "rate_d": 2188,
+  "notes": "2-3"
+ },
+ {
+  "origin": "MOUND CITY",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2129,
+  "rate_b": 2342,
+  "rate_c": 1814,
+  "rate_d": 1995,
+  "notes": "2-4"
+ },
+ {
+  "origin": "NEOGA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2422,
+  "rate_b": 2628,
+  "rate_c": 2108,
+  "rate_d": 2284,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "OAKLAND",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2627,
+  "rate_b": 2627,
+  "rate_c": 2306,
+  "rate_d": 2306,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "OBLONG",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2281,
+  "rate_b": 2508,
+  "rate_c": 1972,
+  "rate_d": 2167,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "PALESTINE",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2281,
+  "rate_b": 2508,
+  "rate_c": 1972,
+  "rate_d": 2167,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "PAXTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2796,
+  "rate_b": 3076,
+  "rate_c": 2481,
+  "rate_d": 2729,
+  "notes": "1-2"
+ },
+ {
+  "origin": "PAXTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2621,
+  "rate_b": 2883,
+  "rate_c": 2306,
+  "rate_d": 2537,
+  "notes": "2-3"
+ },
+ {
+  "origin": "PAXTON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2246,
+  "rate_b": 2471,
+  "rate_c": 1931,
+  "rate_d": 2124,
+  "notes": "2-4"
+ },
+ {
+  "origin": "PEORIA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2420,
+  "rate_b": 2648.0,
+  "rate_c": 2075,
+  "rate_d": 2269.0,
+  "notes": "4-8",
+  "changed": [
+   "b",
+   "d"
+  ]
+ },
+ {
+  "origin": "PINCKNEYVILLE",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2546,
+  "rate_b": 2801,
+  "rate_c": 2231,
+  "rate_d": 2454,
+  "notes": "1-2"
+ },
+ {
+  "origin": "RANTOUL",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2243,
+  "rate_b": 2243,
+  "rate_c": 1898,
+  "rate_d": 1898,
+  "notes": "2-4"
+ },
+ {
+  "origin": "SEWARD",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3204,
+  "rate_b": 3524,
+  "rate_c": 2859,
+  "rate_d": 3145,
+  "notes": "1-2"
+ },
+ {
+  "origin": "THOMASBORO",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2759,
+  "rate_b": 3035,
+  "rate_c": 2444,
+  "rate_d": 2688,
+  "notes": "1-2"
+ },
+ {
+  "origin": "THOMASBORO",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2584,
+  "rate_b": 2842,
+  "rate_c": 2269,
+  "rate_d": 2496,
+  "notes": "2-3"
+ },
+ {
+  "origin": "TUSCOLA",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2176,
+  "rate_b": 2394,
+  "rate_c": 1831,
+  "rate_d": 2014,
+  "notes": "2-4"
+ },
+ {
+  "origin": "WARREN",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2657,
+  "rate_b": 2923,
+  "rate_c": 2262,
+  "rate_d": 2488,
+  "notes": "2-4"
+ },
+ {
+  "origin": "WATSON",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2726,
+  "rate_b": 2999,
+  "rate_c": 2411,
+  "rate_d": 2652,
+  "notes": "1-2"
+ },
+ {
+  "origin": "WILLOW HILL",
+  "state": "IL",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2281,
+  "rate_b": 2508,
+  "rate_c": 1972,
+  "rate_d": 2167,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "AMBOY",
+  "state": "IN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3006,
+  "rate_b": 3299,
+  "rate_c": 2608,
+  "rate_d": 2850,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "CLYMERS",
+  "state": "IN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3006,
+  "rate_b": 3299,
+  "rate_c": 2608,
+  "rate_d": 2850,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "KOKOMO",
+  "state": "IN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3006,
+  "rate_b": 3299,
+  "rate_c": 2608,
+  "rate_d": 2850,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "LOGANSPORT",
+  "state": "IN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3006,
+  "rate_b": 3299,
+  "rate_c": 2608,
+  "rate_d": 2850,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "TERRE HAUTE",
+  "state": "IN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2494,
+  "rate_b": 2744,
+  "rate_c": 2186,
+  "rate_d": 2403,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "NEW ORLEANS",
+  "state": "LA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 1440,
+  "rate_b": 1584,
+  "rate_c": 1440,
+  "rate_d": 1584,
+  "notes": "1-7"
+ },
+ {
+  "origin": "NEW ORLEANS",
+  "state": "LA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 1265,
+  "rate_b": 1392,
+  "rate_c": 1265,
+  "rate_d": 1392,
+  "notes": "7-9"
+ },
+ {
+  "origin": "NEW ORLEANS",
+  "state": "LA",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 890,
+  "rate_b": 979,
+  "rate_c": 890,
+  "rate_d": 979,
+  "notes": "7-10"
+ },
+ {
+  "origin": "BATTLE CREEK",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3745,
+  "rate_b": 4120,
+  "rate_c": 3500,
+  "rate_d": 3850,
+  "notes": "1-2"
+ },
+ {
+  "origin": "DURAND",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3745,
+  "rate_b": 4120,
+  "rate_c": 3500,
+  "rate_d": 3850,
+  "notes": "1-2-7"
+ },
+ {
+  "origin": "DURAND",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3570,
+  "rate_b": 3927,
+  "rate_c": 3325,
+  "rate_d": 3658,
+  "notes": "2-3-7"
+ },
+ {
+  "origin": "DURAND",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3195,
+  "rate_b": 3515,
+  "rate_c": 2950,
+  "rate_d": 3245,
+  "notes": "2-4-7"
+ },
+ {
+  "origin": "CHESANING",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4155,
+  "rate_b": 4560,
+  "rate_c": 3886,
+  "rate_d": 4253,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "CHESANING",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3962,
+  "rate_b": 4345,
+  "rate_c": 3689,
+  "rate_d": 4039,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "CHESANING",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3565,
+  "rate_b": 3911,
+  "rate_c": 3294,
+  "rate_d": 3606,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "HENDERSON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4155,
+  "rate_b": 4560,
+  "rate_c": 3886,
+  "rate_d": 4253,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "HENDERSON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3962,
+  "rate_b": 4345,
+  "rate_c": 3689,
+  "rate_d": 4039,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "HENDERSON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3565,
+  "rate_b": 3911,
+  "rate_c": 3294,
+  "rate_d": 3606,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "ITHACA",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4270,
+  "rate_b": 4681,
+  "rate_c": 3998,
+  "rate_d": 4371,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "ITHACA",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4075,
+  "rate_b": 4466,
+  "rate_c": 3802,
+  "rate_d": 4159,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "ITHACA",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3678,
+  "rate_b": 4031,
+  "rate_c": 3408,
+  "rate_d": 3725,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "MIDDLETON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4270,
+  "rate_b": 4681,
+  "rate_c": 3998,
+  "rate_d": 4371,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "MIDDLETON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4075,
+  "rate_b": 4466,
+  "rate_c": 3802,
+  "rate_d": 4159,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "MIDDLETON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3678,
+  "rate_b": 4031,
+  "rate_c": 3408,
+  "rate_d": 3725,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "OAKLEY",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4155,
+  "rate_b": 4560,
+  "rate_c": 3886,
+  "rate_d": 4253,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "OAKLEY",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3962,
+  "rate_b": 4345,
+  "rate_c": 3689,
+  "rate_d": 4039,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "OAKLEY",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3565,
+  "rate_b": 3911,
+  "rate_c": 3294,
+  "rate_d": 3606,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "ROSEBUSH",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4270,
+  "rate_b": 4681,
+  "rate_c": 3998,
+  "rate_d": 4371,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "ROSEBUSH",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4075,
+  "rate_b": 4466,
+  "rate_c": 3802,
+  "rate_d": 4159,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "ROSEBUSH",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3678,
+  "rate_b": 4031,
+  "rate_c": 3408,
+  "rate_d": 3725,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "SHEPHERD",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4270,
+  "rate_b": 4681,
+  "rate_c": 3998,
+  "rate_d": 4371,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "SHEPHERD",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4075,
+  "rate_b": 4466,
+  "rate_c": 3802,
+  "rate_d": 4159,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "SHEPHERD",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3678,
+  "rate_b": 4031,
+  "rate_c": 3408,
+  "rate_d": 3725,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "AKRON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4424,
+  "rate_b": 4839,
+  "rate_c": 4140,
+  "rate_d": 4512,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "AUBURN",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4331,
+  "rate_b": 4736,
+  "rate_c": 4029,
+  "rate_d": 4394,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "AUBURN",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4099,
+  "rate_b": 4480,
+  "rate_c": 3839,
+  "rate_d": 4185,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "AUBURN",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3724,
+  "rate_b": 4068,
+  "rate_c": 3464,
+  "rate_d": 3772,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "BROWN CITY",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4520,
+  "rate_b": 4944,
+  "rate_c": 4216,
+  "rate_d": 4595,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "BROWN CITY",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4345,
+  "rate_b": 4751,
+  "rate_c": 4041,
+  "rate_d": 4403,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "BROWN CITY",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3970,
+  "rate_b": 4339,
+  "rate_c": 3666,
+  "rate_d": 3990,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "GERA",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4358,
+  "rate_b": 4765,
+  "rate_c": 4052,
+  "rate_d": 4418,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "GILFORD",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4358,
+  "rate_b": 4765,
+  "rate_c": 4052,
+  "rate_d": 4418,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "KINDE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4540,
+  "rate_b": 4966,
+  "rate_c": 4184,
+  "rate_d": 4561,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "MARLETTE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4520,
+  "rate_b": 4944,
+  "rate_c": 4216,
+  "rate_d": 4595,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "MARLETTE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4345,
+  "rate_b": 4751,
+  "rate_c": 4041,
+  "rate_d": 4403,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "MARLETTE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3970,
+  "rate_b": 4339,
+  "rate_c": 3666,
+  "rate_d": 3990,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "PIGEON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4520,
+  "rate_b": 4944,
+  "rate_c": 4216,
+  "rate_d": 4599,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "PIGEON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4345,
+  "rate_b": 4751,
+  "rate_c": 4041,
+  "rate_d": 4407,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "PIGEON",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3970,
+  "rate_b": 4339,
+  "rate_c": 3666,
+  "rate_d": 3990,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "RICHVILLE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4358,
+  "rate_b": 4765,
+  "rate_c": 4052,
+  "rate_d": 4418,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "RUTH",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4540,
+  "rate_b": 4966,
+  "rate_c": 4184,
+  "rate_d": 4561,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "SAGINAW",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4313,
+  "rate_b": 4716,
+  "rate_c": 4029,
+  "rate_d": 4394,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "SAGINAW",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4099,
+  "rate_b": 4480,
+  "rate_c": 3839,
+  "rate_d": 4185,
+  "notes": "2-3-6"
+ },
+ {
+  "origin": "SAGINAW",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3724,
+  "rate_b": 4068,
+  "rate_c": 3464,
+  "rate_d": 3772,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "BRECKENRIDGE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4540,
+  "rate_b": 4994,
+  "rate_c": 4251,
+  "rate_d": 4671,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "BRECKENRIDGE",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3943,
+  "rate_b": 4339,
+  "rate_c": 3670,
+  "rate_d": 4032,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "HEMLOCK",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 4540,
+  "rate_b": 4994,
+  "rate_c": 4251,
+  "rate_d": 4671,
+  "notes": "1-2-6"
+ },
+ {
+  "origin": "HEMLOCK",
+  "state": "MI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3943,
+  "rate_b": 4339,
+  "rate_c": 3670,
+  "rate_d": 4032,
+  "notes": "2-4-6"
+ },
+ {
+  "origin": "LONDON",
+  "state": "MN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3763,
+  "rate_b": 3763,
+  "rate_c": 3418,
+  "rate_d": 3418,
+  "notes": "1-2"
+ },
+ {
+  "origin": "RISING SUN",
+  "state": "MS",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 1860,
+  "rate_b": 2046,
+  "rate_c": 1515,
+  "rate_d": 1667,
+  "notes": "1-2"
+ },
+ {
+  "origin": "RISING SUN",
+  "state": "MS",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 1685,
+  "rate_b": 1854,
+  "rate_c": 1340,
+  "rate_d": 1474,
+  "notes": "2-3"
+ },
+ {
+  "origin": "RISING SUN",
+  "state": "MS",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 1460,
+  "rate_b": 1606,
+  "rate_c": 1290,
+  "rate_d": 1419,
+  "notes": "2-4"
+ },
+ {
+  "origin": "DYERSBURG",
+  "state": "TN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2490,
+  "rate_b": 2739,
+  "rate_c": 2175,
+  "rate_d": 2393,
+  "notes": "1-2"
+ },
+ {
+  "origin": "MEMPHIS",
+  "state": "TN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2290,
+  "rate_b": 2519,
+  "rate_c": 2145,
+  "rate_d": 2360,
+  "notes": "1-2-7"
+ },
+ {
+  "origin": "MEMPHIS",
+  "state": "TN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2115,
+  "rate_b": 2327,
+  "rate_c": 1970,
+  "rate_d": 2167,
+  "notes": "2-3-7"
+ },
+ {
+  "origin": "MEMPHIS",
+  "state": "TN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 1740,
+  "rate_b": 1914,
+  "rate_c": 1595,
+  "rate_d": 1755,
+  "notes": "2-4-7"
+ },
+ {
+  "origin": "UNION CITY",
+  "state": "TN",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 2773,
+  "rate_b": 3050,
+  "rate_c": 2458,
+  "rate_d": 2704,
+  "notes": "1-6"
+ },
+ {
+  "origin": "CENTER VALLEY",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3685,
+  "rate_b": 4054,
+  "rate_c": 3370,
+  "rate_d": 3707,
+  "notes": "1-2"
+ },
+ {
+  "origin": "CENTER VALLEY",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3135,
+  "rate_b": 3449,
+  "rate_c": 2820,
+  "rate_d": 3102,
+  "notes": "2-4"
+ },
+ {
+  "origin": "CHILTON",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3687,
+  "rate_b": 3687,
+  "rate_c": 3372,
+  "rate_d": 3372,
+  "notes": "1-2"
+ },
+ {
+  "origin": "GREEN BAY",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3690,
+  "rate_b": 4059,
+  "rate_c": 3375,
+  "rate_d": 3713,
+  "notes": "1-2"
+ },
+ {
+  "origin": "LUXEMBURG",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3774,
+  "rate_b": 3774,
+  "rate_c": 3459,
+  "rate_d": 3459,
+  "notes": "1-2"
+ },
+ {
+  "origin": "READFIELD",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3766,
+  "rate_b": 4143,
+  "rate_c": 3451,
+  "rate_d": 3796,
+  "notes": "1-2"
+ },
+ {
+  "origin": "SHAWANO",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3772,
+  "rate_b": 3772,
+  "rate_c": 3457,
+  "rate_d": 3457,
+  "notes": "1-2"
+ },
+ {
+  "origin": "SLINGER",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3656,
+  "rate_b": 4022,
+  "rate_c": 3341,
+  "rate_d": 3675,
+  "notes": "1-2-7"
+ },
+ {
+  "origin": "SLINGER",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3106,
+  "rate_b": 3417,
+  "rate_c": 2791,
+  "rate_d": 3070,
+  "notes": "2-4-7"
+ },
+ {
+  "origin": "STOCKTON",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3775,
+  "rate_b": 4153,
+  "rate_c": 3460,
+  "rate_d": 3806,
+  "notes": "1-2"
+ },
+ {
+  "origin": "WISCONSIN RAPIDS",
+  "state": "WI",
+  "destination": "GULF EXPORTS GROUP",
+  "rate_a": 3862,
+  "rate_b": 4248,
+  "rate_c": 3547,
+  "rate_d": 3902,
+  "notes": "1-2"
+ }
+]

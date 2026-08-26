@@ -65,6 +65,9 @@ LIVE_DASHBOARDS = [
     {"title": "Rail Freight", "category": "Cash Grain",
      "desc": "USDA agtransport rail shipments — railroad, state & destination detail.",
      "page": "apps/rail_freight/app.py", "url_path": "rail-freight"},
+    {"title": "Rail FOB", "category": "Cash Grain",
+     "desc": "Rail corridor bids/offers plus CSX/NS origin freight netback to FOB.",
+     "page": "apps/rail_fob/app.py", "url_path": "rail-fob"},
 
     {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",
@@ -75,6 +78,9 @@ LIVE_DASHBOARDS = [
     {"title": "Crop Conditions & Yield Model", "category": "Supply & Demand",
      "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
      "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
+    {"title": "EIA Energy", "category": "Supply & Demand",
+     "desc": "Natural gas production/storage/prices + ethanol & biofuels capacity.",
+     "page": "apps/eia_energy/app.py", "url_path": "eia-energy"},
 
     {"title": "Major Exporters", "category": "Grain Flows",
      "desc": "Corn exports by major origin — US Census/FGIS + vessel lineup.",
@@ -95,6 +101,9 @@ LIVE_DASHBOARDS = [
     {"title": "Livestock Inventory", "category": "Livestock",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production.",
      "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory"},
+    {"title": "CME Feeder Cattle Index", "category": "Livestock",
+     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location.",
+     "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index"},
 
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",

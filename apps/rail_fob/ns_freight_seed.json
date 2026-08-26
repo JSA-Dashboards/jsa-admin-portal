@@ -1,0 +1,605 @@
+[
+ {
+  "origin": "DES MOINES via IAIS",
+  "state": "IA",
+  "ga": 0.2527,
+  "ncscva": 0.2527,
+  "east": 0.2527,
+  "flag_105": false,
+  "highlighted": true
+ },
+ {
+  "origin": "PLEASANT HILL, IA",
+  "state": "IA",
+  "ga": 0.297,
+  "ncscva": 0.297,
+  "east": 0.297,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "BLOOMINGTON",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "BROWNS",
+  "state": "IL",
+  "ga": -0.0203,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "CHAMPAIGN",
+  "state": "IL",
+  "ga": 0.0681,
+  "ncscva": 0.0681,
+  "east": 0.0681,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "CHICAGO",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "CURRAN",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "DWIGHT",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "GIBSON CITY",
+  "state": "IL",
+  "ga": 0.0681,
+  "ncscva": 0.0681,
+  "east": 0.0681,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "GIBSON CITY (BLOL)",
+  "state": "IL",
+  "ga": 0.0681,
+  "ncscva": 0.0681,
+  "east": 0.0681,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "GRIGGSVILLE",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "HOMER",
+  "state": "IL",
+  "ga": 0.0605,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "LEHIGH",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MILMINE, IL",
+  "state": "IL",
+  "ga": 0.0605,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "NAPLES",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "SIDNEY",
+  "state": "IL",
+  "ga": 0.0605,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "STONINGTON",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "SUNBURY",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "TAYLORVILLE",
+  "state": "IL",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "AMBOY (USRP)",
+  "state": "IN",
+  "ga": 0.0433,
+  "ncscva": 0.0433,
+  "east": 0.0433,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "ANDERSON",
+  "state": "IN",
+  "ga": -0.0157,
+  "ncscva": 0.0208,
+  "east": 0.0278,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "ATTICA",
+  "state": "IN",
+  "ga": 0.0304,
+  "ncscva": 0.0304,
+  "east": 0.0304,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "CLYMERS",
+  "state": "IN",
+  "ga": 0.0177,
+  "ncscva": 0.0177,
+  "east": 0.0228,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "DELPHI",
+  "state": "IN",
+  "ga": 0.0177,
+  "ncscva": 0.0177,
+  "east": 0.0228,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "FT WAYNE",
+  "state": "IN",
+  "ga": 0,
+  "ncscva": 0,
+  "east": 0,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "KOKOMO (CERA)",
+  "state": "IN",
+  "ga": 0.0433,
+  "ncscva": 0.0433,
+  "east": 0.0433,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MALDEN",
+  "state": "IN",
+  "ga": 0.0605,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MIDWEST PORTAGE",
+  "state": "IN",
+  "ga": 0.0747,
+  "ncscva": 0.0747,
+  "east": 0.0747,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MILFORD",
+  "state": "IN",
+  "ga": 0.0203,
+  "ncscva": 0.0278,
+  "east": 0.0278,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MONTPELIER",
+  "state": "IN",
+  "ga": -0.0157,
+  "ncscva": 0.0208,
+  "east": 0.0278,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "NEW HAVEN",
+  "state": "IN",
+  "ga": 0,
+  "ncscva": 0,
+  "east": 0,
+  "flag_105": false,
+  "highlighted": true
+ },
+ {
+  "origin": "OAKVILLE",
+  "state": "IN",
+  "ga": -0.0157,
+  "ncscva": 0.0208,
+  "east": 0.0278,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "RED KEY",
+  "state": "IN",
+  "ga": -0.0157,
+  "ncscva": 0.0208,
+  "east": 0.0278,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "SCIRCLEVILLE",
+  "state": "IN",
+  "ga": -0.0157,
+  "ncscva": 0.0208,
+  "east": 0.0278,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "SIMS (CERA)",
+  "state": "IN",
+  "ga": 0.0433,
+  "ncscva": 0.0433,
+  "east": 0.0433,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "SOUTH MILFORD",
+  "state": "IN",
+  "ga": 0.0256,
+  "ncscva": 0.0357,
+  "east": 0.0357,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "TERRE COUPEE",
+  "state": "IN",
+  "ga": 0.0246,
+  "ncscva": 0.0296,
+  "east": 0.0296,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "THOMASTON (CKIN)",
+  "state": "IN",
+  "ga": 0.0605,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "TIPTON",
+  "state": "IN",
+  "ga": -0.0157,
+  "ncscva": 0.0208,
+  "east": 0.0278,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "WATERLOO",
+  "state": "IN",
+  "ga": 0.0215,
+  "ncscva": 0.0256,
+  "east": 0.0256,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "WELLSBORO (CKIN)",
+  "state": "IN",
+  "ga": 0.0605,
+  "ncscva": 0.0605,
+  "east": 0.0605,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "BLISSFIELD",
+  "state": "MI",
+  "ga": 0.0357,
+  "ncscva": 0.0357,
+  "east": 0.0357,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "DECATUR",
+  "state": "MI",
+  "ga": 0.0443,
+  "ncscva": 0.0443,
+  "east": 0.0443,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "OTTAWA LAKE",
+  "state": "MI",
+  "ga": 0.02,
+  "ncscva": -0.0073,
+  "east": -0.02,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "READING",
+  "state": "MI",
+  "ga": 0.0256,
+  "ncscva": 0.0357,
+  "east": 0.0357,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "WHITE PIGEON",
+  "state": "MI",
+  "ga": 0.0418,
+  "ncscva": 0.0418,
+  "east": 0.0418,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "BRUNSWICK",
+  "state": "MO",
+  "ga": 0.162,
+  "ncscva": 0.162,
+  "east": 0.162,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "HARDIN",
+  "state": "MO",
+  "ga": 0.162,
+  "ncscva": 0.162,
+  "east": 0.162,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "ST LOUIS",
+  "state": "MO",
+  "ga": 0.0808,
+  "ncscva": 0.1058,
+  "east": 0.1058,
+  "flag_105": false,
+  "highlighted": true
+ },
+ {
+  "origin": "BEAVERDAM",
+  "state": "OH",
+  "ga": 0.0154,
+  "ncscva": -0.0099,
+  "east": -0.02,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "BELLEVUE",
+  "state": "OH",
+  "ga": 0.0215,
+  "ncscva": -0.0073,
+  "east": -0.02,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "CIRCLEVILLE",
+  "state": "OH",
+  "ga": 0,
+  "ncscva": -0.0299,
+  "east": 0,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "CLYDE",
+  "state": "OH",
+  "ga": 0.0215,
+  "ncscva": -0.0073,
+  "east": -0.02,
+  "flag_105": false,
+  "highlighted": true
+ },
+ {
+  "origin": "DELTA",
+  "state": "OH",
+  "ga": 0.02,
+  "ncscva": -0.0073,
+  "east": -0.02,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "DYER",
+  "state": "OH",
+  "ga": 0.0154,
+  "ncscva": -0.0099,
+  "east": -0.02,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "EDON",
+  "state": "OH",
+  "ga": 0.0256,
+  "ncscva": 0.0357,
+  "east": 0.0357,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "FOSTORIA",
+  "state": "OH",
+  "ga": 0.0154,
+  "ncscva": -0.0099,
+  "east": -0.02,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "KINGSTON",
+  "state": "OH",
+  "ga": 0,
+  "ncscva": -0.0299,
+  "east": 0,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "LATTY",
+  "state": "OH",
+  "ga": 0,
+  "ncscva": 0,
+  "east": 0,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MANSFIELD",
+  "state": "OH",
+  "ga": 0.0122,
+  "ncscva": -0.0099,
+  "east": -0.0301,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MASSILLON (RSL)",
+  "state": "OH",
+  "ga": 0.0673,
+  "ncscva": 0.0696,
+  "east": 0,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MAUMEE",
+  "state": "OH",
+  "ga": 0.02,
+  "ncscva": -0.0073,
+  "east": -0.02,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "MONTPELIER",
+  "state": "OH",
+  "ga": 0.0256,
+  "ncscva": 0.0357,
+  "east": 0.0357,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "SPRINGFIELD",
+  "state": "OH",
+  "ga": -0.0157,
+  "ncscva": -0.0157,
+  "east": 0.0046,
+  "flag_105": true,
+  "highlighted": false
+ },
+ {
+  "origin": "TOLEDO",
+  "state": "OH",
+  "ga": 0.02,
+  "ncscva": -0.0073,
+  "east": -0.02,
+  "flag_105": true,
+  "highlighted": true
+ },
+ {
+  "origin": "TRURO",
+  "state": "OH",
+  "ga": -0.0157,
+  "ncscva": -0.0299,
+  "east": -0.0165,
+  "flag_105": false,
+  "highlighted": false
+ },
+ {
+  "origin": "WTNN",
+  "state": "TN",
+  "ga": 0,
+  "ncscva": 0.0633,
+  "east": 0.0633,
+  "flag_105": true,
+  "highlighted": true
+ }
+]

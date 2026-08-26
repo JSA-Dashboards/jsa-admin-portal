@@ -1,0 +1,178 @@
+[
+ {
+  "origin": "Breckenridge, MN",
+  "state": "MN",
+  "pnw": {
+   "aug": 6358.44,
+   "sep": 6442.65,
+   "oct": 7190.02,
+   "nov": 6890.02
+  },
+  "hereford": {
+   "aug": 6473.08,
+   "sep": 6511.05,
+   "oct": 6897.14,
+   "nov": 6747.14
+  }
+ },
+ {
+  "origin": "Casselton, ND",
+  "state": "ND",
+  "pnw": {
+   "aug": 6378.28,
+   "sep": 6463.05,
+   "oct": 7208.74,
+   "nov": 6908.74
+  },
+  "hereford": {
+   "aug": 6573.24,
+   "sep": 6610.65,
+   "oct": 6998.42,
+   "nov": 6848.42
+  }
+ },
+ {
+  "origin": "Hebron, ND",
+  "state": "ND",
+  "pnw": {
+   "aug": 6238.52,
+   "sep": 6324.95,
+   "oct": 7065.66,
+   "nov": 6765.66
+  },
+  "hereford": {
+   "aug": 6729.2,
+   "sep": 6764.5,
+   "oct": 7158.6,
+   "nov": 7008.6
+  }
+ },
+ {
+  "origin": "Lemmon, SD",
+  "state": "SD",
+  "pnw": {
+   "aug": 6316,
+   "sep": 6402.5,
+   "oct": 7143,
+   "nov": 6843
+  },
+  "hereford": {
+   "aug": 6600.6,
+   "sep": 6637.25,
+   "oct": 7027.3,
+   "nov": 6877.3
+  }
+ },
+ {
+  "origin": "Canton, SD",
+  "state": "SD",
+  "pnw": {
+   "aug": 6500.72,
+   "sep": 6583.2,
+   "oct": 7335.76,
+   "nov": 7035.76
+  },
+  "hereford": {
+   "aug": 5939.84,
+   "sep": 5980.4,
+   "oct": 6358.72,
+   "nov": 6208.72
+  }
+ },
+ {
+  "origin": "Hinton, IA",
+  "state": "IA",
+  "pnw": {
+   "aug": 6565.5599999999995,
+   "sep": 6647.35,
+   "oct": 7401.98,
+   "nov": 7101.98
+  },
+  "hereford": {
+   "aug": 5678.24,
+   "sep": 5719.4,
+   "oct": 6095.92,
+   "nov": 5945.92
+  }
+ },
+ {
+  "origin": "Funk, NE",
+  "state": "NE",
+  "pnw": {
+   "aug": 6398.36,
+   "sep": 6480.35,
+   "oct": 7234.38,
+   "nov": 6934.38
+  },
+  "hereford": {
+   "aug": 4948.4,
+   "sep": 4991.5,
+   "oct": 5362.2,
+   "nov": 5212.2
+  }
+ },
+ {
+  "origin": "Red Oak, IA",
+  "state": "IA",
+  "pnw": {
+   "aug": 6800.12,
+   "sep": 6880.95,
+   "oct": 7638.46,
+   "nov": 7338.46
+  },
+  "hereford": {
+   "aug": 5302.24,
+   "sep": 5344.4,
+   "oct": 5717.92,
+   "nov": 5567.92
+  }
+ },
+ {
+  "origin": "Waverly, IL",
+  "state": "IL",
+  "pnw": {
+   "aug": 6891.52,
+   "sep": 6968.7,
+   "oct": 7737.16,
+   "nov": 7437.16
+  },
+  "hereford": {
+   "aug": 5015.88,
+   "sep": 5056.55,
+   "oct": 5434.54,
+   "nov": 5284.54
+  }
+ },
+ {
+  "origin": "Ransom, IL",
+  "state": "IL",
+  "pnw": {
+   "aug": 6878.2,
+   "sep": 6955.75,
+   "oct": 7723.1,
+   "nov": 7423.1
+  },
+  "hereford": {
+   "aug": 5101.28,
+   "sep": 5141.8,
+   "oct": 5520.24,
+   "nov": 5370.24
+  }
+ },
+ {
+  "origin": "Polo, IL",
+  "state": "IL",
+  "pnw": {
+   "aug": 6827.08,
+   "sep": 6406.05,
+   "oct": 6469.14,
+   "nov": 6469.14
+  },
+  "hereford": {
+   "aug": 5203.04,
+   "sep": 5242.4,
+   "oct": 5624.32,
+   "nov": 5474.32
+  }
+ }
+]
