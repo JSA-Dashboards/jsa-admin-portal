@@ -92,6 +92,9 @@ LIVE_DASHBOARDS = [
      "desc": "Export vessel lineup by region — USG, PNW, TXG — and commodity.",
      "page": "apps/vessel_lineup/app.py", "url_path": "vessel-lineup"},
 
+    {"title": "CME Feeder Cattle Index", "category": "Livestock",
+     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location.",
+     "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index"},
     {"title": "Beef Weight", "category": "Livestock",
      "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live.",
      "page": "apps/beef_weight/app.py", "url_path": "beef-weight"},
