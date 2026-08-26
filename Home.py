@@ -101,9 +101,6 @@ LIVE_DASHBOARDS = [
     {"title": "Livestock Inventory", "category": "Livestock",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production.",
      "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory"},
-    {"title": "CME Feeder Cattle Index", "category": "Livestock",
-     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location.",
-     "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index"},
 
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",

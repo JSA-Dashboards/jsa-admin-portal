@@ -3,9 +3,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
-# cme_feeder_cattle's mars_history.db is real committed data, not a cache —
-# the app has no other data source for dates past 2026-01-23.
-!apps/cme_feeder_cattle/data/mars_history.db
 *.log
 .env
 .venv/
