@@ -29,6 +29,8 @@ JPSI_GREEN  = "#16a34a"
 POS         = "#16a34a"
 NEG         = "#dc2626"
 
+JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
+
 # Sequential scale for choropleths (dark-friendly)
 SEQ_SCALE = [
     [0.00, "#12211b"],
@@ -400,6 +402,8 @@ def to_excel(df: pd.DataFrame) -> bytes:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
+st.sidebar.image(JSA_LOGO, use_container_width=True)
+st.sidebar.markdown("<hr>", unsafe_allow_html=True)
 st.sidebar.markdown("## 🐄 Animal Inventory")
 st.sidebar.markdown(
     f'<span style="color:{DM_MUTED};font-size:0.72rem;">Inventory · Milk · Slaughter · Production</span>',
