@@ -337,6 +337,7 @@ _REV_PALETTE = [
     "#479fa8","#51b1bb","#5bbfca","#67d2e0", AMBER,
 ]
 
+# ── Page config ──────────────────────────────────────────────────────────────
 # st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
@@ -1029,6 +1030,68 @@ def load_production_nat_history(commodity: str, y0: int, y1: int) -> pd.DataFram
     df = df.groupby("year", as_index=False)["value"].sum()
     return df[["year", "value"]].sort_values("year")
 
+# ── Grain storage capacity loader ────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_nass_storage_capacity(y0: int, y1: int) -> pd.DataFrame:
+    """NASS grain storage capacity by state/year — on-farm and off-farm.
+    Returns: year, state_abbr, short_desc, value_bu"""
+    df = _fetch({
+        "commodity_desc":    "GRAIN STORAGE CAPACITY",
+        "statisticcat_desc": "CAPACITY",
+        "agg_level_desc":    "STATE",
+        "year__GE":          str(y0),
+        "year__LE":          str(y1),
+    })
+    if df.empty:
+        return pd.DataFrame()
+    df["year"]       = df["year"].astype(int)
+    df["value_bu"]   = df["Value"].apply(_clean)
+    df["state_abbr"] = df["state_alpha"].str.upper()
+    df = df.dropna(subset=["value_bu", "state_abbr"])
+    df = df[df["value_bu"] > 0]
+    # Drop aggregate rows (OTHER STATES, US TOTAL)
+    df = df[~df["state_abbr"].isin(["OT", "US"])]
+    return df[["year", "state_abbr", "short_desc", "value_bu"]].copy()
+
+# ── Multi-commodity production loader (for storage vs production) ─────────────
+_STORAGE_GRAINS = ["CORN", "SOYBEANS", "WHEAT", "OATS", "SORGHUM"]
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_multi_commodity_production(y0: int, y1: int) -> pd.DataFrame:
+    """State-level annual production for all storage grains across a year range.
+    Returns: year, state_abbr, commodity_desc, value_bu"""
+    frames = []
+    for grain in _STORAGE_GRAINS:
+        df = _fetch({
+            "commodity_desc":       grain,
+            "statisticcat_desc":    "PRODUCTION",
+            "unit_desc":            "BU",
+            "reference_period_desc":"YEAR",
+            "agg_level_desc":       "STATE",
+            "domain_desc":          "TOTAL",
+            "source_desc":          "SURVEY",
+            "year__GE":             str(y0),
+            "year__LE":             str(y1),
+        })
+        if df.empty:
+            continue
+        df["year"]       = df["year"].astype(int)
+        df["value_bu"]   = df["Value"].apply(_clean)
+        df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+        df = df.dropna(subset=["value_bu", "state_abbr"])
+        df = df[df["value_bu"] > 0]
+        # Keep ALL CLASSES / ALL PRODUCTION PRACTICES rows only
+        if "class_desc" in df.columns:
+            df = df[df["class_desc"].str.upper().isin(["ALL CLASSES", ""])]
+        if "prodn_practice_desc" in df.columns:
+            df = df[df["prodn_practice_desc"].str.upper().str.contains("ALL PRODUCTION")]
+        df["commodity_desc"] = grain
+        frames.append(df[["year", "state_abbr", "commodity_desc", "value_bu"]])
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    return out.groupby(["year", "state_abbr", "commodity_desc"], as_index=False)["value_bu"].sum()
+
 # ── Revision-history loader ──────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def load_revision_data(commodity: str, metric: str, y0: int, y1: int,
@@ -1362,12 +1425,14 @@ with st.spinner("Fetching USDA NASS data..."):
     snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_nat, tab_state, tab_stocks, tab_revisions, tab_wasde = st.tabs([
+tab_nat, tab_state, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
     "  📊  National Overview  ",
     "  🗺️  State Level  ",
     "  📦  Quarterly Stocks  ",
     "  🔄  Revision Tracker  ",
     "  🌾  WASDE  ",
+    "  🏗️  Grain Storage  ",
+    "  ⚖️  Storage vs Production  ",
 ])
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -4578,6 +4643,364 @@ with tab_wasde:
             f"background:{CARD_BG}'>"
             f"{_sum_th}<tbody>{_sum_rows}</tbody></table></div>",
             unsafe_allow_html=True,
+        )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 6 — GRAIN STORAGE CAPACITY  (NASS on-farm + off-farm)
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_storage_cap:
+    _OFF_DESC = "GRAIN STORAGE CAPACITY, OFF FARM - CAPACITY, MEASURED IN BU"
+    _ON_DESC  = "GRAIN STORAGE CAPACITY, ON FARM - CAPACITY, MEASURED IN BU"
+
+    with st.spinner("Loading NASS grain storage capacity..."):
+        _sc_all = load_nass_storage_capacity(1990, THIS_YEAR)
+
+    if _sc_all.empty:
+        st.warning("NASS grain storage capacity data unavailable.")
+    else:
+        _sc_yrs     = sorted(_sc_all["year"].unique(), reverse=True)
+        _sc_yr_opts = [int(y) for y in _sc_yrs]
+
+        # ── Year selector ─────────────────────────────────────────────────
+        _sc_col, _ = st.columns([2, 8])
+        _sc_sel_yr = _sc_col.selectbox(
+            "Year", _sc_yr_opts, key="sc_yr", index=0)
+        _sc_yr_str = int(_sc_sel_yr)
+
+        # ── KPI row ───────────────────────────────────────────────────────
+        _sc_yr_df = _sc_all[_sc_all["year"] == _sc_yr_str]
+        _sc_off   = _sc_yr_df[_sc_yr_df["short_desc"].str.contains("OFF FARM", na=False)]
+        _sc_on    = _sc_yr_df[_sc_yr_df["short_desc"].str.contains("ON FARM",  na=False)]
+        _sc_tot_off = _sc_off["value_bu"].sum()
+        _sc_tot_on  = _sc_on["value_bu"].sum()
+        _sc_total   = _sc_tot_off + _sc_tot_on
+        _sc_states  = _sc_yr_df["state_abbr"].nunique()
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Licensed Capacity", f"{_sc_total/1e9:.2f}B bu")
+        k2.metric("Off-Farm (Commercial)",   f"{_sc_tot_off/1e9:.2f}B bu")
+        k3.metric("On-Farm",                 f"{_sc_tot_on/1e9:.2f}B bu")
+        k4.metric("States Reporting",        str(_sc_states))
+
+        st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+        # ── Stacked horizontal bar by state ───────────────────────────────
+        _sc_off_s = (_sc_off[["state_abbr","value_bu"]]
+                     .rename(columns={"value_bu":"off_farm"}))
+        _sc_on_s  = (_sc_on[["state_abbr","value_bu"]]
+                     .rename(columns={"value_bu":"on_farm"}))
+        _sc_state = (_sc_off_s.merge(_sc_on_s, on="state_abbr", how="outer")
+                     .fillna(0))
+        _sc_state["total"] = _sc_state["off_farm"] + _sc_state["on_farm"]
+        _sc_state = _sc_state.sort_values("total", ascending=True)
+
+        fig_sc = go.Figure()
+        fig_sc.add_trace(go.Bar(
+            name="Off-Farm (Commercial)",
+            x=_sc_state["off_farm"] / 1e9, y=_sc_state["state_abbr"],
+            orientation="h", marker_color="#f97316",
+            hovertemplate="Off-Farm: %{x:.3f}B bu<extra></extra>",
+        ))
+        fig_sc.add_trace(go.Bar(
+            name="On-Farm",
+            x=_sc_state["on_farm"] / 1e9, y=_sc_state["state_abbr"],
+            orientation="h", marker_color="#84cc16",
+            hovertemplate="On-Farm: %{x:.3f}B bu<extra></extra>",
+        ))
+        _base_layout(fig_sc,
+                     title=f"Grain Storage Capacity by State — {_sc_yr_str} (Billion Bu)",
+                     height=max(420, len(_sc_state) * 22))
+        fig_sc.update_layout(barmode="stack", showlegend=True,
+                             legend=dict(orientation="h", y=1.04, x=0.5,
+                                         xanchor="center",
+                                         font=dict(color=TXT, size=11),
+                                         bgcolor="rgba(0,0,0,0)"))
+        fig_sc.update_xaxes(ticksuffix="B bu")
+        st.plotly_chart(fig_sc, use_container_width=True)
+
+        # ── National trend lines ──────────────────────────────────────────
+        st.markdown(
+            f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+            f"text-transform:uppercase;letter-spacing:.06em;margin:20px 0 6px'>"
+            f"National Storage Capacity Trend</p>",
+            unsafe_allow_html=True,
+        )
+        _sc_nat = (_sc_all.groupby(["year","short_desc"])["value_bu"]
+                   .sum().reset_index())
+        _sc_trend_map = {
+            "OFF FARM": ("Off-Farm (Commercial)", "#f97316"),
+            "ON FARM":  ("On-Farm",               "#84cc16"),
+        }
+        fig_sc_trend = go.Figure()
+        for _key, (_lbl, _clr) in _sc_trend_map.items():
+            _sub = (_sc_nat[_sc_nat["short_desc"].str.contains(_key, na=False)]
+                    .sort_values("year"))
+            if _sub.empty:
+                continue
+            fig_sc_trend.add_trace(go.Scatter(
+                x=_sub["year"], y=_sub["value_bu"] / 1e9,
+                mode="lines+markers", name=_lbl,
+                line=dict(color=_clr, width=2),
+                marker=dict(color=_clr, size=5),
+                hovertemplate=f"{_lbl}: %{{y:.3f}}B bu<extra></extra>",
+            ))
+        _base_layout(fig_sc_trend,
+                     title="National Grain Storage Capacity (Billion Bu)", height=350)
+        fig_sc_trend.update_yaxes(ticksuffix="B")
+        fig_sc_trend.update_layout(showlegend=True,
+                                   legend=dict(orientation="h", y=1.06, x=0.5,
+                                               xanchor="center",
+                                               font=dict(color=TXT, size=11),
+                                               bgcolor="rgba(0,0,0,0)"))
+        st.plotly_chart(fig_sc_trend, use_container_width=True)
+
+        # ── State table ───────────────────────────────────────────────────
+        st.markdown(
+            f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+            f"text-transform:uppercase;letter-spacing:.06em;margin:20px 0 6px'>"
+            f"State Detail — {_sc_yr_str}</p>",
+            unsafe_allow_html=True,
+        )
+        _sc_tbl = _sc_state.sort_values("total", ascending=False).copy()
+        _sc_tbl["Off-Farm (M Bu)"] = (_sc_tbl["off_farm"] / 1e6).round(1)
+        _sc_tbl["On-Farm (M Bu)"]  = (_sc_tbl["on_farm"]  / 1e6).round(1)
+        _sc_tbl["Total (M Bu)"]    = (_sc_tbl["total"]    / 1e6).round(1)
+        _sc_tbl["% Off-Farm"]      = (_sc_tbl["off_farm"] / _sc_tbl["total"] * 100).round(1)
+        _sc_tbl = _sc_tbl[["state_abbr","Off-Farm (M Bu)","On-Farm (M Bu)",
+                            "Total (M Bu)","% Off-Farm"]].rename(
+            columns={"state_abbr": "State"})
+        st.dataframe(_sc_tbl, use_container_width=True, hide_index=True)
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 7 — STORAGE vs PRODUCTION
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_storage_vs_prod:
+    _SVC_Y0 = 2015
+
+    with st.spinner("Loading production and storage data..."):
+        _svc_prod = load_multi_commodity_production(_SVC_Y0, THIS_YEAR)
+        _svc_cap  = load_nass_storage_capacity(_SVC_Y0, THIS_YEAR)
+
+    if _svc_prod.empty:
+        st.warning("Production data unavailable from NASS API.")
+    else:
+        # ── Controls ──────────────────────────────────────────────────────
+        _svc_c1, _svc_c2, _svc_c3 = st.columns([2, 3, 5])
+        _svc_prod_yrs  = sorted(_svc_prod["year"].unique(), reverse=True)
+        _svc_yr        = _svc_c1.selectbox("Year", _svc_prod_yrs,
+                                            key="svc_yr", index=0)
+        _svc_layer     = _svc_c2.radio(
+            "Storage Layer",
+            ["NASS Total (On+Off)", "NASS Off-Farm", "NASS On-Farm"],
+            horizontal=True, key="svc_layer", label_visibility="collapsed",
+        )
+
+        # ── Build state supply pivot ───────────────────────────────────────
+        def _build_svc(yr):
+            pg = _svc_prod[_svc_prod["year"] == yr]
+            _grp = {
+                "Corn & Sorghum": ["CORN", "SORGHUM"],
+                "Soybeans":       ["SOYBEANS"],
+                "Wheat":          ["WHEAT"],
+                "Oats":           ["OATS"],
+            }
+            frames_svc = []
+            for lbl, grains in _grp.items():
+                sub = (pg[pg["commodity_desc"].isin(grains)]
+                       .groupby("state_abbr")["value_bu"].sum()
+                       .reset_index().rename(columns={"value_bu": lbl}))
+                frames_svc.append(sub)
+            df_s = frames_svc[0]
+            for f in frames_svc[1:]:
+                df_s = df_s.merge(f, on="state_abbr", how="outer")
+            df_s = df_s.fillna(0)
+            df_s["Total Supply"] = df_s[list(_grp.keys())].sum(axis=1)
+
+            # Storage capacity
+            if not _svc_cap.empty:
+                _cap_yr_avail = sorted(_svc_cap["year"].unique())
+                _cap_yr = yr if yr in _cap_yr_avail else (
+                    max((y for y in _cap_yr_avail if y <= yr), default=_cap_yr_avail[-1])
+                )
+                _cap_sub = _svc_cap[_svc_cap["year"] == _cap_yr]
+                _cap_off = (_cap_sub[_cap_sub["short_desc"].str.contains("OFF FARM", na=False)]
+                            .groupby("state_abbr")["value_bu"].sum().reset_index()
+                            .rename(columns={"value_bu": "_off"}))
+                _cap_on  = (_cap_sub[_cap_sub["short_desc"].str.contains("ON FARM", na=False)]
+                            .groupby("state_abbr")["value_bu"].sum().reset_index()
+                            .rename(columns={"value_bu": "_on"}))
+                df_s = df_s.merge(_cap_off, on="state_abbr", how="left")
+                df_s = df_s.merge(_cap_on,  on="state_abbr", how="left")
+                df_s["_off"] = df_s["_off"].fillna(0)
+                df_s["_on"]  = df_s["_on"].fillna(0)
+                if _svc_layer == "NASS Off-Farm":
+                    df_s["Storage"] = df_s["_off"]
+                elif _svc_layer == "NASS On-Farm":
+                    df_s["Storage"] = df_s["_on"]
+                else:
+                    df_s["Storage"] = df_s["_off"] + df_s["_on"]
+            else:
+                df_s["Storage"] = 0.0
+
+            df_s["Ratio"]    = df_s.apply(
+                lambda r: r["Storage"] / r["Total Supply"]
+                if r["Total Supply"] > 0 else None, axis=1)
+            df_s["Surplus"]  = df_s["Storage"] - df_s["Total Supply"]
+            return df_s
+
+        _svc_df      = _build_svc(_svc_yr)
+        _svc_df_prev = _build_svc(_svc_yr - 1) if (_svc_yr - 1) in _svc_prod["year"].values else pd.DataFrame()
+
+        # ── National KPIs ─────────────────────────────────────────────────
+        _nat_sup  = _svc_df["Total Supply"].sum()
+        _nat_stor = _svc_df["Storage"].sum()
+        _nat_rat  = _nat_stor / _nat_sup if _nat_sup > 0 else 0
+        _nat_surp = _nat_stor - _nat_sup
+
+        _nat_sup_p  = _svc_df_prev["Total Supply"].sum() if not _svc_df_prev.empty else None
+        _nat_rat_p  = ((_svc_df_prev["Storage"].sum() / _nat_sup_p)
+                       if (_nat_sup_p and _nat_sup_p > 0) else None)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric(f"Total Supply ({_svc_yr})", f"{_nat_sup/1e9:.2f}B bu",
+                  delta=f"{(_nat_sup - _nat_sup_p)/1e6:+.0f}M bu YoY"
+                  if _nat_sup_p else None)
+        k2.metric(f"{_svc_layer} Capacity",   f"{_nat_stor/1e9:.2f}B bu")
+        k3.metric("Storage / Supply Ratio",   f"{_nat_rat:.2f}x",
+                  delta=f"{_nat_rat - _nat_rat_p:+.2f} YoY"
+                  if _nat_rat_p else None)
+        k4.metric("Surplus / (Deficit)",
+                  f"{_nat_surp/1e6:+.0f}M bu",
+                  delta_color="normal" if _nat_surp >= 0 else "inverse")
+
+        st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+        # ── State stacked supply bar + storage line ────────────────────────
+        _svc_chart = _svc_df.sort_values("Total Supply", ascending=False).head(30)
+        _com_cols   = ["Corn & Sorghum", "Soybeans", "Wheat", "Oats"]
+        _com_clrs   = ["#1f5c2e", "#a8d5e8", "#e0b800", "#c0392b"]
+        _line_clr   = "#444444" if "Off" in _svc_layer or "Total" in _svc_layer else "#1055aa"
+
+        fig_svc = go.Figure()
+        for _com, _clr in zip(_com_cols, _com_clrs):
+            if _com not in _svc_chart.columns:
+                continue
+            fig_svc.add_trace(go.Bar(
+                name=_com,
+                x=_svc_chart["state_abbr"],
+                y=_svc_chart[_com] / 1e6,
+                marker_color=_clr,
+                hovertemplate=f"{_com}: %{{y:,.0f}}M bu<extra></extra>",
+            ))
+        if _svc_chart["Storage"].sum() > 0:
+            _svc_ratio_lbl = _svc_chart["Ratio"].apply(
+                lambda v: f"{v:.2f}x" if pd.notna(v) else "")
+            fig_svc.add_trace(go.Scatter(
+                name=_svc_layer,
+                x=_svc_chart["state_abbr"],
+                y=_svc_chart["Storage"] / 1e6,
+                mode="lines+markers+text",
+                line=dict(color=_line_clr, width=2, dash="dot"),
+                marker=dict(color=_line_clr, size=6),
+                text=_svc_ratio_lbl, textposition="top center",
+                textfont=dict(size=9, color=_line_clr),
+                hovertemplate=f"{_svc_layer}: %{{y:,.0f}}M bu<extra></extra>",
+            ))
+        _base_layout(fig_svc,
+                     title=f"Grain Supply vs {_svc_layer} by State — {_svc_yr} (Million Bu)",
+                     height=460)
+        fig_svc.update_layout(barmode="stack", showlegend=True,
+                              legend=dict(orientation="h", y=1.05, x=0.5,
+                                          xanchor="center",
+                                          font=dict(color=TXT, size=11),
+                                          bgcolor="rgba(0,0,0,0)"))
+        fig_svc.update_yaxes(ticksuffix="M")
+        st.plotly_chart(fig_svc, use_container_width=True)
+
+        # ── Historical trend ───────────────────────────────────────────────
+        st.markdown(
+            f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+            f"text-transform:uppercase;letter-spacing:.06em;margin:20px 0 6px'>"
+            f"National Historical Trend — Supply vs {_svc_layer}</p>",
+            unsafe_allow_html=True,
+        )
+        _hist_yrs = sorted(_svc_prod["year"].unique())
+        _hist_rows = []
+        for _hy in _hist_yrs:
+            _hdf = _build_svc(_hy)
+            _hist_rows.append({
+                "year":          _hy,
+                "Corn & Sorghum":_hdf["Corn & Sorghum"].sum() / 1e6,
+                "Soybeans":      _hdf["Soybeans"].sum()       / 1e6,
+                "Wheat":         _hdf["Wheat"].sum()           / 1e6,
+                "Oats":          _hdf["Oats"].sum()            / 1e6,
+                "Storage":       _hdf["Storage"].sum()         / 1e6,
+            })
+        _hist_df = pd.DataFrame(_hist_rows)
+
+        fig_hist = go.Figure()
+        for _com, _clr in zip(_com_cols, _com_clrs):
+            if _com not in _hist_df.columns:
+                continue
+            fig_hist.add_trace(go.Bar(
+                name=_com, x=_hist_df["year"], y=_hist_df[_com],
+                marker_color=_clr,
+                hovertemplate=f"{_com}: %{{y:,.0f}}M bu<extra></extra>",
+            ))
+        if _hist_df["Storage"].sum() > 0:
+            fig_hist.add_trace(go.Scatter(
+                name=_svc_layer, x=_hist_df["year"], y=_hist_df["Storage"],
+                mode="lines+markers",
+                line=dict(color=_line_clr, width=2, dash="dot"),
+                marker=dict(color=_line_clr, size=5),
+                hovertemplate=f"{_svc_layer}: %{{y:,.0f}}M bu<extra></extra>",
+            ))
+        _base_layout(fig_hist, title="National Grain Supply vs Storage Capacity (Million Bu)",
+                     height=380)
+        fig_hist.update_layout(barmode="stack", showlegend=True,
+                               legend=dict(orientation="h", y=1.06, x=0.5,
+                                           xanchor="center",
+                                           font=dict(color=TXT, size=11),
+                                           bgcolor="rgba(0,0,0,0)"))
+        fig_hist.update_yaxes(ticksuffix="M")
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+        # ── State detail table ─────────────────────────────────────────────
+        st.markdown(
+            f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+            f"text-transform:uppercase;letter-spacing:.06em;margin:20px 0 6px'>"
+            f"State Detail — {_svc_yr}</p>",
+            unsafe_allow_html=True,
+        )
+        _svc_tbl = _svc_df.sort_values("Total Supply", ascending=False).copy()
+        if not _svc_df_prev.empty:
+            _svc_tbl = _svc_tbl.merge(
+                _svc_df_prev[["state_abbr","Ratio"]].rename(
+                    columns={"Ratio": "Ratio Prev"}),
+                on="state_abbr", how="left",
+            )
+        else:
+            _svc_tbl["Ratio Prev"] = None
+
+        _svc_tbl["Corn & Sorg (M)"] = (_svc_tbl["Corn & Sorghum"] / 1e6).round(0)
+        _svc_tbl["Soybeans (M)"]    = (_svc_tbl["Soybeans"]        / 1e6).round(0)
+        _svc_tbl["Wheat (M)"]       = (_svc_tbl["Wheat"]            / 1e6).round(0)
+        _svc_tbl["Oats (M)"]        = (_svc_tbl["Oats"]             / 1e6).round(0)
+        _svc_tbl["Supply (M)"]      = (_svc_tbl["Total Supply"]     / 1e6).round(0)
+        _svc_tbl["Storage (M)"]     = (_svc_tbl["Storage"]          / 1e6).round(0)
+        _svc_tbl["Surplus (M)"]     = (_svc_tbl["Surplus"]          / 1e6).round(0)
+        _svc_tbl["Ratio"]           = _svc_tbl["Ratio"].apply(
+            lambda v: f"{v:.2f}x" if pd.notna(v) else "—")
+        _svc_tbl["Ratio Prev"]      = _svc_tbl["Ratio Prev"].apply(
+            lambda v: f"{v:.2f}x" if pd.notna(v) else "—")
+
+        _disp_cols = ["state_abbr", "Corn & Sorg (M)", "Soybeans (M)", "Wheat (M)",
+                      "Oats (M)", "Supply (M)", "Storage (M)", "Surplus (M)",
+                      "Ratio", "Ratio Prev"]
+        _disp_cols = [c for c in _disp_cols if c in _svc_tbl.columns]
+        st.dataframe(
+            _svc_tbl[_disp_cols].rename(columns={"state_abbr": "State"}),
+            use_container_width=True, hide_index=True,
         )
 
 # ── Legal Disclaimer Footer ───────────────────────────────────────────────────

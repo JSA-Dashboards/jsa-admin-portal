@@ -8,6 +8,7 @@ import warnings
 import base64
 import os
 import io
+import math
 from concurrent.futures import ThreadPoolExecutor
 warnings.filterwarnings("ignore")
 
@@ -200,6 +201,17 @@ DELTA_COLORSCALE = [
     [0.70, "#4393c3"],
     [0.85, "#2166ac"],
     [1.00, "#053061"],   # deep blue  (most positive)
+]
+
+# Yield-probability map: blue=likely above trend, red=likely below trend, white=50%
+PROB_COLORSCALE = [
+    [0.00, "#2166ac"],   # 0% P(below) = very likely above trend = deep blue
+    [0.20, "#74add1"],
+    [0.40, "#e0f3f8"],   # light blue-white
+    [0.50, "#f7f7f7"],   # white = coin flip
+    [0.60, "#fee090"],   # light orange
+    [0.80, "#f46d43"],
+    [1.00, "#d73027"],   # 100% P(below) = certain below trend = deep red
 ]
 
 COMMODITIES = {
@@ -556,6 +568,45 @@ def fetch_conditions(commodity_desc: str, class_desc: str, years: tuple, known_s
     # Deduplicate across overlapping calls
     df = df.drop_duplicates(subset=["year", "week_ending", "state_alpha", "condition"])
     return df
+
+
+@st.cache_data(ttl=86400, show_spinner=False, persist="disk")
+def fetch_state_yields(commodity_desc: str, class_desc: str = "") -> pd.DataFrame:
+    """
+    Fetch annual state-level crop yields from NASS QuickStats.
+    Returns: year (int), state_alpha (str), yield_buac (float)
+    """
+    params = {
+        "key":               API_KEY,
+        "source_desc":       "SURVEY",
+        "sector_desc":       "CROPS",
+        "group_desc":        "FIELD CROPS",
+        "commodity_desc":    commodity_desc,
+        "statisticcat_desc": "YIELD",
+        "unit_desc":         "BU / ACRE",
+        "agg_level_desc":    "STATE",
+        "freq_desc":         "ANNUAL",
+        "format":            "JSON",
+    }
+    payload = _nass_get(params)
+    rows = payload.get("data", [])
+    if not rows:
+        return pd.DataFrame(columns=["year", "state_alpha", "yield_buac"])
+
+    df = pd.DataFrame(rows)
+    df = df[df["state_alpha"].str.len() == 2].copy()
+    df["year"]       = pd.to_numeric(df["year"], errors="coerce")
+    df["yield_buac"] = pd.to_numeric(df["Value"], errors="coerce")
+    df = df.dropna(subset=["year", "yield_buac", "state_alpha"])
+    df["year"] = df["year"].astype(int)
+
+    # For wheat, filter to the right class via short_desc
+    _skip_sd = {"ALL CLASSES", "ALL", "FIELD CORN", ""}
+    if class_desc and class_desc.upper() not in _skip_sd and "short_desc" in df.columns:
+        df = df[df["short_desc"].str.contains(class_desc, case=False, na=False, regex=False)]
+
+    df = df.groupby(["year", "state_alpha"], as_index=False)["yield_buac"].mean()
+    return df[["year", "state_alpha", "yield_buac"]]
 
 
 def _states_only(df: pd.DataFrame) -> pd.DataFrame:
@@ -4710,6 +4761,190 @@ def build_map(
     return fig
 
 
+def compute_yield_proba(
+    jsa_df: pd.DataFrame,
+    yield_df: pd.DataFrame,
+    current_week: pd.Timestamp,
+    sel_usda_yr: int,
+    min_years: int = 10,
+) -> pd.DataFrame:
+    """
+    For each state, estimate P(below trendline yield) given the current JSA
+    Index score at the current calendar week, using historical condition–yield
+    regression.  The JSA Index (VP=0 P=25 F=50 G=75 E=100 weighted average)
+    is used as the predictor rather than G+E alone because it captures the
+    full condition distribution and has higher predictive power.
+
+    Returns DataFrame: state_alpha, p_below (0–100), p_above (0–100),
+                       n_years, trend_yield, predicted_dev, current_jsa
+    """
+    def _norm_cdf(z: float) -> float:
+        return (1.0 + math.erf(z / math.sqrt(2.0))) / 2.0
+
+    if jsa_df.empty or yield_df.empty or current_week is None:
+        return pd.DataFrame()
+
+    current_iso_wk = pd.Timestamp(current_week).isocalendar().week
+
+    # Build: for every state × year, the JSA Index at the week closest to current_iso_wk
+    gdf = jsa_df.copy()
+    gdf["week_ending"] = pd.to_datetime(gdf["week_ending"])
+    gdf["iso_wk"] = gdf["week_ending"].apply(lambda d: d.isocalendar().week)
+    gdf["wk_dist"] = (gdf["iso_wk"] - current_iso_wk).abs()
+    # Exclude weeks more than 3 away (avoid matching opposite side of season)
+    gdf = gdf[gdf["wk_dist"] <= 3]
+    # Keep closest week per state × year
+    gdf = gdf.loc[
+        gdf.groupby(["year", "state_alpha"])["wk_dist"].idxmin()
+    ].reset_index(drop=True)
+
+    rows = []
+    for state in sorted(gdf["state_alpha"].unique()):
+        sg = gdf[gdf["state_alpha"] == state].copy()
+        sy = yield_df[yield_df["state_alpha"] == state].copy()
+        if sg.empty or sy.empty:
+            continue
+
+        merged = sg.merge(sy, on="year", how="inner").dropna(subset=["jsa_pct", "yield_buac"])
+        if len(merged) < min_years:
+            continue
+
+        # Trendline on yields (all years including current)
+        yr_arr = merged["year"].values.astype(float)
+        yd_arr = merged["yield_buac"].values.astype(float)
+        slope_y, int_y = float(np.polyfit(yr_arr, yd_arr, 1))
+        trend_vals = slope_y * yr_arr + int_y
+        merged["yield_dev"] = yd_arr - trend_vals
+
+        # Current year's JSA Index
+        cur_ge_row = merged[merged["year"] == sel_usda_yr]
+        if cur_ge_row.empty:
+            # Try the current week's JSA for current year even if no yield yet
+            cur_ge_row = sg[sg["year"] == sel_usda_yr]
+            if cur_ge_row.empty:
+                continue
+            current_ge_pct = float(cur_ge_row["jsa_pct"].iloc[0])
+            hist = merged  # use all historical years
+        else:
+            current_ge_pct = float(cur_ge_row["jsa_pct"].iloc[0])
+            hist = merged[merged["year"] < sel_usda_yr]
+
+        if len(hist) < min_years:
+            hist = merged
+
+        x = hist["jsa_pct"].values.astype(float)
+        y = hist["yield_dev"].values.astype(float)
+        x_mean, y_mean = x.mean(), y.mean()
+        ss_x = float(np.dot(x - x_mean, x - x_mean))
+        if ss_x < 1e-6:
+            continue
+        slope_r = float(np.dot(x - x_mean, y - y_mean)) / ss_x
+        int_r   = y_mean - slope_r * x_mean
+
+        residuals = y - (slope_r * x + int_r)
+        sigma = float(np.std(residuals, ddof=1))
+        if sigma < 0.1:
+            continue
+
+        pred_dev      = slope_r * current_ge_pct + int_r
+        trend_cur_yr  = slope_y * float(sel_usda_yr) + int_y
+        z             = pred_dev / sigma
+        p_above       = _norm_cdf(z)
+        p_below       = 1.0 - p_above
+
+        rows.append({
+            "state_alpha":   state,
+            "p_below":       round(p_below * 100, 1),
+            "p_above":       round(p_above * 100, 1),
+            "n_years":       len(hist),
+            "trend_yield":   round(trend_cur_yr, 1),
+            "predicted_dev": round(pred_dev, 2),
+            "sigma":         round(sigma, 2),
+            "current_jsa":   round(current_ge_pct, 1),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def build_probability_map(prob_df: pd.DataFrame) -> go.Figure:
+    """
+    Choropleth showing P(below trendline yield) by state.
+    Blue = likely above trend, Red = likely below trend, White = ~50%.
+    """
+    if prob_df.empty:
+        fig = go.Figure()
+        fig.add_annotation(text="Insufficient data for probability model",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False, font=dict(size=14, color="#555"))
+        return fig
+
+    hovers, labels, lats, lons = [], [], [], []
+    for _, row in prob_df.iterrows():
+        st = row["state_alpha"]
+        if st not in STATE_CENTROIDS:
+            continue
+        lat, lon = STATE_CENTROIDS[st]
+        lats.append(lat)
+        lons.append(lon)
+        labels.append(f"<b>{st}</b><br>{row['p_below']:.0f}%")
+        hovers.append(
+            f"<b>{st}</b><br><br>"
+            f"P(below trend): <b>{row['p_below']:.1f}%</b><br>"
+            f"P(above trend): <b>{row['p_above']:.1f}%</b><br><br>"
+            f"JSA Index: {row['current_jsa']:.1f}<br>"
+            f"Trend yield: {row['trend_yield']:.1f} bu/ac<br>"
+            f"Expected deviation: {row['predicted_dev']:+.2f} bu/ac<br>"
+            f"Model std: ±{row['sigma']:.2f} bu/ac<br>"
+            f"Years in model: {row['n_years']}"
+        )
+
+    fig = go.Figure(go.Choropleth(
+        locations=prob_df["state_alpha"],
+        z=prob_df["p_below"],
+        locationmode="USA-states",
+        colorscale=PROB_COLORSCALE,
+        zmin=0, zmax=100,
+        colorbar=dict(
+            title=dict(text="P(below<br>trend)", font=dict(color=DM_TEXT, size=11)),
+            tickfont=dict(color=DM_TEXT),
+            ticksuffix="%",
+            tickvals=[0, 25, 50, 75, 100],
+            len=0.75,
+        ),
+        text=prob_df["state_alpha"].values,
+        hoverinfo="skip",
+        marker_line_color="white",
+        marker_line_width=0.8,
+    ))
+
+    fig.add_trace(go.Scattergeo(
+        lat=lats, lon=lons,
+        text=labels,
+        hovertext=hovers,
+        hovertemplate="%{hovertext}<extra></extra>",
+        mode="text",
+        textfont=dict(size=11, color="#1e2533", family="Arial Black"),
+        showlegend=False,
+    ))
+
+    fig.update_layout(
+        geo=dict(
+            scope="usa",
+            showlakes=False,
+            bgcolor="white",
+            landcolor="#d4dbe3",
+            subunitcolor="#ffffff",
+            subunitwidth=1.2,
+        ),
+        paper_bgcolor="white",
+        margin=dict(l=0, r=0, t=52, b=10),
+        height=500,
+        dragmode=False,
+    )
+    _wm_map(fig)
+    return fig
+
+
 def build_stacked_area(
     raw_df: pd.DataFrame,
     state_alpha: str,
@@ -5892,7 +6127,18 @@ with _tab_cond:
             if sel_state_alpha is not None:
                 compare_result = compare_result[compare_result["state_alpha"] == sel_state_alpha].reset_index(drop=True)
 
-    if cmp_usda_yr and not compare_result.empty:
+    # ── Map view toggle ────────────────────────────────────────────────────────────
+    _mvc1, _mvc2 = st.columns([2, 5])
+    with _mvc1:
+        _map_mode = st.segmented_control(
+            "Map view",
+            ["Conditions", "Yield Probability"],
+            default="Conditions",
+            key="map_view_mode",
+            label_visibility="collapsed",
+        )
+
+    if cmp_usda_yr and not compare_result.empty and _map_mode == "Conditions":
         map_col1, map_col2 = st.columns(2)
     else:
         map_col1 = st.container()
@@ -5912,40 +6158,97 @@ with _tab_cond:
         return f"{sign}{v:.0f}%"
 
     with map_col1:
-        st.markdown(
-            f'<div class="sec-hdr">{condition} % — {selected_mkt} &nbsp;({week_label})</div>',
-            unsafe_allow_html=True,
-        )
-        _map_fig = build_map(map_result, sel_usda_yr, condition, label_metric)
-        _map_fig.add_annotation(
-            text=(
-                f"<b>US {_map_cond_lbl}: {_map_nat_disp}{_map_unit}</b><br>"
-                f"<span style='font-size:13px;color:#444'>"
-                f"LW {_fmt_chg(_map_nat_kpis['wow'])}&nbsp;&nbsp;·&nbsp;&nbsp;"
-                f"LY {_fmt_chg(_map_nat_kpis['yoy'])}&nbsp;&nbsp;·&nbsp;&nbsp;"
-                f"Avg {_fmt_chg(_map_nat_kpis['vs_olympic'])}"
-                f"</span>"
-            ),
-            xref="paper", yref="paper",
-            x=0.99, y=0.99,
-            xanchor="right", yanchor="top",
-            showarrow=False,
-            font=dict(size=17, color="#1a4a2e", family="Arial Black"),
-            bgcolor="white",
-            bordercolor="#d0d7de",
-            borderwidth=1,
-            borderpad=10,
-        )
-        _map_fig.update_layout(
-            title=dict(
-                text=f"<b>JSA {commodity_label} Crop Conditions by State</b>",
-                x=0.5, xanchor="center",
-                font=dict(size=15, color="#1a4a2e", family="Arial Black"),
-            ),
-            margin=dict(l=0, r=0, t=52, b=10),
-        )
-        _show_chart(_map_fig, "conditions_map",
-            extra_config={"scrollZoom": False, "modeBarButtonsToRemove": ["zoom", "pan", "select", "lasso2d", "resetGeo"]})
+        if _map_mode == "Yield Probability":
+            # ── Yield Probability view ─────────────────────────────────────────────
+            with st.spinner("Building yield probability model…"):
+                _yield_df = fetch_state_yields(
+                    commodity_cfg["commodity_desc"],
+                    commodity_cfg.get("class_desc", ""),
+                )
+                _prob_df = compute_yield_proba(
+                    jsa_df, _yield_df, sel_week, sel_usda_yr,
+                )
+
+            if _prob_df.empty:
+                st.warning("Not enough historical data to build the yield probability model for this commodity.")
+            else:
+                # US production-weighted average P(below trend)
+                _us_p_below = round(_prob_df["p_below"].mean(), 1)
+                st.markdown(
+                    f'<div class="sec-hdr">P(Below Trend Yield) by State — {selected_mkt} &nbsp;({week_label})</div>',
+                    unsafe_allow_html=True,
+                )
+                _prob_fig = build_probability_map(_prob_df)
+                _prob_fig.add_annotation(
+                    text=(
+                        f"<b>US Avg: {_us_p_below:.0f}% below trend</b><br>"
+                        f"<span style='font-size:12px;color:#444'>"
+                        f"Red = likely below trend &nbsp;·&nbsp; Blue = likely above"
+                        f"</span>"
+                    ),
+                    xref="paper", yref="paper",
+                    x=0.99, y=0.99,
+                    xanchor="right", yanchor="top",
+                    showarrow=False,
+                    font=dict(size=15, color="#8b1a1a", family="Arial Black"),
+                    bgcolor="white",
+                    bordercolor="#d0d7de",
+                    borderwidth=1,
+                    borderpad=10,
+                )
+                _prob_fig.update_layout(
+                    title=dict(
+                        text=f"<b>JSA {commodity_label}: Probability of Finishing Below Trend Yield</b>",
+                        x=0.5, xanchor="center",
+                        font=dict(size=14, color="#1e2533", family="Arial Black"),
+                    ),
+                    margin=dict(l=0, r=0, t=52, b=10),
+                )
+                _show_chart(_prob_fig, "yield_probability_map",
+                    extra_config={"scrollZoom": False, "modeBarButtonsToRemove": ["zoom", "pan", "select", "lasso2d", "resetGeo"]})
+
+                # Summary table below the map
+                with st.expander("View probability data table", expanded=False):
+                    _tbl = _prob_df[["state_alpha", "p_below", "p_above", "current_jsa", "trend_yield", "n_years"]].copy()
+                    _tbl.columns = ["State", "P(Below Trend) %", "P(Above Trend) %", "JSA Index", "Trend Yield (bu/ac)", "Yrs in Model"]
+                    _tbl = _tbl.sort_values("P(Below Trend) %", ascending=False).reset_index(drop=True)
+                    st.dataframe(_tbl, use_container_width=True, hide_index=True)
+        else:
+            # ── Conditions view (existing) ─────────────────────────────────────────
+            st.markdown(
+                f'<div class="sec-hdr">{condition} % — {selected_mkt} &nbsp;({week_label})</div>',
+                unsafe_allow_html=True,
+            )
+            _map_fig = build_map(map_result, sel_usda_yr, condition, label_metric)
+            _map_fig.add_annotation(
+                text=(
+                    f"<b>US {_map_cond_lbl}: {_map_nat_disp}{_map_unit}</b><br>"
+                    f"<span style='font-size:13px;color:#444'>"
+                    f"LW {_fmt_chg(_map_nat_kpis['wow'])}&nbsp;&nbsp;·&nbsp;&nbsp;"
+                    f"LY {_fmt_chg(_map_nat_kpis['yoy'])}&nbsp;&nbsp;·&nbsp;&nbsp;"
+                    f"Avg {_fmt_chg(_map_nat_kpis['vs_olympic'])}"
+                    f"</span>"
+                ),
+                xref="paper", yref="paper",
+                x=0.99, y=0.99,
+                xanchor="right", yanchor="top",
+                showarrow=False,
+                font=dict(size=17, color="#1a4a2e", family="Arial Black"),
+                bgcolor="white",
+                bordercolor="#d0d7de",
+                borderwidth=1,
+                borderpad=10,
+            )
+            _map_fig.update_layout(
+                title=dict(
+                    text=f"<b>JSA {commodity_label} Crop Conditions by State</b>",
+                    x=0.5, xanchor="center",
+                    font=dict(size=15, color="#1a4a2e", family="Arial Black"),
+                ),
+                margin=dict(l=0, r=0, t=52, b=10),
+            )
+            _show_chart(_map_fig, "conditions_map",
+                extra_config={"scrollZoom": False, "modeBarButtonsToRemove": ["zoom", "pan", "select", "lasso2d", "resetGeo"]})
 
     if cmp_usda_yr and not compare_result.empty and map_col2 is not None:
         cw_label = compare_week.strftime("%B %d, %Y") if pd.notna(compare_week) else ""

@@ -7,7 +7,9 @@ John Stewart & Associates
 Data source: U.S. EIA Open Data API v2 (https://api.eia.gov/v2)
 """
 
+import base64
 import os
+import re
 from datetime import date
 
 import numpy as np
@@ -62,6 +64,19 @@ PLANT_FUEL_COLORS = {
 }
 
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+
+
+@st.cache_data
+def _asset_uri(filename: str) -> str:
+    p = os.path.join(os.path.dirname(__file__), "assets", filename)
+    try:
+        with open(p, "rb") as f:
+            return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+    except OSError:
+        return ""
+
+
+WATERMARK = _asset_uri("jsa_50yr.png")
 
 # st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
@@ -123,6 +138,21 @@ st.markdown(f"""
       margin: 20px 0 6px 0;
   }}
   .note-text {{ color: {DM_MUTED}; font-size: 0.78rem; }}
+
+  /* JSA watermark on charts and snapshot tables */
+  [data-testid="stPlotlyChart"] {{ position: relative; }}
+  [data-testid="stPlotlyChart"]::before {{
+      content: ""; position: absolute; inset: 0;
+      background: url('{WATERMARK}') center 50% / 26% auto no-repeat;
+      opacity: 0.10; pointer-events: none; z-index: 0;
+  }}
+  [data-testid="stPlotlyChart"] .main-svg {{ position: relative; z-index: 1; }}
+  table[id^="snap_"] {{ position: relative; }}
+  table[id^="snap_"]::after {{
+      content: ""; position: absolute; inset: 0;
+      background: url('{WATERMARK}') center 50% / 22% auto no-repeat;
+      opacity: 0.07; pointer-events: none; z-index: 5;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -248,14 +278,110 @@ def section_header(title: str):
     st.markdown(f"<div class='section-header'>{title}</div>", unsafe_allow_html=True)
 
 
+# ── Chart/table snapshot toolbar (PNG download + clipboard copy) ─────────────
+# Client-side html2canvas screenshot of the actual rendered element — a true
+# on-screen snapshot rather than a server-rebuilt image. Each toolbar instance
+# is namespaced by snap_id (button/message ids) and wrapped in an IIFE so
+# multiple instances on one page don't collide.
+def _safe_filename(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|]+', " ", str(name)).strip() or "chart"
+
+
+def _snap_anchor(snap_id: str):
+    """Zero-height marker so a following Plotly chart can be found by the
+    snapshot tool (st.plotly_chart can't carry an id of its own)."""
+    st.markdown(f'<div id="{snap_id}" style="height:0"></div>', unsafe_allow_html=True)
+
+
+_SNAP_JS = """
+<div style="display:flex;gap:6px;align-items:center;margin:2px 0 14px 0">
+  <button id="dl__ID__" style="font:600 13px system-ui,sans-serif;color:#fff;
+    background:__ACCENT__;border:none;border-radius:6px;padding:6px 12px;
+    cursor:pointer">\U0001F4E5 PNG</button>
+  <button id="cp__ID__" style="font:600 13px system-ui,sans-serif;color:__ACCENT__;
+    background:transparent;border:1.5px solid __ACCENT__;border-radius:6px;padding:6px 12px;
+    cursor:pointer">\U0001F4CB Copy</button>
+  <span id="msg__ID__" style="font:12px system-ui,sans-serif;color:__MUTED__"></span>
+</div>
+<script>
+(function(){
+  const ANCHOR="__ID__", FN="__FN__";
+  function ensureH2C(){
+    if(window.html2canvas) return Promise.resolve();
+    if(window.__h2c) return window.__h2c;
+    window.__h2c=new Promise((res,rej)=>{
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+      s.onload=()=>res(); s.onerror=()=>rej(new Error("load failed"));
+      document.head.appendChild(s); setTimeout(()=>rej(new Error("timeout")),10000);
+    });
+    return window.__h2c;
+  }
+  // Resolve the element to shoot: the tagged wrapper itself if it holds
+  // content (tables), else the first Plotly chart that appears AFTER the
+  // anchor in document order (a chart can't carry an id of its own).
+  function target(){
+    const el=document.getElementById(ANCHOR); if(!el) return null;
+    if(el.querySelector("table,canvas,svg")) return el;
+    const charts=[...document.querySelectorAll('[data-testid="stPlotlyChart"]')];
+    for(const c of charts){
+      if(el.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) return c;
+    }
+    return charts[0]||el;
+  }
+  async function shoot(){
+    await ensureH2C();
+    const el=target(); if(!el) throw new Error("nothing to capture");
+    return await window.html2canvas(el,{scale:2,backgroundColor:"__BG__",logging:false,useCORS:true});
+  }
+  const msgEl=document.getElementById("msg__ID__");
+  const msg=t=>{ if(msgEl){ msgEl.textContent=t; if(t) setTimeout(()=>{msgEl.textContent="";},2500);} };
+  document.getElementById("dl__ID__").onclick=async()=>{
+    msg("…"); try{ const c=await shoot(); const a=document.createElement("a");
+      a.download=FN+".png"; a.href=c.toDataURL("image/png"); a.click(); msg("✓ saved"); }
+    catch(e){ msg("⚠ "+e.message); }
+  };
+  // Promise-based ClipboardItem so the async html2canvas work keeps the
+  // click's user-gesture (a plain await before clipboard.write drops it).
+  document.getElementById("cp__ID__").onclick=async()=>{
+    msg("…");
+    try{
+      await navigator.clipboard.write([new ClipboardItem({"image/png":(async()=>{
+        const c=await shoot();
+        return await new Promise(r=>c.toBlob(r,"image/png"));
+      })()})]);
+      msg("✓ copied");
+    }catch(e){ msg("⚠ "+(e.name||e.message)); }
+  };
+})();
+</script>
+"""
+
+
+def _snap_toolbar(snap_id: str, filename: str):
+    """📥 PNG + 📋 Copy that screenshot the actual on-screen element (styled
+    table or rendered chart) client-side via html2canvas. `snap_id` is a
+    wrapper element's id (tables) or a _snap_anchor placed just before a
+    Plotly chart."""
+    st.html(
+        _SNAP_JS.replace("__ID__", snap_id).replace("__FN__", _safe_filename(filename))
+                .replace("__ACCENT__", JSA_BLUE).replace("__MUTED__", DM_MUTED)
+                .replace("__BG__", DM_SURFACE),
+        unsafe_allow_javascript=True,
+    )
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.image(JSA_LOGO_WHITE, width=180)
     st.markdown("### EIA Energy Dashboard")
     section = st.radio("Section", ["Weekly EIA Report", "Natural Gas", "Ethanol & Biofuels"], index=0)
     st.markdown("---")
-    lookback = st.selectbox("Chart lookback", ["1 Year", "2 Years", "5 Years", "Max"], index=1)
-    lookback_years = {"1 Year": 1, "2 Years": 2, "5 Years": 5, "Max": None}[lookback]
+    LOOKBACK_OPTIONS = {
+        "Since Jan 2021": "2021-01-01",
+        "1 Year": None, "2 Years": None, "5 Years": None, "Max": None,
+    }
+    lookback = st.selectbox("Chart lookback", list(LOOKBACK_OPTIONS.keys()), index=0)
     st.markdown("---")
     st.markdown(
         f"<div class='note-text'>Source: U.S. Energy Information Administration<br>"
@@ -263,8 +389,9 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-start_date = None
-if lookback_years:
+start_date = LOOKBACK_OPTIONS[lookback]
+if start_date is None and lookback != "Max":
+    lookback_years = {"1 Year": 1, "2 Years": 2, "5 Years": 5}[lookback]
     start_date = (pd.Timestamp.today() - pd.DateOffset(years=lookback_years)).strftime("%Y-%m-%d")
 
 st.title("⚡ EIA Energy Dashboard")
@@ -453,7 +580,7 @@ if section == "Weekly EIA Report":
     # ── PADD breakdown table ─────────────────────────────────────────────────
     section_header("EIA Weekly Fuel Ethanol — PADD Breakdown")
 
-    def build_padd_block(title, padd_data, unit, decimals=0):
+    def build_padd_block(title, padd_data, unit, decimals=0, snap_id=""):
         rows_html = ""
         nat = padd_data.get("NUS")
         for code in PADD_CODES:
@@ -477,32 +604,36 @@ if section == "Weekly EIA Report":
                       f"<td style='padding:4px 10px;text-align:right'>This Week</td>"
                       f"<td style='padding:4px 10px;text-align:right'>Last Week</td>"
                       f"<td style='padding:4px 10px;text-align:right'>Change</td></tr>")
-        return (f"<table style='width:100%;border-collapse:collapse;background:{DM_SURFACE};"
+        return (f"<table id='{snap_id}' style='width:100%;border-collapse:collapse;background:{DM_SURFACE};"
                 f"border:1px solid {DM_BORDER};border-radius:6px;margin-bottom:6px'>"
                 f"{header_row}{rows_html}{total_html}</table>"
                 f"<div class='note-text' style='margin-bottom:16px'>{unit}</div>")
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown(build_padd_block("Ethanol Production", padd_wow(eth_prod_padd), "Thousand Barrels / Day"),
-                    unsafe_allow_html=True)
-        st.markdown(build_padd_block("Ethanol Blender Demand", padd_wow(eth_blend_padd), "Thousand Barrels / Day"),
-                    unsafe_allow_html=True)
+        st.markdown(build_padd_block("Ethanol Production", padd_wow(eth_prod_padd), "Thousand Barrels / Day",
+                                      snap_id="snap_padd_prod"), unsafe_allow_html=True)
+        _snap_toolbar("snap_padd_prod", "Ethanol Production by PADD")
+        st.markdown(build_padd_block("Ethanol Blender Demand", padd_wow(eth_blend_padd), "Thousand Barrels / Day",
+                                      snap_id="snap_padd_blend"), unsafe_allow_html=True)
+        _snap_toolbar("snap_padd_blend", "Ethanol Blender Demand by PADD")
     with col_b:
         imports_data = {k: v for area, v in padd_wow(eth_imports_padd).items()
                         for k, mv in PADD_MOVE_CODES.items() if area == mv}
         imports_data["NUS"] = padd_wow(eth_imports_padd).get("NUS-Z00")
-        st.markdown(build_padd_block("Ethanol Imports", imports_data, "Thousand Barrels / Day"),
-                    unsafe_allow_html=True)
+        st.markdown(build_padd_block("Ethanol Imports", imports_data, "Thousand Barrels / Day",
+                                      snap_id="snap_padd_imports"), unsafe_allow_html=True)
+        _snap_toolbar("snap_padd_imports", "Ethanol Imports by PADD")
         stock_padd_data = {k: (v[0] / 1000, v[1] / 1000, v[2] / 1000)
                            for k, v in padd_wow(eth_stock_padd).items()}
-        st.markdown(build_padd_block("Fuel Ethanol Stocks", stock_padd_data, "Million Barrels", decimals=1),
-                    unsafe_allow_html=True)
+        st.markdown(build_padd_block("Fuel Ethanol Stocks", stock_padd_data, "Million Barrels", decimals=1,
+                                      snap_id="snap_padd_stocks"), unsafe_allow_html=True)
+        _snap_toolbar("snap_padd_stocks", "Fuel Ethanol Stocks by PADD")
 
     # ── Seasonal charts ──────────────────────────────────────────────────────
     section_header("Seasonal Charts (Marketing Year, Sept–Aug)")
 
-    def seasonal_chart(df, title, yaxis_title):
+    def seasonal_chart(df, title, yaxis_title, snap_id):
         if df.empty:
             st.info(f"No data for {title}.")
             return
@@ -523,14 +654,18 @@ if section == "Weekly EIA Report":
             ))
         style_fig(fig, yaxis_title=yaxis_title)
         fig.update_xaxes(title="Marketing-Year Week")
+        _snap_anchor(snap_id)
         st.plotly_chart(fig, width='stretch')
         st.caption(title)
+        _snap_toolbar(snap_id, title)
 
     col_a, col_b = st.columns(2)
     with col_a:
-        seasonal_chart(eth_prod_nat, "Weekly Ethanol Plant Production", "Thousand bbl/day")
+        seasonal_chart(eth_prod_nat, "Weekly Ethanol Plant Production", "Thousand bbl/day",
+                       "snap_seasonal_prod")
     with col_b:
-        seasonal_chart(eth_stock_nat, "Weekly U.S. Ending Stocks of Fuel Ethanol", "Thousand bbl")
+        seasonal_chart(eth_stock_nat, "Weekly U.S. Ending Stocks of Fuel Ethanol", "Thousand bbl",
+                       "snap_seasonal_stock")
 
     # ── Refinery narrative + petroleum stocks ────────────────────────────────
     section_header("Refinery Operations")
@@ -592,10 +727,11 @@ if section == "Weekly EIA Report":
                       f"<td style='padding:4px 10px;text-align:right;color:{POS if d >= 0 else NEG}'>{d / 1000:+,.1f}</td>"
                       f"<td style='padding:4px 10px;text-align:right'>{pct5_html}</td></tr>")
     st.markdown(
-        f"<table style='width:100%;border-collapse:collapse;background:{DM_SURFACE};"
+        f"<table id='snap_petro_stocks' style='width:100%;border-collapse:collapse;background:{DM_SURFACE};"
         f"border:1px solid {DM_BORDER};border-radius:6px'>{rows_html}</table>",
         unsafe_allow_html=True,
     )
+    _snap_toolbar("snap_petro_stocks", "EIA Petroleum Stocks")
 
     petro_narrative_parts = []
     for label, df in [("crude oil", crude_stock), ("total motor gasoline", gasoline_stock),
@@ -668,7 +804,9 @@ elif section == "Natural Gas":
     if not henry_hub.empty:
         fig = line_fig(henry_hub, "period", "value", "Henry Hub Spot", COL_NATGAS,
                         yaxis_title="$/MMBtu")
+        _snap_anchor("snap_henry_hub")
         st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_henry_hub", "Henry Hub Natural Gas Spot Price")
     else:
         st.info("No Henry Hub price data returned.")
 
@@ -712,9 +850,11 @@ elif section == "Natural Gas":
                                       line=dict(color=COL_NATGAS, width=3)))
         style_fig(fig, yaxis_title="Bcf")
         fig.update_xaxes(tickformat="%b")
+        _snap_anchor("snap_storage")
         st.plotly_chart(fig, width='stretch')
         st.markdown("<div class='note-text'>Shaded band = min–max over the prior 5 full years, "
                     "aligned by day of year.</div>", unsafe_allow_html=True)
+        _snap_toolbar("snap_storage", f"Weekly Working Gas Storage — {region_pick}")
     else:
         st.info("No storage data returned.")
 
@@ -731,7 +871,9 @@ elif section == "Natural Gas":
                     fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / 1000, mode="lines",
                                               name=label, line=dict(width=2, color=color)))
             style_fig(fig, yaxis_title="Bcf / month")
+            _snap_anchor("snap_ng_prod")
             st.plotly_chart(fig, width='stretch')
+            _snap_toolbar("snap_ng_prod", "U.S. Natural Gas Production")
         else:
             st.info("No production data returned.")
     with col_b:
@@ -745,8 +887,10 @@ elif section == "Natural Gas":
             style_fig(fig, yaxis_title="", legend=False)
             fig.update_layout(height=420, xaxis_title="Bcf")
             fig.update_yaxes(autorange="reversed")
+            _snap_anchor("snap_ng_top_states")
             st.plotly_chart(fig, width='stretch')
             st.caption(f"Top gross withdrawal areas, {latest_month.strftime('%b %Y')}")
+            _snap_toolbar("snap_ng_top_states", "Top Natural Gas Producing Areas")
 
     # ── Consumption ──────────────────────────────────────────────────────────
     section_header("U.S. Natural Gas Consumption by End Use")
@@ -761,7 +905,9 @@ elif section == "Natural Gas":
                 fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / 1000, mode="lines",
                                           stackgroup="one", name=label))
         style_fig(fig, yaxis_title="Bcf / month")
+        _snap_anchor("snap_ng_cons")
         st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_ng_cons", "U.S. Natural Gas Consumption by End Use")
     else:
         st.info("No consumption data returned.")
 
@@ -777,7 +923,9 @@ elif section == "Natural Gas":
                 fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"], mode="lines",
                                           name=label, line=dict(width=2)))
         style_fig(fig, yaxis_title="$/Mcf")
+        _snap_anchor("snap_ng_price")
         st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_ng_price", "U.S. Natural Gas Prices by Sector")
     else:
         st.info("No price data returned.")
 
@@ -789,9 +937,11 @@ else:
                           {"duoarea": "NUS", "product": "EPOOXE",
                            "process": ["YOP", "SAE", "YIR"]}, start=start_date)
     eth_padd = eia_get("petroleum/pnp/wprode", {"product": "EPOOXE"}, start=start_date)
-    capbio = eia_get("petroleum/pnp/capbio")
-    feedstocks = eia_get("petroleum/pnp/feedbiofuel")
-    plant_fuel = eia_get("petroleum/pnp/bioplfuel")
+    eth_exports = eia_get("petroleum/move/wkly", {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"},
+                           start=start_date)
+    capbio = eia_get("petroleum/pnp/capbio", start=start_date)
+    feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
+    plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
 
     prod = eth_weekly[eth_weekly["process"] == "YOP"] if not eth_weekly.empty else pd.DataFrame()
     stocks = eth_weekly[eth_weekly["process"] == "SAE"] if not eth_weekly.empty else pd.DataFrame()
@@ -801,7 +951,7 @@ else:
 
     ng_at_biofuel = plant_fuel[plant_fuel["process"] == "819NG0"] if not plant_fuel.empty else pd.DataFrame()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         v, d, pct = latest_and_delta(prod)
         st.metric("Ethanol Production (kb/d)", fmt_num(v, 0),
@@ -811,33 +961,51 @@ else:
         st.metric("Ethanol Stocks (kbbl)", fmt_num(v, 0),
                    f"{d:+,.0f} kbbl WoW" if d is not None else None)
     with c3:
+        v, d, pct = latest_and_delta(eth_exports)
+        st.metric("Ethanol Exports (kb/d)", fmt_num(v, 0),
+                   f"{d:+,.0f} kb/d WoW" if d is not None else None)
+    with c4:
         st.metric("Ethanol + Biodiesel + RD Capacity (MMgal/yr)", fmt_num(total_cap, 0),
                    cap_latest_month.strftime("%b %Y") if cap_latest_month is not None else None)
-    with c4:
+    with c5:
         v, d, pct = latest_and_delta(ng_at_biofuel)
         v_bcf = v / 1000 if v is not None else None
         st.metric("Nat Gas Used at Biofuel Plants (Bcf/yr)", fmt_num(v_bcf, 0),
                    f"{pct:+.1f}% YoY" if pct is not None else None)
 
-    # ── Weekly ethanol production & stocks ──────────────────────────────────
-    section_header("Weekly U.S. Fuel Ethanol Production & Stocks")
-    col_a, col_b = st.columns(2)
+    # ── Weekly ethanol production, stocks & exports ──────────────────────────
+    section_header("Weekly U.S. Fuel Ethanol Production, Stocks & Exports")
+    col_a, col_b, col_c = st.columns(3)
     with col_a:
         if not prod.empty:
             fig = line_fig(prod, "period", "value", "Production", COL_ETHANOL,
                             yaxis_title="Thousand bbl/day")
+            _snap_anchor("snap_eth_prod")
             st.plotly_chart(fig, width='stretch')
             st.caption("Oxygenate plant production, national")
+            _snap_toolbar("snap_eth_prod", "Weekly U.S. Fuel Ethanol Production")
         else:
             st.info("No weekly ethanol production data returned.")
     with col_b:
         if not stocks.empty:
             fig = line_fig(stocks, "period", "value", "Ending Stocks", COL_REDSL,
                             yaxis_title="Thousand bbl")
+            _snap_anchor("snap_eth_stocks")
             st.plotly_chart(fig, width='stretch')
             st.caption("Ending stocks, national")
+            _snap_toolbar("snap_eth_stocks", "Weekly U.S. Fuel Ethanol Stocks")
         else:
             st.info("No weekly ethanol stocks data returned.")
+    with col_c:
+        if not eth_exports.empty:
+            fig = line_fig(eth_exports, "period", "value", "Exports", COL_BIODSL,
+                            yaxis_title="Thousand bbl/day")
+            _snap_anchor("snap_eth_exports")
+            st.plotly_chart(fig, width='stretch')
+            st.caption("U.S. exports, national")
+            _snap_toolbar("snap_eth_exports", "Weekly U.S. Fuel Ethanol Exports")
+        else:
+            st.info("No weekly ethanol export data returned.")
 
     # ── Ethanol production by PADD ──────────────────────────────────────────
     section_header("Weekly Ethanol Production by PADD")
@@ -851,9 +1019,11 @@ else:
                 fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"], mode="lines",
                                           stackgroup="one", name=label))
         style_fig(fig, yaxis_title="Thousand bbl/day")
+        _snap_anchor("snap_eth_padd")
         st.plotly_chart(fig, width='stretch')
         st.markdown("<div class='note-text'>PADD 2 (Midwest) is the historical core of U.S. "
                     "ethanol production capacity.</div>", unsafe_allow_html=True)
+        _snap_toolbar("snap_eth_padd", "Weekly Ethanol Production by PADD")
     else:
         st.info("No PADD-level ethanol data returned.")
 
@@ -865,7 +1035,9 @@ else:
         if not eth_cap.empty:
             fig = line_fig(eth_cap, "period", "value", "Fuel Ethanol Capacity", COL_ETHANOL,
                             yaxis_title="Million gallons/year")
+            _snap_anchor("snap_cap_ethanol")
             st.plotly_chart(fig, width='stretch')
+            _snap_toolbar("snap_cap_ethanol", "Fuel Ethanol Production Capacity")
         else:
             st.info("No ethanol capacity data returned.")
     with col_b:
@@ -879,7 +1051,9 @@ else:
                     fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"], mode="lines",
                                               stackgroup="one", name=label, line=dict(color=color)))
             style_fig(fig, yaxis_title="Million gallons/year")
+            _snap_anchor("snap_cap_biodiesel")
             st.plotly_chart(fig, width='stretch')
+            _snap_toolbar("snap_cap_biodiesel", "Biodiesel & Renewable Diesel Production Capacity")
         else:
             st.info("No biodiesel/renewable diesel capacity data returned.")
 
@@ -928,23 +1102,43 @@ else:
                 fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / 1000, mode="lines",
                                           stackgroup="one", name=feed, line=dict(color=color)))
         style_fig(fig, yaxis_title="Billion lbs / month")
+        _snap_anchor("snap_feed_grains")
         st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_feed_grains", "Corn & Grain Sorghum Inputs to Ethanol Production")
 
         st.markdown("**Feedstocks for Biodiesel & Renewable Diesel Production**")
         bd = fs[fs["family"] != "Grains (Ethanol)"]
+
+        FEED8_MAP = {
+            "Soybean Oil": "Soybean Oil", "Corn Oil": "Corn Oil", "Canola Oil": "Canola Oil",
+            "Yellow Grease": "Yellow Grease", "Tallow": "Tallow", "White Grease": "White Grease",
+            "Poultry Fat": "Poultry",
+        }
+        FEED8_ORDER = ["Soybean Oil", "Corn Oil", "Canola Oil", "Yellow Grease",
+                       "Tallow", "White Grease", "Poultry", "Other"]
+        FEED8_COLORS = {
+            "Soybean Oil": "#b5651d", "Corn Oil": "#2f4f2f", "Canola Oil": "#deb887",
+            "Yellow Grease": "#6a5acd", "Tallow": "#c0392b", "White Grease": "#9acd32",
+            "Poultry": "#4169e1", "Other": "#87ceeb",
+        }
+        bd = bd.copy()
+        bd["bucket8"] = bd["feedstock"].map(FEED8_MAP).fillna("Other")
+
         col_a, col_b = st.columns([3, 2])
         with col_a:
-            by_family = bd.groupby(["period", "family"])["value"].sum().reset_index()
+            by_bucket = bd.groupby(["period", "bucket8"])["value"].sum().reset_index()
             fig = go.Figure()
-            for family in ["Vegetable Oils", "Animal Fats & Greases", "Other Feedstocks"]:
-                sub = by_family[by_family["family"] == family]
+            for bucket in FEED8_ORDER:
+                sub = by_bucket[by_bucket["bucket8"] == bucket]
                 if not sub.empty:
                     fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"], mode="lines",
-                                              stackgroup="one", name=family,
-                                              line=dict(color=FAMILY_COLORS[family])))
+                                              stackgroup="one", name=bucket,
+                                              line=dict(color=FEED8_COLORS[bucket])))
             style_fig(fig, yaxis_title="Million lbs / month")
+            _snap_anchor("snap_feed_demand")
             st.plotly_chart(fig, width='stretch')
-            st.caption("Grouped by feedstock family, monthly")
+            st.caption("Feedstock demand for biofuel production, monthly")
+            _snap_toolbar("snap_feed_demand", "Feedstock Demand for Biofuel Production")
         with col_b:
             snap = bd[bd["period"] == latest_m].groupby("feedstock")["value"].sum().reset_index()
             snap = snap.sort_values("value", ascending=True).tail(10)
@@ -952,8 +1146,68 @@ else:
                                     orientation="h", marker_color=COL_BIODSL))
             style_fig(fig, legend=False)
             fig.update_layout(height=420, xaxis_title="Million lbs")
+            _snap_anchor("snap_feed_top10")
             st.plotly_chart(fig, width='stretch')
             st.caption(f"Top biodiesel/RD feedstocks, {latest_m.strftime('%b %Y')}")
+            _snap_toolbar("snap_feed_top10", f"Top Biodiesel-RD Feedstocks {latest_m.strftime('%b %Y')}")
+
+        # ── Market share (% of the 8-bucket total) ────────────────────────────
+        st.markdown("**Feedstocks Demand Market Share for Biofuel Production**")
+        fig = go.Figure()
+        for bucket in FEED8_ORDER:
+            sub = by_bucket[by_bucket["bucket8"] == bucket]
+            if not sub.empty:
+                fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"], mode="lines",
+                                          stackgroup="one", groupnorm="percent", name=bucket,
+                                          line=dict(color=FEED8_COLORS[bucket])))
+        style_fig(fig, yaxis_title="Share of feedstock demand (%)")
+        _snap_anchor("snap_feed_share")
+        st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_feed_share", "Feedstocks Demand Market Share for Biofuel Production")
+
+        # ── Soybean Oil vs. Used Cooking Oil share trend ──────────────────────
+        st.markdown("**Biofuel Feedstock Demand Market Share Trends**")
+        st.markdown("<div class='note-text'>\"Used Cooking Oil\" here = Yellow Grease + White "
+                    "Grease. The stacked area shows each feedstock's share of the Soybean Oil / "
+                    "Corn Oil / Canola Oil / UCO subgroup only (left axis); the SBO/UCO share "
+                    "lines instead show each as a share of <em>all</em> biodiesel-RD feedstock "
+                    "demand, including tallow, poultry fat, and other (right axis) — a "
+                    "best-effort match to your sheet pending the source file.</div>",
+                    unsafe_allow_html=True)
+        core = bd[bd["bucket8"].isin(["Soybean Oil", "Corn Oil", "Canola Oil",
+                                       "Yellow Grease", "White Grease"])].copy()
+        core["core_bucket"] = core["bucket8"].replace(
+            {"Yellow Grease": "Used Cooking Oil", "White Grease": "Used Cooking Oil"})
+        core_by_bucket = core.groupby(["period", "core_bucket"])["value"].sum().reset_index()
+
+        full_totals = by_bucket.groupby("period")["value"].sum()
+        sbo_full = by_bucket[by_bucket["bucket8"] == "Soybean Oil"].set_index("period")["value"]
+        uco_full = by_bucket[by_bucket["bucket8"].isin(["Yellow Grease", "White Grease"])] \
+            .groupby("period")["value"].sum()
+        sbo_share_full = (sbo_full / full_totals * 100).dropna()
+        uco_share_full = (uco_full / full_totals * 100).dropna()
+
+        CORE_COLORS = {"Soybean Oil": "#b0d8e8", "Corn Oil": "#f0b429", "Canola Oil": "#8b4513",
+                       "Used Cooking Oil": "#5b8c3a"}
+        fig = go.Figure()
+        for bucket, color in CORE_COLORS.items():
+            sub = core_by_bucket[core_by_bucket["core_bucket"] == bucket]
+            if not sub.empty:
+                fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"], mode="lines",
+                                          stackgroup="one", groupnorm="percent", name=bucket,
+                                          line=dict(color=color), yaxis="y"))
+        fig.add_trace(go.Scatter(x=sbo_share_full.index, y=sbo_share_full.values, mode="lines",
+                                  name="SBO Share (of total)", line=dict(color=DM_TEXT, width=2, dash="dash"),
+                                  yaxis="y2"))
+        fig.add_trace(go.Scatter(x=uco_share_full.index, y=uco_share_full.values, mode="lines",
+                                  name="UCO Share (of total)", line=dict(color=DM_TEXT, width=2, dash="dot"),
+                                  yaxis="y2"))
+        style_fig(fig, yaxis_title="Share of core feedstocks (%)")
+        fig.update_layout(yaxis2=dict(title="Share of total feedstocks (%)", overlaying="y",
+                                       side="right", gridcolor=DM_BORDER, range=[0, 60]))
+        _snap_anchor("snap_feed_trends")
+        st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_feed_trends", "Biofuel Feedstock Demand Market Share Trends")
 
         with st.expander("Full feedstock breakdown (latest month)"):
             tbl = fs[fs["period"] == latest_m][["feedstock", "family", "value"]].sort_values(
@@ -981,7 +1235,9 @@ else:
                                       marker_color=color))
         fig.update_layout(barmode="stack")
         style_fig(fig, yaxis_title="Bcf-equivalent / year")
+        _snap_anchor("snap_plant_fuel")
         st.plotly_chart(fig, width='stretch')
+        _snap_toolbar("snap_plant_fuel", "Fuel Consumed at Biofuels Plants")
         st.markdown("<div class='note-text'>Annual survey data; values are reported in each "
                     "fuel's native unit and shown here on a common index. Natural gas is the "
                     "dominant process fuel for U.S. biofuels production.</div>",

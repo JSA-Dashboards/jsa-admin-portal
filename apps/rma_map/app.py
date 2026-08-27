@@ -1,4 +1,5 @@
 import sys
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -16,7 +17,7 @@ from shapely.geometry import shape
 
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE))
-# st.set_page_config removed — the JSA Home Page shell (Home.py) makes the
+# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run. (main() still runs
 # unmodified below via Streamlit's __name__=="__main__" page-exec semantics.)
 _CACHE_VERSION = "v21"  # bump to invalidate all @st.cache_data on deploy
@@ -31,6 +32,14 @@ LOGO_FULL  = HERE / "assets" / "logo-full.png"
 # ── NASS API ───────────────────────────────────────────────────────────────────
 NASS_API_KEY  = "9A6D1EB8-4D94-3221-BA0C-ADD4533EA0C1"
 NASS_BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+
+# ── EIA API ────────────────────────────────────────────────────────────────────
+try:
+    EIA_API_KEY = st.secrets.get("EIA_API_KEY", "")
+except Exception:
+    EIA_API_KEY = ""
+EIA_API_KEY   = EIA_API_KEY or os.environ.get("EIA_API_KEY", "")
+EIA_BASE_URL  = "https://api.eia.gov/v2/"
 NASS_YEARS             = list(range(2026, 2014, -1))   # 2026 → 2015
 _NASS_BENCHMARK_YEAR   = 2023   # most-complete county year — used for % reporting KPI
 
@@ -932,6 +941,89 @@ def load_nass_state(crop: str, year: int, stat_type: str,
     return df[["State", "Value"]].reset_index(drop=True)
 
 
+@st.cache_data(show_spinner=False)
+def _load_wheat_class_prod(year: int, class_desc: str, cache_ver: str) -> float:
+    """Return national total wheat production (bushels) for a specific class_desc.
+    Used to split winter vs. spring/durum for the June-based marketing year."""
+    params = {
+        "key":                   NASS_API_KEY,
+        "source_desc":           "SURVEY",
+        "sector_desc":           "CROPS",
+        "agg_level_desc":        "STATE",
+        "domain_desc":           "TOTAL",
+        "reference_period_desc": "YEAR",
+        "year":                  str(year),
+        "commodity_desc":        "WHEAT",
+        "class_desc":            class_desc,
+        "prodn_practice_desc":   "ALL PRODUCTION PRACTICES",
+        "statisticcat_desc":     "PRODUCTION",
+        "unit_desc":             "BU",
+        "format":                "JSON",
+    }
+    try:
+        with urllib.request.urlopen(
+            NASS_BASE_URL + "?" + urllib.parse.urlencode(params), timeout=45
+        ) as r:
+            records = json.load(r).get("data", [])
+    except Exception:
+        return 0.0
+    total = 0.0
+    for rec in records:
+        try:
+            v = float(str(rec.get("Value", "0")).replace(",", ""))
+            if v > 0:
+                total += v
+        except (ValueError, TypeError):
+            pass
+    return total
+
+
+@st.cache_data(show_spinner=False)
+def _load_yr_jun(crop: str, year: int, cache_ver: str) -> float:
+    """Return national Jun 1 stocks total (bushels) for a crop-year. 0.0 if unavailable."""
+    df = load_grain_stocks(crop, year, "FIRST OF JUN", cache_ver)
+    return float(df["Total"].sum()) if not df.empty else 0.0
+
+
+# FAS PSD commodity codes and lbs-per-bushel for WASDE ending-stocks lookup
+_PSD_BASE = "https://apps.fas.usda.gov/psdonline/api"
+_PSD_CROP = {
+    "Corn":     ("0440000", 56),
+    "Soybeans": ("2222000", 60),
+    "Wheat":    ("0410000", 60),
+    "Sorghum":  ("0459100", 56),
+}
+_PSD_ENDING_STOCKS_ID = 176
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_wasde_ending_stocks(crop: str, market_year: int, cache_ver: str) -> float:
+    """Return US WASDE ending stocks (bushels) for a crop's marketing year.
+    Uses the USDA FAS PSD OpenData API (no key required); attribute 176 = Ending Stocks.
+    Returns 0.0 if crop not mapped or request fails."""
+    if crop not in _PSD_CROP:
+        return 0.0
+    code, lbs_per_bu = _PSD_CROP[crop]
+    try:
+        params = {"commodityCode": code, "countryCode": "0000US"}
+        r = urllib.request.urlopen(
+            _PSD_BASE + "/data/get?" + urllib.parse.urlencode(params), timeout=30
+        )
+        rows = json.load(r)
+    except Exception:
+        return 0.0
+    for row in rows:
+        if (row.get("marketYear") == market_year and
+                row.get("attributeId") == _PSD_ENDING_STOCKS_ID):
+            try:
+                val_1000mt = float(row["value"])
+                # 1000 MT × 1000 kg/MT × 2.20462 lb/kg ÷ lbs_per_bu = bushels
+                return val_1000mt * 1000 * 2204.62 / lbs_per_bu
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 @st.cache_data
 def load_nass_county(crop: str, year: int = 2025,
                      cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
@@ -1575,7 +1667,7 @@ def build_nass_district_fig(dist_view_df: pd.DataFrame,
         geo=dict(showlakes=False),
     )
     fig.update_layout(**_layout)
-    _add_logo(fig, logo_50yr, size=0.15, opacity=1.0, x=0.99, y=0.03, yanchor="bottom")
+    _add_logo(fig, logo_50yr)
     return fig
 
 
@@ -2174,7 +2266,7 @@ def load_aquaculture_nass(species_key: str, year: int,
                           agg_level: str = "STATE",
                           state_alpha: str = "",
                           cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
-    """Fetch NASS Census of Aquaculture sales data by state."""
+    """Fetch NASS Census of Aquaculture sales data by state (dollars — weight not available via API)."""
     params: dict = {
         "key":               NASS_API_KEY,
         "source_desc":       "CENSUS",
@@ -2549,11 +2641,11 @@ def load_logo(path):
         return "data:image/png;base64," + base64.b64encode(f.read()).decode()
 
 
-def _add_logo(fig, logo_src, size=0.13, opacity=0.92, x=0.99, y=0.01,
-              yanchor="bottom", layer="above"):
+def _add_logo(fig, logo_src, size=0.25, opacity=0.12, x=0.5, y=0.5,
+              yanchor="middle", layer="above"):
     fig.add_layout_image(
         source=logo_src, xref="paper", yref="paper",
-        x=x, y=y, xanchor="right", yanchor=yanchor,
+        x=x, y=y, xanchor="center", yanchor=yanchor,
         sizex=size, sizey=size, sizing="contain",
         opacity=opacity, layer=layer,
     )
@@ -2647,7 +2739,7 @@ def build_state_fig(agg, metric, crop_label, practice, logo_50yr):
             textfont=dict(color="#374151", size=11, family="Arial Black"),
             showlegend=False, hoverinfo="skip",
         ))
-    _add_logo(fig, logo_50yr, size=0.30, opacity=1.0)
+    _add_logo(fig, logo_50yr)
     return fig
 
 
@@ -2704,7 +2796,7 @@ def build_county_fig(agg, geo, fips_lk, centroids, state, metric, crop_label, pr
                     bgcolor=DARK, landcolor=LAND)
     fig.update_layout(**_base_layout(title_text),
                       height=_state_map_height(sfips, geo))
-    _add_logo(fig, logo_50yr, size=0.15, opacity=1.0, x=0.99, y=0.03, yanchor="bottom")
+    _add_logo(fig, logo_50yr)
     _place_labels(fig, df["fips"].tolist(), df[col].tolist(), centroids, metric)
     return fig
 
@@ -2797,7 +2889,7 @@ def build_nass_state_fig(state_vdf, crop, year, metric, change_view, logo_50yr):
             textfont=dict(color="#374151", size=11, family="Arial Black"),
             showlegend=False, hoverinfo="skip",
         ))
-    _add_logo(fig, logo_50yr, size=0.30, opacity=1.0)
+    _add_logo(fig, logo_50yr)
     return fig
 
 
@@ -2905,7 +2997,7 @@ def build_nass_county_fig(county_vdf, geo, state, crop, year, metric, change_vie
     fig.update_geos(fitbounds="locations", visible=False, bgcolor=DARK, landcolor=LAND)
     fig.update_layout(**_base_layout(title_text),
                       height=_state_map_height(sfips, geo))
-    _add_logo(fig, logo_50yr, size=0.15, opacity=1.0, x=0.99, y=0.03, yanchor="bottom")
+    _add_logo(fig, logo_50yr)
     _place_labels(fig, state_df["fips"].tolist(), state_df["Value"].tolist(),
                   centroids, cfg["label_fn"])
     return fig
@@ -2995,7 +3087,7 @@ def build_nass_county_fig_with_est(completed_df: pd.DataFrame, geo, state: str,
     fig.update_geos(fitbounds="locations", visible=False, bgcolor=DARK, landcolor=LAND)
     fig.update_layout(**_base_layout(title_text),
                       height=_state_map_height(sfips, geo))
-    _add_logo(fig, logo_50yr, size=0.15, opacity=1.0, x=0.99, y=0.03, yanchor="bottom")
+    _add_logo(fig, logo_50yr)
 
     # Production labels for reported counties only (same as existing county fig)
     rep_fips = [f for f in all_fips if f in fips_val and not fips_est.get(f, False)]
@@ -3535,22 +3627,8 @@ def _lv_auto_scale(mx: float, base_unit: str) -> tuple:
 _st_plotly_chart = st.plotly_chart  # saved before _chart shadows the call site
 
 
-def _add_wm(fig: "go.Figure") -> "go.Figure":
-    """Add a subtle JSA watermark annotation to a Plotly figure."""
-    fig.add_annotation(
-        text="JSA",
-        xref="paper", yref="paper",
-        x=0.5, y=0.5,
-        showarrow=False,
-        font=dict(size=80, color="rgba(66,82,72,0.05)", family="Arial Black, Arial"),
-        textangle=-30,
-    )
-    return fig
-
-
 def _chart(fig, **kw) -> None:
-    """Wrapper around st.plotly_chart that applies the JSA watermark."""
-    _st_plotly_chart(_add_wm(fig), **kw)
+    _st_plotly_chart(fig, **kw)
 
 
 # ── App ────────────────────────────────────────────────────────────────────────
@@ -3687,11 +3765,12 @@ def main():
         unsafe_allow_html=True,
     )
 
-    tab_nass, tab_rma, tab_stocks, tab_acreage, tab_livestock, tab_aqua, tab_proc, tab_wcmd, tab_storage_cmp, tab_about = st.tabs([
+    tab_nass, tab_rma, tab_stocks, tab_acreage, tab_livestock, tab_aqua, tab_proc, tab_wcmd, tab_storage_cmp, tab_eia, tab_about = st.tabs([
         "🌾  NASS Production", "📋  RMA",
         "📦  Grain Stocks", "🌱  Acreage Summary", "🐄  Livestock",
         "🐟  Aquaculture", "🏭  Processing",
         "🏦  Grain Warehouses", "⚖️  Storage vs. Production",
+        "🔋  Biofuels (EIA)",
         "📖  About the Data",
     ])
 
@@ -5204,7 +5283,7 @@ def main():
                     textfont=dict(color="#374151", size=10, family="Arial Black"),
                     showlegend=False, hoverinfo="skip", geo="geo",
                 ))
-            _add_logo(stk_fig, logo_50yr, size=0.30, opacity=1.0)
+            _add_logo(stk_fig, logo_50yr)
             _chart(stk_fig, use_container_width=True, key="stk_map",
                             config={"scrollZoom": False, "displayModeBar": False,
                                     "doubleClick": False})
@@ -5282,6 +5361,7 @@ def main():
                     title=f"US {stk_crop} {stk_view} — {stk_period_lbl}",
                     y_label=_sl,
                 )
+            _add_logo(_chart_fig, logo_50yr)
             _chart(_chart_fig, use_container_width=True, key="stk_chart",
                             config={"displayModeBar": False})
 
@@ -5342,6 +5422,310 @@ def main():
                 "Total Supply = Sep 1 beginning stocks + crop year production. "
                 "Source: USDA NASS Grain Stocks Survey and Crop Production (state level only)."
             )
+
+            # ── Disappearance (Sep 1 beg stocks + production − Sep 1 end stocks) ──
+            st.markdown(f"<hr style='border-color:{BORDER};margin:6px 0'>",
+                        unsafe_allow_html=True)
+            st.markdown(
+                f"<p style='color:{MUTED};font-size:0.82rem;font-weight:600;"
+                f"margin:0 0 4px 0;letter-spacing:0.04em;'>"
+                f"📉 DISAPPEARANCE — {stk_crop} | Marketing Year (Sep 1 → Sep 1)</p>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"<p style='color:{MUTED};font-size:0.79rem;margin:0 0 10px;'>"
+                "Disappearance = Sep 1 Beginning Stocks + Production − Sep 1 Ending Stocks. "
+                "Represents total domestic use + exports consumed from the marketing year's supply.</p>",
+                unsafe_allow_html=True,
+            )
+
+            _is_wheat = (stk_crop == "Wheat")
+
+            # Wheat uses June 1 marketing year with winter/spring production split.
+            # Other crops use Sep 1 marketing year with total production.
+            # 2026 is included: Sep 1 2026 not yet published, so it is estimated
+            # from Jun 1 2026 stocks using avg historical seasonal draw-down.
+            _disapp_years = sorted([y for y in NASS_YEARS if y >= 2015])
+
+            _disapp_rows = []
+            for _dy in _disapp_years:
+                if _is_wheat:
+                    _jun_dy  = load_grain_stocks("Wheat", _dy,     "FIRST OF JUN", _CACHE_VERSION)
+                    _sep_dy  = load_grain_stocks("Wheat", _dy,     "FIRST OF SEP", _CACHE_VERSION)
+                    _jun_dy1 = load_grain_stocks("Wheat", _dy + 1, "FIRST OF JUN", _CACHE_VERSION)
+                    _beg_bu = float(_jun_dy["Total"].sum())  if not _jun_dy.empty  else None
+                    _sep_bu = float(_sep_dy["Total"].sum())  if not _sep_dy.empty  else None
+                    _end_bu = float(_jun_dy1["Total"].sum()) if not _jun_dy1.empty else None
+                    _winter_bu = _load_wheat_class_prod(_dy, "WINTER",               _CACHE_VERSION)
+                    _spring_bu = (_load_wheat_class_prod(_dy, "SPRING, (EXCL DURUM)", _CACHE_VERSION) +
+                                  _load_wheat_class_prod(_dy, "SPRING, DURUM",        _CACHE_VERSION))
+                    _total_prod = _winter_bu + _spring_bu
+                    if not _beg_bu:
+                        continue
+                    _junaug_supply = _beg_bu + _winter_bu
+                    _sep_is_est = False
+                    if not _sep_bu:
+                        # Sep 1 not yet published — estimate using avg historical Jun-Aug draw-down
+                        _hist_jd = [r["junaug_disapp"] for r in _disapp_rows
+                                    if r.get("junaug_disapp") and not r.get("is_est")]
+                        if _hist_jd:
+                            _est_jd  = sum(_hist_jd) / len(_hist_jd)
+                            _sep_bu  = max(0, _junaug_supply - _est_jd)
+                            _sep_is_est = True
+                    _junaug_disapp = (_junaug_supply - _sep_bu) if _sep_bu else None
+                    # For ending stocks (Jun 1 next year), try WASDE if NASS not yet published
+                    _end_is_est = False
+                    if not _end_bu:
+                        _wasde_end = load_wasde_ending_stocks("Wheat", _dy, _CACHE_VERSION)
+                        if _wasde_end:
+                            _end_bu     = _wasde_end
+                            _end_is_est = "W"
+                    _annual_disapp = (_beg_bu + _total_prod - _end_bu) if _end_bu else None
+                    _disapp_rows.append({
+                        "year":          _dy,
+                        "begin_bu":      _beg_bu,
+                        "winter_bu":     _winter_bu,
+                        "spring_bu":     _spring_bu,
+                        "prod_bu":       _total_prod,
+                        "junaug_supply": _junaug_supply,
+                        "sep_bu":        _sep_bu,
+                        "end_bu":        _end_bu,
+                        "junaug_disapp": _junaug_disapp,
+                        "disapp_bu":     _annual_disapp,
+                        "is_est":        _sep_is_est or _end_is_est,
+                        "sep_is_est":    _sep_is_est,
+                        "end_is_est":    _end_is_est,
+                    })
+                else:
+                    _sep_dy  = load_grain_stocks(stk_crop, _dy,     "FIRST OF SEP", _CACHE_VERSION)
+                    _sep_dy1 = load_grain_stocks(stk_crop, _dy + 1, "FIRST OF SEP", _CACHE_VERSION)
+                    _prod_dy = _load_state_for_stat(stk_crop, _dy, "production", _CACHE_VERSION)
+                    _begin_bu = float(_sep_dy["Total"].sum())  if not _sep_dy.empty  else None
+                    _end_bu   = float(_sep_dy1["Total"].sum()) if not _sep_dy1.empty else None
+                    _prod_bu  = float(_prod_dy["Value"].sum()) if not _prod_dy.empty else None
+                    if not _begin_bu or not _prod_bu:
+                        continue
+                    if _end_bu:
+                        _disapp_rows.append({
+                            "year":     _dy,
+                            "begin_bu": _begin_bu,
+                            "prod_bu":  _prod_bu,
+                            "end_bu":   _end_bu,
+                            "disapp_bu": _begin_bu + _prod_bu - _end_bu,
+                            "is_est":   False,
+                        })
+                    else:
+                        # Sep 1 end stocks not yet published.
+                        # Try WASDE (FAS PSD) ending stocks for this marketing year first.
+                        _wasde_end = load_wasde_ending_stocks(stk_crop, _dy, _CACHE_VERSION)
+                        if _wasde_end:
+                            _disapp_rows.append({
+                                "year":     _dy,
+                                "begin_bu": _begin_bu,
+                                "prod_bu":  _prod_bu,
+                                "end_bu":   _wasde_end,
+                                "disapp_bu": _begin_bu + _prod_bu - _wasde_end,
+                                "is_est":   "W",  # W = WASDE-sourced
+                            })
+                        else:
+                            # Fall back: Jun 1 quarterly stocks × avg historical Sep/Jun ratio
+                            _jun_cur = load_grain_stocks(stk_crop, _dy + 1, "FIRST OF JUN", _CACHE_VERSION)
+                            _jun_bu  = float(_jun_cur["Total"].sum()) if not _jun_cur.empty else None
+                            if not _jun_bu:
+                                continue
+                            _hist_ratios = [
+                                r["end_bu"] / _load_yr_jun(stk_crop, r["year"] + 1, _CACHE_VERSION)
+                                for r in _disapp_rows
+                                if r.get("end_bu") and not r.get("is_est")
+                                and _load_yr_jun(stk_crop, r["year"] + 1, _CACHE_VERSION)
+                            ]
+                            _sep_ratio = (sum(_hist_ratios) / len(_hist_ratios)) if _hist_ratios else 1.0
+                            _est_end   = _jun_bu * _sep_ratio
+                            _disapp_rows.append({
+                                "year":     _dy,
+                                "begin_bu": _begin_bu,
+                                "prod_bu":  _prod_bu,
+                                "end_bu":   _est_end,
+                                "disapp_bu": _begin_bu + _prod_bu - _est_end,
+                                "is_est":   True,
+                            })
+
+            _plot_rows = ([r for r in _disapp_rows if r.get("disapp_bu") is not None] if not _is_wheat
+                          else [r for r in _disapp_rows if r["begin_bu"]])
+
+            if _plot_rows:
+                _dd = pd.DataFrame(_plot_rows)
+
+                # For wheat: always use junaug_disapp for bars (always computed, even for
+                # the current year) so 2026 never drops out. Show full-year disapp as a
+                # separate line overlay when available.
+                # For other crops: use disapp_bu; drop rows where it's None.
+                if _is_wheat:
+                    _dd_chart = _dd.dropna(subset=["junaug_disapp"])
+                    _ref_col  = "junaug_disapp"
+                else:
+                    _dd_chart = _dd.dropna(subset=["disapp_bu"])
+                    _ref_col  = "disapp_bu"
+
+                _su_d, _sl_d = (_auto_bu(_dd_chart[_ref_col].abs().max())
+                                if not _dd_chart.empty else (1e6, "M bu"))
+
+                fig_disapp = go.Figure()
+                if not _dd_chart.empty:
+                    _bar_colors = [ACCENT if y == _dd_chart["year"].max() else "#64748b"
+                                   for y in _dd_chart["year"]]
+                    # Hatched (lighter) fill for estimated bars
+                    _bar_opacity = [0.55 if r else 1.0
+                                    for r in _dd_chart["is_est"].tolist()]
+                    fig_disapp.add_trace(go.Bar(
+                        x=_dd_chart["year"].astype(str),
+                        y=_dd_chart[_ref_col] / _su_d,
+                        marker_color=_bar_colors,
+                        opacity=1.0,
+                        marker_opacity=_bar_opacity,
+                        name="Jun–Aug Disappearance" if _is_wheat else "Disappearance",
+                        hovertemplate=("%{y:.2f} " + _sl_d +
+                                       " (est.)<extra></extra>" if _is_wheat else
+                                       "%{y:.2f} " + _sl_d + "<extra></extra>"),
+                    ))
+
+                # Full-year disappearance overlay for wheat (only years where it's available)
+                if _is_wheat:
+                    _dd_fy = _dd.dropna(subset=["disapp_bu"])
+                    if not _dd_fy.empty:
+                        fig_disapp.add_trace(go.Scatter(
+                            x=_dd_fy["year"].astype(str),
+                            y=_dd_fy["disapp_bu"] / _su_d,
+                            mode="lines+markers",
+                            line=dict(color="#e879f9", width=2),
+                            marker=dict(color="#e879f9", size=7, symbol="diamond"),
+                            name="Full-Year Disappearance",
+                            hovertemplate="Full-Yr Disapp: %{y:.2f} " + _sl_d + "<extra></extra>",
+                        ))
+
+                fig_disapp.add_trace(go.Scatter(
+                    x=_dd["year"].astype(str),
+                    y=_dd["prod_bu"] / _su_d,
+                    mode="lines+markers",
+                    line=dict(color="#f59e0b", width=2, dash="dot"),
+                    marker=dict(color="#f59e0b", size=6),
+                    name="Total Production",
+                    hovertemplate="Production: %{y:.2f} " + _sl_d + "<extra></extra>",
+                ))
+                if _is_wheat:
+                    fig_disapp.add_trace(go.Scatter(
+                        x=_dd["year"].astype(str),
+                        y=_dd["winter_bu"] / _su_d,
+                        mode="lines+markers",
+                        line=dict(color="#e0b800", width=1.5, dash="dot"),
+                        marker=dict(color="#e0b800", size=5),
+                        name="Winter Wheat (Jun–Aug)",
+                        hovertemplate="Winter Wheat: %{y:.2f} " + _sl_d + "<extra></extra>",
+                    ))
+                    fig_disapp.add_trace(go.Scatter(
+                        x=_dd["year"].astype(str),
+                        y=_dd["spring_bu"] / _su_d,
+                        mode="lines+markers",
+                        line=dict(color="#34d399", width=1.5, dash="dot"),
+                        marker=dict(color="#34d399", size=5),
+                        name="Spring+Durum (Aug–Sep)",
+                        hovertemplate="Spring/Durum: %{y:.2f} " + _sl_d + "<extra></extra>",
+                    ))
+                    fig_disapp.add_trace(go.Scatter(
+                        x=_dd["year"].astype(str),
+                        y=_dd["junaug_supply"] / _su_d,
+                        mode="lines+markers",
+                        line=dict(color="#60a5fa", width=2, dash="dash"),
+                        marker=dict(color="#60a5fa", size=6),
+                        name="Jun–Aug Supply (Jun 1 + Winter)",
+                        hovertemplate="Jun–Aug Supply: %{y:.2f} " + _sl_d + "<extra></extra>",
+                    ))
+                else:
+                    fig_disapp.add_trace(go.Scatter(
+                        x=_dd["year"].astype(str),
+                        y=(_dd["begin_bu"] + _dd["prod_bu"]) / _su_d,
+                        mode="lines+markers",
+                        line=dict(color="#60a5fa", width=1.5, dash="dash"),
+                        marker=dict(color="#60a5fa", size=5),
+                        name="Total Supply",
+                        hovertemplate="Total Supply: %{y:.2f} " + _sl_d + "<extra></extra>",
+                    ))
+                fig_disapp.update_layout(
+                    paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                    font=dict(color=TEXT, family="Arial"),
+                    margin=dict(l=60, r=20, t=30, b=50),
+                    height=340,
+                    showlegend=True,
+                    legend=dict(font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)",
+                                orientation="h", yanchor="bottom", y=1.02, x=0),
+                    xaxis=dict(title="Marketing Year Start", tickfont=dict(color=TEXT),
+                               gridcolor=BORDER),
+                    yaxis=dict(title=_sl_d, gridcolor=BORDER,
+                               tickfont=dict(color=MUTED), title_font=dict(color=MUTED)),
+                    hovermode="x unified",
+                )
+                _add_logo(fig_disapp, logo_50yr)
+                _chart(fig_disapp, use_container_width=True, key="stk_disapp_chart",
+                       config={"displayModeBar": False})
+
+                def _efmt(v, is_est, fmt="{:,.0f}"):
+                    """Format a bushel value; append source tag if estimated."""
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return "—"
+                    s = fmt.format(v / 1e6)
+                    if is_est == "W":
+                        return s + " (W)"   # WASDE-sourced estimate
+                    return s + " (E)" if is_est else s
+
+                def _est_tag(flag):
+                    if flag == "W": return " (W)"
+                    if flag:        return " (E)"
+                    return ""
+
+                if _is_wheat:
+                    _dd_disp = pd.DataFrame({
+                        "Mkt Year":              _dd.apply(lambda r: f"Jun {r['year']}–{r['year']+1}" + _est_tag(r["is_est"]), axis=1),
+                        "Jun 1 Beg (M bu)":      (_dd["begin_bu"]      / 1e6).map(lambda v: f"{v:,.0f}"),
+                        "Winter Wheat (M bu)":   (_dd["winter_bu"]     / 1e6).map(lambda v: f"{v:,.0f}" if v else "—"),
+                        "Jun–Aug Supply (M bu)": (_dd["junaug_supply"] / 1e6).map(lambda v: f"{v:,.0f}"),
+                        "Sep 1 Stocks (M bu)":   _dd.apply(lambda r: _efmt(r["sep_bu"],        r.get("sep_is_est") or r["is_est"]), axis=1),
+                        "Jun–Aug Disapp (M bu)": _dd.apply(lambda r: _efmt(r["junaug_disapp"], r.get("sep_is_est") or r["is_est"]), axis=1),
+                        "Spring+Durum (M bu)":   (_dd["spring_bu"]     / 1e6).map(lambda v: f"{v:,.0f}" if v else "—"),
+                        "Total Prod (M bu)":     (_dd["prod_bu"]       / 1e6).map(lambda v: f"{v:,.0f}"),
+                        "Jun 1 End (M bu)":      _dd.apply(lambda r: _efmt(r["end_bu"],    r.get("end_is_est", False)), axis=1),
+                        "Full-Yr Disapp (M bu)": _dd.apply(lambda r: _efmt(r["disapp_bu"], r["is_est"]), axis=1),
+                    })
+                    st.dataframe(_dd_disp, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Wheat marketing year: Jun 1 → May 31.  "
+                        "Jun–Aug Supply = Jun 1 Old Crop Stocks + Winter Wheat Production (harvested Jun–Jul).  "
+                        "Sep 1 (E) = avg historical Jun–Aug draw-down applied when formal report not yet published.  "
+                        "Jun 1 End (W) = USDA WASDE/FAS PSD ending stocks forecast when NASS not yet published.  "
+                        "(E) = model estimate · (W) = WASDE forecast — replaced automatically once NASS publishes.  "
+                        "Source: USDA NASS Grain Stocks, Crop Production, and USDA FAS PSD (WASDE)."
+                    )
+                else:
+                    _dd_disp = pd.DataFrame({
+                        "Mkt Year":            _dd.apply(lambda r: f"Sep {r['year']}–{r['year']+1}" + _est_tag(r["is_est"]), axis=1),
+                        "Beg Stocks (M bu)":   (_dd["begin_bu"] / 1e6).map(lambda v: f"{v:,.0f}"),
+                        "Production (M bu)":   (_dd["prod_bu"]  / 1e6).map(lambda v: f"{v:,.0f}"),
+                        "Total Supply (M bu)": ((_dd["begin_bu"]+_dd["prod_bu"])/1e6).map(lambda v: f"{v:,.0f}"),
+                        "End Stocks (M bu)":   _dd.apply(lambda r: _efmt(r["end_bu"],    r["is_est"]), axis=1),
+                        "Disappearance (M bu)":_dd.apply(lambda r: _efmt(r["disapp_bu"], r["is_est"]), axis=1),
+                        "Disapp % of Supply":  _dd.apply(
+                            lambda r: (f"{r['disapp_bu']/(r['begin_bu']+r['prod_bu'])*100:.1f}%" + _est_tag(r["is_est"]))
+                            if r.get("disapp_bu") else "—", axis=1),
+                    })
+                    st.dataframe(_dd_disp, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Marketing year Sep 1–Aug 31.  "
+                        "End Stocks (W) = USDA WASDE/FAS PSD ending stocks forecast for the 25/26 marketing year.  "
+                        "End Stocks (E) = Jun 1 quarterly stocks × avg historical Sep/Jun ratio (fallback when WASDE unavailable).  "
+                        "(W) = WASDE forecast · (E) = model estimate — replaced automatically once NASS Sep 1 publishes.  "
+                        "Source: USDA NASS Grain Stocks, Crop Production, and USDA FAS PSD (WASDE)."
+                    )
+            else:
+                st.info("Insufficient stocks data to compute disappearance for this crop/year range.")
 
     # ══════════════════════════════════════════════════════════════════════════
     # ACREAGE SUMMARY TAB
@@ -7049,6 +7433,7 @@ def main():
                     subunitcolor=BORDER, showlakes=True,
                 ),
             )
+            _add_logo(fig_wmap, logo_50yr)
             _chart(fig_wmap, use_container_width=True, config={"displayModeBar": False})
 
             # ── State bar chart ───────────────────────────────────────────────
@@ -7079,40 +7464,117 @@ def main():
                 ),
                 yaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER),
             )
+            _add_logo(fig_wbar, logo_50yr)
             _chart(fig_wbar, use_container_width=True, config={"displayModeBar": False})
 
-            # ── County drilldown ──────────────────────────────────────────────
+            # ── County / ASD drilldown ────────────────────────────────────────
             st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
             st.markdown(
                 f"<h4 style='color:{ACCENT};margin-bottom:6px;'>County / ASD Drilldown</h4>",
                 unsafe_allow_html=True,
             )
-            states_available = sorted(wcmd_county["state"].unique().tolist())
-            sel_wcmd_state = st.selectbox("Select State", states_available, key="wcmd_state_sel")
-            county_filtered = wcmd_county[wcmd_county["state"] == sel_wcmd_state].copy()
-            county_filtered = county_filtered.sort_values("est_capacity_bu", ascending=False)
 
-            fig_cbar = go.Figure(go.Bar(
-                x=county_filtered["est_capacity_bu"] / 1e6,
-                y=county_filtered["county"],
-                orientation="h",
-                marker_color=ACCENT,
-                text=(county_filtered["est_capacity_bu"] / 1e6).map("{:.1f}M".format),
-                textposition="outside",
-                textfont=dict(color=TEXT, size=9),
-            ))
-            fig_cbar.update_layout(
-                paper_bgcolor=DARK, plot_bgcolor=SURFACE,
-                font=dict(color=TEXT, family="Arial"),
-                margin=dict(l=20, r=60, t=10, b=40),
-                height=max(300, len(county_filtered) * 22),
-                xaxis=dict(
-                    title="Est. Capacity (million bu)",
-                    gridcolor=BORDER, tickfont=dict(color=MUTED),
-                    title_font=dict(color=MUTED),
-                ),
-                yaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER, autorange="reversed"),
-            )
+            @st.cache_data(ttl=86400, show_spinner=False)
+            def load_county_asd_map(cache_ver: str) -> dict:
+                """Build {(state_alpha, county_name_lower): (asd_desc, asd_code)} from NASS corn data."""
+                asd_map = {}
+                for yr in [2024, 2023, 2022, 2021, 2020]:
+                    try:
+                        df = load_nass_county("Corn", yr, cache_ver)
+                    except Exception:
+                        continue
+                    if df.empty or "asd_desc" not in df.columns:
+                        continue
+                    for _, row in df.iterrows():
+                        key = (str(row.get("State", "")).strip().upper(),
+                               str(row.get("County", "")).strip().lower())
+                        if key not in asd_map:
+                            desc = str(row.get("asd_desc", "")).strip().title()
+                            code = str(row.get("asd_code", "")).strip()
+                            if desc and desc.lower() not in ("", "nan"):
+                                asd_map[key] = (desc, code)
+                    if len(asd_map) > 500:
+                        break
+                return asd_map
+
+            county_asd_map = load_county_asd_map(_CACHE_VERSION)
+
+            dc1, dc2, dc3 = st.columns([1.2, 1, 2])
+            with dc1:
+                states_available = sorted(wcmd_county["state"].unique().tolist())
+                sel_wcmd_state = st.selectbox("Select State", states_available, key="wcmd_state_sel")
+            with dc2:
+                wcmd_drill_view = st.radio("View by", ["County", "ASD District"],
+                                           horizontal=True, key="wcmd_drill_view")
+
+            county_filtered = wcmd_county[wcmd_county["state"] == sel_wcmd_state].copy()
+
+            if wcmd_drill_view == "ASD District":
+                # Map county → ASD then aggregate
+                county_filtered["_asd_key"] = list(zip(
+                    county_filtered["state"].str.upper(),
+                    county_filtered["county"].str.strip().str.lower(),
+                ))
+                county_filtered["asd_desc"] = county_filtered["_asd_key"].map(
+                    lambda k: county_asd_map.get(k, (None, None))[0]
+                )
+                county_filtered["asd_code"] = county_filtered["_asd_key"].map(
+                    lambda k: county_asd_map.get(k, (None, None))[1]
+                )
+                asd_agg = county_filtered.groupby("asd_desc").agg(
+                    est_capacity_bu=("est_capacity_bu", "sum"),
+                    counties=("county", "count"),
+                ).reset_index().dropna(subset=["asd_desc"])
+                asd_agg = asd_agg.sort_values("est_capacity_bu", ascending=False)
+                unmatched = county_filtered["asd_desc"].isna().sum()
+                if unmatched > 0:
+                    st.caption(f"⚠️ {unmatched} counties could not be mapped to an ASD district — shown in state total but excluded from chart.")
+
+                fig_cbar = go.Figure(go.Bar(
+                    x=asd_agg["est_capacity_bu"] / 1e6,
+                    y=asd_agg["asd_desc"],
+                    orientation="h",
+                    marker_color=ACCENT,
+                    text=(asd_agg["est_capacity_bu"] / 1e6).map("{:.1f}M".format),
+                    textposition="outside",
+                    textfont=dict(color=TEXT, size=9),
+                    customdata=asd_agg["counties"],
+                    hovertemplate="%{y}<br>Capacity: %{x:.1f}M bu<br>Counties: %{customdata}<extra></extra>",
+                ))
+                fig_cbar.update_layout(
+                    paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                    font=dict(color=TEXT, family="Arial"),
+                    margin=dict(l=20, r=60, t=10, b=40),
+                    height=max(300, len(asd_agg) * 36),
+                    xaxis=dict(
+                        title="Est. Capacity (million bu)", gridcolor=BORDER,
+                        tickfont=dict(color=MUTED), title_font=dict(color=MUTED),
+                    ),
+                    yaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER, autorange="reversed"),
+                )
+            else:
+                county_filtered = county_filtered.sort_values("est_capacity_bu", ascending=False)
+                fig_cbar = go.Figure(go.Bar(
+                    x=county_filtered["est_capacity_bu"] / 1e6,
+                    y=county_filtered["county"],
+                    orientation="h",
+                    marker_color=ACCENT,
+                    text=(county_filtered["est_capacity_bu"] / 1e6).map("{:.1f}M".format),
+                    textposition="outside",
+                    textfont=dict(color=TEXT, size=9),
+                ))
+                fig_cbar.update_layout(
+                    paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                    font=dict(color=TEXT, family="Arial"),
+                    margin=dict(l=20, r=60, t=10, b=40),
+                    height=max(300, len(county_filtered) * 22),
+                    xaxis=dict(
+                        title="Est. Capacity (million bu)", gridcolor=BORDER,
+                        tickfont=dict(color=MUTED), title_font=dict(color=MUTED),
+                    ),
+                    yaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER, autorange="reversed"),
+                )
+            _add_logo(fig_cbar, logo_50yr)
             _chart(fig_cbar, use_container_width=True, config={"displayModeBar": False})
 
             # ── State table ───────────────────────────────────────────────────
@@ -7131,26 +7593,133 @@ def main():
                 unsafe_allow_html=True,
             )
 
+            # ── NASS On-Farm vs Off-Farm Storage by State ─────────────────────
+            @st.cache_data(ttl=86400, show_spinner=False)
+            def load_nass_storage_capacity():
+                p = Path(__file__).parent / "data" / "nass_grain_storage_capacity_state.csv"
+                if not p.exists():
+                    return None
+                nc = pd.read_csv(p, dtype=str)
+                nc["value_bu"] = pd.to_numeric(nc["Value"].str.replace(",", ""), errors="coerce")
+                return nc[nc["value_bu"].notna()].copy()
+
+            nass_sc = load_nass_storage_capacity()
+            if nass_sc is not None:
+                st.markdown("<hr style='border-color:#3a3f47;margin:28px 0 16px 0;'>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<h4 style='color:{ACCENT};margin-bottom:4px;'>NASS Grain Storage Capacity — On-Farm & Off-Farm by State</h4>"
+                    f"<p style='color:{MUTED};font-size:0.82rem;margin-top:0;'>Annual survey covering farmer-owned bins/bags (on-farm) and "
+                    "commercial elevators & warehouses (off-farm). Source: USDA NASS.</p>",
+                    unsafe_allow_html=True,
+                )
+                avail_nc_years = sorted(nass_sc["year"].unique(), reverse=True)
+                sel_nc_yr = str(st.selectbox("Year", avail_nc_years, key="wcmd_nass_yr"))
+                nc_yr = nass_sc[nass_sc["year"].astype(str) == sel_nc_yr]
+
+                OFF_DESC = "GRAIN STORAGE CAPACITY, OFF FARM - CAPACITY, MEASURED IN BU"
+                ON_DESC  = "GRAIN STORAGE CAPACITY, ON FARM - CAPACITY, MEASURED IN BU"
+                nc_off = nc_yr[nc_yr["short_desc"] == OFF_DESC][["state_alpha","value_bu"]].rename(columns={"value_bu":"off_farm"})
+                nc_on  = nc_yr[nc_yr["short_desc"] == ON_DESC ][["state_alpha","value_bu"]].rename(columns={"value_bu":"on_farm"})
+                nc_state = nc_off.merge(nc_on, on="state_alpha", how="outer").dropna()
+                nc_state["total"] = nc_state["off_farm"] + nc_state["on_farm"]
+                nc_state = nc_state.sort_values("total", ascending=True)
+
+                fig_nsc = go.Figure()
+                fig_nsc.add_trace(go.Bar(
+                    name="Off-Farm (Commercial)", x=nc_state["off_farm"] / 1e9, y=nc_state["state_alpha"],
+                    orientation="h", marker_color="#f97316",
+                    hovertemplate="Off-Farm: %{x:.2f}B bu<extra></extra>",
+                ))
+                fig_nsc.add_trace(go.Bar(
+                    name="On-Farm / Temporary", x=nc_state["on_farm"] / 1e9, y=nc_state["state_alpha"],
+                    orientation="h", marker_color="#a3e635",
+                    hovertemplate="On-Farm: %{x:.2f}B bu<extra></extra>",
+                ))
+                fig_nsc.update_layout(
+                    paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                    font=dict(color=TEXT, family="Arial"),
+                    margin=dict(l=20, r=20, t=10, b=50),
+                    height=max(400, len(nc_state) * 22),
+                    barmode="stack",
+                    legend=dict(
+                        font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)",
+                        orientation="h", yanchor="bottom", y=1.02, x=0,
+                    ),
+                    xaxis=dict(
+                        title="Billion Bushels", gridcolor=BORDER,
+                        tickfont=dict(color=MUTED), title_font=dict(color=MUTED),
+                    ),
+                    yaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER),
+                    hovermode="y unified",
+                )
+                _add_logo(fig_nsc, logo_50yr)
+                _chart(fig_nsc, use_container_width=True, config={"displayModeBar": False})
+
+                # Trend: national on-farm vs off-farm
+                st.markdown(
+                    f"<h4 style='color:{ACCENT};margin-bottom:6px;margin-top:20px;'>National Trend: On-Farm vs Off-Farm Capacity</h4>",
+                    unsafe_allow_html=True,
+                )
+                nat_sc = nass_sc.groupby(["year","short_desc"])["value_bu"].sum().reset_index()
+                TREND_MAP = {
+                    OFF_DESC: ("Off-Farm (Commercial)", "#f97316"),
+                    ON_DESC:  ("On-Farm / Temporary",   "#a3e635"),
+                }
+                fig_sc_trend = go.Figure()
+                for desc, (label, color) in TREND_MAP.items():
+                    sub = nat_sc[nat_sc["short_desc"] == desc].sort_values("year")
+                    fig_sc_trend.add_trace(go.Scatter(
+                        x=sub["year"].astype(int), y=sub["value_bu"] / 1e9,
+                        mode="lines+markers", name=label,
+                        line=dict(color=color, width=2),
+                        marker=dict(color=color, size=5),
+                        hovertemplate=f"{label}: %{{y:.2f}}B bu<extra></extra>",
+                    ))
+                fig_sc_trend.update_layout(
+                    paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                    font=dict(color=TEXT, family="Arial"),
+                    margin=dict(l=60, r=20, t=10, b=50),
+                    height=300,
+                    legend=dict(font=dict(color=TEXT), bgcolor="rgba(0,0,0,0)",
+                                orientation="h", yanchor="bottom", y=1.02, x=0),
+                    xaxis=dict(title="Year", gridcolor=BORDER, tickfont=dict(color=MUTED),
+                               title_font=dict(color=MUTED), dtick=2),
+                    yaxis=dict(title="Billion Bushels", gridcolor=BORDER,
+                               tickfont=dict(color=MUTED), title_font=dict(color=MUTED)),
+                    hovermode="x unified",
+                )
+                _chart(fig_sc_trend, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    f"<p style='color:{MUTED};font-size:0.78rem;margin-top:4px;'>"
+                    "On-farm includes farmer-owned bins, grain bags, and temporary structures. "
+                    "Off-farm includes commercial grain elevators and licensed warehouses. "
+                    "USDA NASS Grain Storage Capacity report, published annually each January.</p>",
+                    unsafe_allow_html=True,
+                )
+
     # ══════════════════════════════════════════════════════════════════════════
     # STORAGE VS. PRODUCTION TAB
     # ══════════════════════════════════════════════════════════════════════════
     with tab_storage_cmp:
         st.markdown(
-            f"<h3 style='color:{ACCENT};margin-bottom:4px;'>Storage Capacity vs. Production & Sep 1 Stocks</h3>"
-            f"<p style='color:{MUTED};font-size:0.85rem;margin-top:0;'>Compares USDA FSA licensed grain storage to NASS production "
-            "(corn, soybeans, wheat, oats, sorghum) and September 1 grain stocks by state.</p>",
+            f"<h3 style='color:{ACCENT};margin-bottom:4px;'>Grain Supply to Storage</h3>"
+            f"<p style='color:{MUTED};font-size:0.85rem;margin-top:0;'>Annual grain supply (production) stacked by commodity vs. "
+            "total licensed storage capacity (USDA FSA WCMD). Ratio &lt; 1.00 indicates a space deficit. "
+            "Historical trend uses NASS total off-farm storage capacity.</p>",
             unsafe_allow_html=True,
         )
 
         @st.cache_data(ttl=3600, show_spinner=False)
         def load_storage_cmp_data():
             data_dir = Path(__file__).parent / "data"
-            stocks_path = data_dir / "nass_sep1_stocks_state.csv"
-            prod_path = data_dir / "nass_production_state.csv"
-            wcmd_path = data_dir / "wcmd_warehouses.csv"
+            stocks_path    = data_dir / "nass_sep1_stocks_state.csv"
+            prod_path      = data_dir / "nass_production_state.csv"
+            wcmd_path      = data_dir / "wcmd_warehouses.csv"
+            nass_cap_path  = data_dir / "nass_grain_storage_capacity_state.csv"
+            silage_path    = data_dir / "nass_corn_silage_state.csv"
             for p in [stocks_path, prod_path, wcmd_path]:
                 if not p.exists():
-                    return None, None, None
+                    return None, None, None, None, None
 
             GRAINS = ["CORN", "SOYBEANS", "WHEAT", "OATS", "SORGHUM"]
 
@@ -7160,191 +7729,900 @@ def main():
             stocks = stocks[["year", "state_alpha", "commodity_desc", "value_bu"]].dropna()
 
             prod = pd.read_csv(prod_path, dtype=str)
-            prod = prod[(prod["commodity_desc"].isin(GRAINS)) & (prod["reference_period_desc"] == "YEAR")].copy()
+            prod = prod[
+                (prod["commodity_desc"].isin(GRAINS)) &
+                (prod["reference_period_desc"] == "YEAR") &
+                (prod["prodn_practice_desc"] == "ALL PRODUCTION PRACTICES") &
+                (prod["class_desc"] == "ALL CLASSES")
+            ].copy()
             prod["value_bu"] = pd.to_numeric(prod["Value"].str.replace(",", ""), errors="coerce")
             prod = prod[["year", "state_alpha", "commodity_desc", "value_bu"]].dropna()
 
+            # WCMD licensed capacity (static — from scraper)
             raw = pd.read_csv(wcmd_path, encoding="utf-16", sep="\t")
             grain_cap = raw[(raw["Commodity*"].str.strip() == "Grain") &
                             (raw["Unnamed: 6"].str.strip() == "Capacity*")].copy()
-            grain_cap["capacity_bu"] = (
+            grain_cap["wcmd_licensed_bu"] = (
                 grain_cap["Grain"].astype(str).str.replace(",", "")
                 .apply(pd.to_numeric, errors="coerce")
             )
-            cap_df = grain_cap[["State", "capacity_bu"]].rename(columns={"State": "state"})
+            cap_df = grain_cap[["State", "wcmd_licensed_bu"]].rename(columns={"State": "state"})
 
-            return stocks, prod, cap_df
+            # NASS on-farm / off-farm capacity (annual by state)
+            nass_cap = None
+            if nass_cap_path.exists():
+                nc = pd.read_csv(nass_cap_path, dtype=str)
+                nc["value_bu"] = pd.to_numeric(nc["Value"].str.replace(",", ""), errors="coerce")
+                nass_cap = nc[["year", "state_alpha", "short_desc", "value_bu"]].copy()
+                nass_cap = nass_cap[nass_cap["value_bu"].notna()]
 
-        stocks_df, prod_df, cap_df = load_storage_cmp_data()
+            # Corn silage (tons)
+            silage = None
+            if silage_path.exists():
+                sl = pd.read_csv(silage_path, dtype=str)
+                sl["value_tons"] = pd.to_numeric(sl["Value"].str.replace(",", ""), errors="coerce")
+                silage = sl[sl["value_tons"] > 0][["year", "state_alpha", "value_tons"]].dropna()
+                silage["year"] = silage["year"].astype(str)
+
+            return stocks, prod, cap_df, nass_cap, silage
+
+        stocks_df, prod_df, cap_df, nass_cap_df, silage_df = load_storage_cmp_data()
 
         if stocks_df is None:
             st.warning("Data files missing. Run NASS data fetcher and WCMD scraper first.")
         else:
-            sc_c1, sc_c2 = st.columns([2, 1])
-            with sc_c1:
-                avail_years = sorted(prod_df["year"].unique(), reverse=True)
-                sel_year = st.selectbox("Year", avail_years, key="sc_year")
-            with sc_c2:
-                view_mode = st.radio("View", ["State", "County (est.)"], horizontal=True, key="sc_view")
-
-            # ── Build comparison table ────────────────────────────────────────
-            yr = str(sel_year)
-            prod_yr = prod_df[prod_df["year"] == yr].groupby("state_alpha")["value_bu"].sum().reset_index()
-            prod_yr.columns = ["state", "production_bu"]
-
-            stocks_yr_df = stocks_df[stocks_df["year"] == yr]
-            if stocks_yr_df.empty and int(yr) > int(stocks_df["year"].max()):
-                stocks_yr_df = stocks_df[stocks_df["year"] == stocks_df["year"].max()]
-                st.info(f"Sep 1 stocks not yet published for {yr}; showing {stocks_df['year'].max()} stocks.")
-            stocks_yr = stocks_yr_df.groupby("state_alpha")["value_bu"].sum().reset_index()
-            stocks_yr.columns = ["state", "sep1_stocks_bu"]
-
-            cmp = cap_df.merge(prod_yr, on="state", how="left")
-            cmp = cmp.merge(stocks_yr, on="state", how="left")
-            cmp = cmp.dropna(subset=["capacity_bu", "production_bu"])
-            cmp["cap_vs_prod_pct"] = cmp["capacity_bu"] / cmp["production_bu"] * 100
-            cmp["cap_vs_stocks_pct"] = cmp["capacity_bu"] / cmp["sep1_stocks_bu"] * 100
-
-            # ── KPIs ──────────────────────────────────────────────────────────
-            nat_cap = cmp["capacity_bu"].sum()
-            nat_prod = cmp["production_bu"].sum()
-            nat_stocks = cmp["sep1_stocks_bu"].sum()
-            ck1, ck2, ck3, ck4 = st.columns(4)
-            ck1.metric("Licensed Grain Capacity", f"{nat_cap/1e9:.1f}B bu")
-            ck2.metric(f"Total Production ({yr})", f"{nat_prod/1e9:.1f}B bu")
-            ck3.metric("Sep 1 Stocks", f"{nat_stocks/1e9:.1f}B bu" if nat_stocks > 0 else "N/A")
-            ck4.metric("Capacity / Production", f"{nat_cap/nat_prod*100:.0f}%" if nat_prod else "N/A")
-
-            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-
-            # ── Commodity breakdown (national) ────────────────────────────────
-            st.markdown(
-                f"<h4 style='color:{ACCENT};margin-bottom:6px;'>Production by Commodity ({yr}) vs. Total Capacity</h4>",
-                unsafe_allow_html=True,
-            )
-            prod_comm = prod_df[prod_df["year"] == yr].groupby("commodity_desc")["value_bu"].sum().reset_index()
-            prod_comm = prod_comm.sort_values("value_bu", ascending=True)
-            COMM_COLORS = {
-                "CORN": "#f59e0b", "SOYBEANS": "#34d399", "WHEAT": "#c084fc",
-                "OATS": "#60a5fa", "SORGHUM": "#f87171",
+            # ── Commodity colors (match reference chart style) ─────────────────
+            COMM_COLORS_SVC = {
+                "CORN+SORGHUM": "#1f5c2e",
+                "SOYBEANS":     "#a8d5e8",
+                "WHEAT":        "#e0b800",
+                "OATS":         "#c0392b",
             }
-            fig_comm = go.Figure()
-            for _, row in prod_comm.iterrows():
-                fig_comm.add_trace(go.Bar(
-                    x=[row["value_bu"] / 1e9], y=[row["commodity_desc"]],
-                    orientation="h", name=row["commodity_desc"],
-                    marker_color=COMM_COLORS.get(row["commodity_desc"], ACCENT),
-                    text=f'{row["value_bu"]/1e9:.2f}B bu',
-                    textposition="outside",
-                    textfont=dict(color=TEXT, size=10),
-                ))
-            fig_comm.add_vline(
-                x=nat_cap / 1e9,
-                line_dash="dash", line_color="#e74c3c", line_width=2,
-                annotation_text=f"Capacity: {nat_cap/1e9:.1f}B bu",
-                annotation_font_color="#e74c3c",
-                annotation_position="top right",
-            )
-            fig_comm.update_layout(
-                paper_bgcolor=DARK, plot_bgcolor=SURFACE,
-                font=dict(color=TEXT, family="Arial"),
-                margin=dict(l=20, r=80, t=20, b=40),
-                height=320,
-                showlegend=False,
-                barmode="stack",
-                xaxis=dict(
-                    title="Billion Bushels",
-                    gridcolor=BORDER, tickfont=dict(color=MUTED),
-                    title_font=dict(color=MUTED),
-                ),
-                yaxis=dict(tickfont=dict(color=TEXT)),
-            )
-            _chart(fig_comm, use_container_width=True, config={"displayModeBar": False})
 
-            # ── State-level scatter ────────────────────────────────────────────
+            # ── Region definitions ─────────────────────────────────────────────
+            REGIONS_SVC = {
+                "All States":   None,
+                "ECB (IL/IN/OH/MI)":             ["IL","IN","OH","MI"],
+                "High Plains (ND/SD/NE/KS)":     ["ND","SD","NE","KS"],
+                "Corn Belt":                     ["IA","IL","IN","MN","MO","OH","SD","NE","KS","ND"],
+                "Midsouth (AR/MS/TN/MO/LA)":     ["AR","MS","TN","MO","LA"],
+            }
+
+            # ── Controls ───────────────────────────────────────────────────────
+            sc_c1, sc_c2, sc_c3 = st.columns([1, 1.6, 1])
+            with sc_c1:
+                avail_yrs_svc = sorted(prod_df["year"].unique(), reverse=True)
+                sel_yr_svc = st.selectbox("Year", avail_yrs_svc, key="svc_year")
+            with sc_c2:
+                sel_region_svc = st.selectbox("Region", list(REGIONS_SVC.keys()), key="svc_region")
+            with sc_c3:
+                storage_layer = st.radio(
+                    "Storage Layer",
+                    ["NASS Total (On+Off)", "NASS Off-Farm", "NASS On-Farm", "WCMD Licensed"],
+                    horizontal=True, key="svc_layer",
+                )
+
+            yr_svc  = str(sel_yr_svc)
+            yr_prev = str(int(yr_svc) - 1)
+            region_states = REGIONS_SVC[sel_region_svc]
+
+            # ── Helper: build per-state supply+storage df for a given year ─────
+            def _build_svc_df(yr_str):
+                pg = prod_df[prod_df["year"] == yr_str]
+                corn_sorg = pg[pg["commodity_desc"].isin(["CORN","SORGHUM"])].groupby("state_alpha")["value_bu"].sum().reset_index()
+                corn_sorg.columns = ["state","corn_sorg_bu"]
+                soybeans  = pg[pg["commodity_desc"] == "SOYBEANS"].groupby("state_alpha")["value_bu"].sum().reset_index()
+                soybeans.columns = ["state","soybeans_bu"]
+                wheat     = pg[pg["commodity_desc"] == "WHEAT"].groupby("state_alpha")["value_bu"].sum().reset_index()
+                wheat.columns = ["state","wheat_bu"]
+                oats      = pg[pg["commodity_desc"] == "OATS"].groupby("state_alpha")["value_bu"].sum().reset_index()
+                oats.columns = ["state","oats_bu"]
+
+                df = corn_sorg.merge(soybeans, on="state", how="outer") \
+                              .merge(wheat,    on="state", how="outer") \
+                              .merge(oats,     on="state", how="outer") \
+                              .merge(cap_df,   on="state", how="inner")
+                for c in ["corn_sorg_bu","soybeans_bu","wheat_bu","oats_bu"]:
+                    df[c] = df[c].fillna(0)
+                df["total_supply_bu"] = df[["corn_sorg_bu","soybeans_bu","wheat_bu","oats_bu"]].sum(axis=1)
+
+                # NASS capacity for that year
+                nass_off = pd.DataFrame(columns=["state","nass_offfarm_bu"])
+                nass_on  = pd.DataFrame(columns=["state","nass_onfarm_bu"])
+                if nass_cap_df is not None:
+                    avail_nc = sorted(nass_cap_df["year"].unique())
+                    nc_yr = yr_str if yr_str in avail_nc else max((y for y in avail_nc if y <= yr_str), default=avail_nc[-1])
+                    nc_sub = nass_cap_df[nass_cap_df["year"] == nc_yr]
+                    off = nc_sub[nc_sub["short_desc"].str.contains("OFF FARM", na=False)][["state_alpha","value_bu"]].rename(columns={"state_alpha":"state","value_bu":"nass_offfarm_bu"})
+                    on  = nc_sub[nc_sub["short_desc"].str.contains("ON FARM",  na=False)][["state_alpha","value_bu"]].rename(columns={"state_alpha":"state","value_bu":"nass_onfarm_bu"})
+                    nass_off = off; nass_on = on
+                df = df.merge(nass_off, on="state", how="left").merge(nass_on, on="state", how="left")
+                df["nass_offfarm_bu"] = df.get("nass_offfarm_bu", pd.Series(0, index=df.index)).fillna(0)
+                df["nass_onfarm_bu"]  = df.get("nass_onfarm_bu",  pd.Series(0, index=df.index)).fillna(0)
+
+                # Active storage column based on layer selector
+                if storage_layer == "NASS Off-Farm":
+                    df["storage_bu"] = df["nass_offfarm_bu"]
+                elif storage_layer == "NASS On-Farm":
+                    df["storage_bu"] = df["nass_onfarm_bu"]
+                elif storage_layer == "NASS Total (On+Off)":
+                    df["storage_bu"] = df["nass_offfarm_bu"] + df["nass_onfarm_bu"]
+                else:  # WCMD Licensed
+                    df["storage_bu"] = df["wcmd_licensed_bu"].fillna(0)
+
+                df["ratio"] = df.apply(
+                    lambda r: r["storage_bu"] / r["total_supply_bu"] if r["total_supply_bu"] > 0 else None, axis=1
+                )
+                return df
+
+            df_cur  = _build_svc_df(yr_svc)
+            df_prev = _build_svc_df(yr_prev)
+
+            ratio_prev_map = dict(zip(df_prev["state"], df_prev["ratio"]))
+
+            if region_states:
+                df_cur = df_cur[df_cur["state"].isin(region_states)]
+
+            df_chart = df_cur.dropna(subset=["total_supply_bu"]) \
+                             .sort_values("total_supply_bu", ascending=False)
+
+            # ── KPI row ────────────────────────────────────────────────────────
+            nat_supply  = df_chart["total_supply_bu"].sum()
+            nat_storage = df_chart["storage_bu"].sum()
+            nat_ratio   = nat_storage / nat_supply if nat_supply > 0 else 0
+            nat_deficit = nat_storage - nat_supply
+
+            nat_supply_p  = df_prev[df_prev["state"].isin(df_chart["state"])]["total_supply_bu"].sum()
+            nat_storage_p = df_prev[df_prev["state"].isin(df_chart["state"])]["storage_bu"].sum()
+            nat_ratio_p   = nat_storage_p / nat_supply_p if nat_supply_p > 0 else 0
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric(
+                f"Total Supply ({yr_svc})",
+                f"{nat_supply/1e9:.2f}B bu",
+                delta=f"{(nat_supply-nat_supply_p)/1e6:+.0f}M bu vs {yr_prev}",
+            )
+            k2.metric(
+                f"{storage_layer} Capacity",
+                f"{nat_storage/1e9:.2f}B bu",
+            )
+            k3.metric(
+                "Space Ratio (Storage/Supply)",
+                f"{nat_ratio:.2f}",
+                delta=f"{nat_ratio - nat_ratio_p:+.2f} YoY",
+                delta_color="normal",
+            )
+            k4.metric(
+                "Space Surplus / (Deficit)",
+                f"{nat_deficit/1e6:+.0f}M bu",
+                delta=f"{'Surplus' if nat_deficit >= 0 else 'Deficit'}",
+                delta_color="normal" if nat_deficit >= 0 else "inverse",
+            )
+
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+            # ── State Supply vs Storage chart ──────────────────────────────────
             st.markdown(
-                f"<h4 style='color:{ACCENT};margin-bottom:6px;margin-top:20px;'>State: Capacity vs. Production + Sep 1 Stocks</h4>",
+                f"<h4 style='color:{ACCENT};margin-bottom:4px;'>Grain Supply to Storage by State — {yr_svc} (Million Bushels)</h4>",
                 unsafe_allow_html=True,
             )
-            fig_scatter = go.Figure()
-            fig_scatter.add_trace(go.Scatter(
-                x=cmp["production_bu"] / 1e6,
-                y=cmp["capacity_bu"] / 1e6,
-                mode="markers+text",
-                text=cmp["state"],
-                textposition="top center",
-                textfont=dict(color=TEXT, size=9),
-                marker=dict(
-                    size=cmp["capacity_bu"].fillna(0) / cmp["capacity_bu"].max() * 30 + 6,
-                    color=ACCENT, opacity=0.8, line=dict(color=BORDER, width=1),
-                ),
-                name="Production",
-                hovertemplate=(
-                    "<b>%{text}</b><br>"
-                    "Production: %{x:,.0f}M bu<br>"
-                    "Capacity: %{y:,.0f}M bu<extra></extra>"
-                ),
+
+            fig_svc = go.Figure()
+
+            # Stacked supply bars
+            for comm_key, col_name, color in [
+                ("CORN+SORGHUM", "corn_sorg_bu",  COMM_COLORS_SVC["CORN+SORGHUM"]),
+                ("SOYBEANS",     "soybeans_bu",   COMM_COLORS_SVC["SOYBEANS"]),
+                ("WHEAT",        "wheat_bu",      COMM_COLORS_SVC["WHEAT"]),
+                ("OATS",         "oats_bu",       COMM_COLORS_SVC["OATS"]),
+            ]:
+                fig_svc.add_trace(go.Bar(
+                    name=comm_key.replace("+", " & ").title(),
+                    x=df_chart["state"],
+                    y=df_chart[col_name] / 1e6,
+                    marker_color=color,
+                    hovertemplate=f"{comm_key.replace('+', ' & ').title()}: %{{y:,.0f}}M bu<extra></extra>",
+                ))
+
+            # Total Storage line overlay
+            _svc_line_color = {
+                "WCMD Licensed":       "#c07000",
+                "NASS Off-Farm":       "#444444",
+                "NASS On-Farm":        "#1055aa",
+                "NASS Total (On+Off)": "#444444",
+            }.get(storage_layer, "#444444")
+            fig_svc.add_trace(go.Scatter(
+                name=storage_layer,
+                x=df_chart["state"],
+                y=df_chart["storage_bu"] / 1e6,
+                mode="lines+markers",
+                line=dict(color=_svc_line_color, width=2.5),
+                marker=dict(color=_svc_line_color, size=6, symbol="line-ew-open"),
+                hovertemplate="Storage: %{y:,.0f}M bu<extra></extra>",
             ))
-            # 45-degree parity line
-            max_val = max(cmp["production_bu"].max(), cmp["capacity_bu"].max()) / 1e6
-            fig_scatter.add_trace(go.Scatter(
-                x=[0, max_val], y=[0, max_val],
-                mode="lines", line=dict(color="#e74c3c", dash="dash", width=1),
-                name="Capacity = Production", showlegend=True,
-            ))
-            fig_scatter.update_layout(
+
+            # Ratio annotations above each bar
+            annotations_svc = []
+            for _, row in df_chart.iterrows():
+                if row["total_supply_bu"] > 0 and pd.notna(row["ratio"]):
+                    annotations_svc.append(dict(
+                        x=row["state"],
+                        y=row["total_supply_bu"] / 1e6 + row["total_supply_bu"] / 1e6 * 0.03,
+                        text=f"<b>{row['ratio']:.2f}</b>",
+                        showarrow=False,
+                        font=dict(size=10, color="#000000"),
+                        yanchor="bottom",
+                    ))
+
+            # YoY delta text (below x-axis via annotation trick)
+            yoy_anns = []
+            min_y_svc = -(df_chart["total_supply_bu"].max() / 1e6 * 0.12)
+            for _, row in df_chart.iterrows():
+                prev_r = ratio_prev_map.get(row["state"])
+                delta_r = row["ratio"] - prev_r if (pd.notna(row["ratio"]) and prev_r is not None) else None
+                if delta_r is not None:
+                    color_d = "#0a7a50" if delta_r >= 0 else "#c0392b"
+                    yoy_anns.append(dict(
+                        x=row["state"], y=min_y_svc,
+                        text=f"<b style='color:{color_d}'>{delta_r:+.2f}</b>",
+                        showarrow=False,
+                        font=dict(size=9),
+                        yanchor="top",
+                    ))
+
+            fig_svc.update_layout(
                 paper_bgcolor=DARK, plot_bgcolor=SURFACE,
                 font=dict(color=TEXT, family="Arial"),
-                margin=dict(l=60, r=20, t=10, b=50),
-                height=480,
-                xaxis=dict(
-                    title=f"Total Grain Production {yr} (M bu)",
-                    gridcolor=BORDER, tickfont=dict(color=MUTED),
-                    title_font=dict(color=MUTED),
-                    tickformat=",",
-                ),
-                yaxis=dict(
-                    title="Licensed Grain Capacity (M bu)",
-                    gridcolor=BORDER, tickfont=dict(color=MUTED),
-                    title_font=dict(color=MUTED),
-                    tickformat=",",
-                ),
+                margin=dict(l=60, r=20, t=20, b=80),
+                height=500,
+                barmode="stack",
+                showlegend=True,
                 legend=dict(
-                    font=dict(color=TEXT), bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)",
                     orientation="h", yanchor="bottom", y=1.02, x=0,
                 ),
-                hovermode="closest",
+                xaxis=dict(tickfont=dict(color=TEXT, size=11), gridcolor=BORDER, tickangle=0),
+                yaxis=dict(
+                    title="Million Bushels",
+                    gridcolor=BORDER, tickfont=dict(color=MUTED),
+                    title_font=dict(color=MUTED),
+                    range=[min_y_svc, df_chart["total_supply_bu"].max() / 1e6 * 1.15],
+                ),
+                annotations=annotations_svc + yoy_anns,
+                hovermode="x unified",
             )
-            _chart(fig_scatter, use_container_width=True, config={"displayModeBar": False})
+            _add_logo(fig_svc, logo_50yr)
+            _chart(fig_svc, use_container_width=True, config={"displayModeBar": False})
 
-            # ── State comparison table ────────────────────────────────────────
+            # YoY label below chart
             st.markdown(
-                f"<h4 style='color:{ACCENT};margin-bottom:6px;margin-top:20px;'>State Comparison Table</h4>",
+                f"<p style='color:{MUTED};font-size:0.77rem;margin-top:-8px;margin-bottom:16px;'>"
+                f"Numbers above bars = Storage/Supply ratio. Row below x-axis = YoY ratio change vs {yr_prev}.</p>",
                 unsafe_allow_html=True,
             )
-            tbl = cmp.copy().sort_values("capacity_bu", ascending=False)
-            tbl_disp = pd.DataFrame({
-                "State": tbl["state"],
-                "Capacity (bu)": tbl["capacity_bu"].map("{:,.0f}".format),
-                f"Production {yr} (bu)": tbl["production_bu"].map("{:,.0f}".format),
-                "Sep 1 Stocks (bu)": tbl["sep1_stocks_bu"].map(
-                    lambda v: f"{v:,.0f}" if pd.notna(v) and v > 0 else "—"
+
+            # ── Regional summary table ─────────────────────────────────────────
+            ECB_STATES       = ["IL","IN","OH","MI"]
+            HIPL_STATES      = ["ND","SD","NE","KS"]
+            CORNBELT_STATES  = ["IA","IL","IN","MN","MO","OH","SD","NE","KS","ND"]
+
+            def _region_summary(df_c, df_p, states, label):
+                sub_c = df_c[df_c["state"].isin(states)]
+                sub_p = df_p[df_p["state"].isin(states)]
+                sup_c  = sub_c["total_supply_bu"].sum()
+                sto_c  = sub_c["storage_bu"].sum()
+                sup_p  = sub_p["total_supply_bu"].sum()
+                sto_p  = sub_p["storage_bu"].sum()
+                def_c  = sto_c - sup_c
+                def_p  = sto_p - sup_p
+                chg    = def_c - def_p
+                ratio_c = sto_c / sup_c if sup_c > 0 else None
+                ratio_p = sto_p / sup_p if sup_p > 0 else None
+                return {
+                    "Region": label,
+                    "Supply (M bu)": f"{sup_c/1e6:,.0f}",
+                    "Storage (M bu)": f"{sto_c/1e6:,.0f}",
+                    f"Space {yr_svc}": f"{def_c/1e6:+,.0f}",
+                    f"Space {yr_prev}": f"{def_p/1e6:+,.0f}",
+                    "YoY Change": f"{chg/1e6:+,.0f}",
+                    f"Ratio {yr_svc}": f"{ratio_c:.2f}" if ratio_c else "—",
+                    f"Ratio {yr_prev}": f"{ratio_p:.2f}" if ratio_p else "—",
+                }
+
+            df_full_cur  = _build_svc_df(yr_svc)
+            df_full_prev = _build_svc_df(yr_prev)
+            region_rows = [
+                _region_summary(df_full_cur, df_full_prev, ECB_STATES,      "ECB (IL/IN/OH/MI)"),
+                _region_summary(df_full_cur, df_full_prev, HIPL_STATES,     "High Plains (ND/SD/NE/KS)"),
+                _region_summary(df_full_cur, df_full_prev, CORNBELT_STATES, "Corn Belt (10-state)"),
+            ]
+            reg_df = pd.DataFrame(region_rows)
+
+            st.markdown(
+                f"<h4 style='color:{ACCENT};margin-bottom:4px;margin-top:20px;'>Regional Space Summary</h4>",
+                unsafe_allow_html=True,
+            )
+            st.dataframe(reg_df, use_container_width=True, hide_index=True)
+
+            # ── Historical trend: selected region ─────────────────────────────
+            st.markdown(
+                f"<h4 style='color:{ACCENT};margin-bottom:4px;margin-top:24px;'>"
+                f"{'Corn Belt' if sel_region_svc == 'All States' else sel_region_svc} Grain Supply to Storage — Historical</h4>",
+                unsafe_allow_html=True,
+            )
+
+            hist_states = region_states if region_states else CORNBELT_STATES
+            hist_yrs    = [y for y in sorted(prod_df["year"].unique()) if int(y) >= 2015]
+
+            # Build historical data using NASS off-farm as storage line (available annually)
+            hist_rows = []
+            for hy in hist_yrs:
+                hpg = prod_df[prod_df["year"] == hy]
+                corn_s  = hpg[hpg["commodity_desc"].isin(["CORN","SORGHUM"]) & hpg["state_alpha"].isin(hist_states)]["value_bu"].sum()
+                soy_s   = hpg[(hpg["commodity_desc"] == "SOYBEANS") & hpg["state_alpha"].isin(hist_states)]["value_bu"].sum()
+                wht_s   = hpg[(hpg["commodity_desc"] == "WHEAT")    & hpg["state_alpha"].isin(hist_states)]["value_bu"].sum()
+                oat_s   = hpg[(hpg["commodity_desc"] == "OATS")     & hpg["state_alpha"].isin(hist_states)]["value_bu"].sum()
+                total_s = corn_s + soy_s + wht_s + oat_s
+
+                # Storage: respect selected storage_layer
+                hist_sto = 0
+                if storage_layer == "WCMD Licensed":
+                    hist_sto = df_full_cur[df_full_cur["state"].isin(hist_states)]["wcmd_licensed_bu"].sum()
+                elif nass_cap_df is not None:
+                    avail_nc = sorted(nass_cap_df["year"].unique())
+                    nc_yr_h = hy if hy in avail_nc else max((y for y in avail_nc if y <= hy), default=avail_nc[-1])
+                    nc_h_st = nass_cap_df[(nass_cap_df["year"] == nc_yr_h) & nass_cap_df["state_alpha"].isin(hist_states)]
+                    if storage_layer == "NASS On-Farm":
+                        hist_sto = nc_h_st[nc_h_st["short_desc"].str.contains("ON FARM", na=False)]["value_bu"].sum()
+                    elif storage_layer == "NASS Off-Farm":
+                        hist_sto = nc_h_st[nc_h_st["short_desc"].str.contains("OFF FARM", na=False)]["value_bu"].sum()
+                    else:  # NASS Total (On+Off)
+                        hist_sto = nc_h_st["value_bu"].sum()
+
+                hist_rows.append({
+                    "year": int(hy),
+                    "corn_sorg": corn_s / 1e6,
+                    "soybeans":  soy_s  / 1e6,
+                    "wheat":     wht_s  / 1e6,
+                    "oats":      oat_s  / 1e6,
+                    "total_supply": total_s / 1e6,
+                    "storage": hist_sto / 1e6,
+                    "ratio": hist_sto / total_s if total_s > 0 else None,
+                })
+
+            hist_df = pd.DataFrame(hist_rows).sort_values("year", ascending=False)
+
+            fig_hist = go.Figure()
+            for comm_key, col_h, color in [
+                ("Corn & Sorg Supply", "corn_sorg", COMM_COLORS_SVC["CORN+SORGHUM"]),
+                ("Soybean Supply",     "soybeans",  COMM_COLORS_SVC["SOYBEANS"]),
+                ("Wheat Supply",       "wheat",     COMM_COLORS_SVC["WHEAT"]),
+                ("Oat Supply",         "oats",      COMM_COLORS_SVC["OATS"]),
+            ]:
+                fig_hist.add_trace(go.Bar(
+                    name=comm_key,
+                    x=hist_df["year"].astype(str),
+                    y=hist_df[col_h],
+                    marker_color=color,
+                    hovertemplate=f"{comm_key}: %{{y:,.0f}}M bu<extra></extra>",
+                ))
+
+            fig_hist.add_trace(go.Scatter(
+                name=storage_layer,
+                x=hist_df["year"].astype(str),
+                y=hist_df["storage"],
+                mode="lines+markers",
+                line=dict(color=_svc_line_color, width=2.5),
+                marker=dict(color=_svc_line_color, size=6),
+                hovertemplate=f"{storage_layer}: %{{y:,.0f}}M bu<extra></extra>",
+            ))
+
+            # Ratio annotations
+            hist_anns = []
+            for _, row in hist_df.iterrows():
+                if pd.notna(row["ratio"]):
+                    hist_anns.append(dict(
+                        x=str(int(row["year"])),
+                        y=row["total_supply"] * 1.04,
+                        text=f"<b>{row['ratio']:.2f}</b>",
+                        showarrow=False,
+                        font=dict(size=10, color="#000000"),
+                        yanchor="bottom",
+                    ))
+
+            fig_hist.update_layout(
+                paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                font=dict(color=TEXT, family="Arial"),
+                margin=dict(l=60, r=20, t=30, b=50),
+                height=460,
+                barmode="stack",
+                showlegend=True,
+                legend=dict(
+                    font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)",
+                    orientation="h", yanchor="bottom", y=1.02, x=0,
                 ),
-                "Cap / Prod": tbl["cap_vs_prod_pct"].map(
-                    lambda v: f"{v:.0f}%" if pd.notna(v) else "—"
+                xaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER, categoryorder="array",
+                           categoryarray=hist_df["year"].astype(str).tolist()),
+                yaxis=dict(
+                    title="Million Bushels",
+                    gridcolor=BORDER, tickfont=dict(color=MUTED),
+                    title_font=dict(color=MUTED),
                 ),
-                "Cap / Stocks": tbl["cap_vs_stocks_pct"].map(
-                    lambda v: f"{v:.0f}%" if pd.notna(v) and v < 1e6 else "—"
-                ),
+                annotations=hist_anns,
+                hovermode="x unified",
+            )
+            _add_logo(fig_hist, logo_50yr)
+            _chart(fig_hist, use_container_width=True, config={"displayModeBar": False})
+
+            # ── State detail table ─────────────────────────────────────────────
+            st.markdown(
+                f"<h4 style='color:{ACCENT};margin-bottom:4px;margin-top:20px;'>State Detail — {yr_svc}</h4>",
+                unsafe_allow_html=True,
+            )
+            tbl_svc = df_chart.copy().sort_values("total_supply_bu", ascending=False)
+            ratio_prev_col = tbl_svc["state"].map(ratio_prev_map)
+            tbl_disp_svc = pd.DataFrame({
+                "State":                tbl_svc["state"],
+                "Corn & Sorg (M bu)":   (tbl_svc["corn_sorg_bu"] / 1e6).map(lambda v: f"{v:,.0f}"),
+                "Soybeans (M bu)":      (tbl_svc["soybeans_bu"]  / 1e6).map(lambda v: f"{v:,.0f}"),
+                "Wheat (M bu)":         (tbl_svc["wheat_bu"]     / 1e6).map(lambda v: f"{v:,.0f}"),
+                "Oats (M bu)":          (tbl_svc["oats_bu"]      / 1e6).map(lambda v: f"{v:,.0f}"),
+                "Total Supply (M bu)":  (tbl_svc["total_supply_bu"] / 1e6).map(lambda v: f"{v:,.0f}"),
+                "Storage (M bu)":       (tbl_svc["storage_bu"]   / 1e6).map(lambda v: f"{v:,.0f}" if v > 0 else "—"),
+                "Surplus/(Deficit)":    ((tbl_svc["storage_bu"] - tbl_svc["total_supply_bu"]) / 1e6).map(lambda v: f"{v:+,.0f}"),
+                f"Ratio {yr_svc}":      tbl_svc["ratio"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "—"),
+                f"Ratio {yr_prev}":     ratio_prev_col.map(lambda v: f"{v:.2f}" if pd.notna(v) else "—"),
+                "YoY Δ Ratio":          (tbl_svc["ratio"] - ratio_prev_col).map(lambda v: f"{v:+.2f}" if pd.notna(v) else "—"),
             })
-            st.dataframe(tbl_disp, use_container_width=True, hide_index=True)
+            st.dataframe(tbl_disp_svc, use_container_width=True, hide_index=True)
             st.markdown(
-                f"<p style='color:{MUTED};font-size:0.78rem;margin-top:4px;'>"
-                "Production = sum of corn, soybeans, wheat, oats, sorghum (NASS final annual). "
-                "Sep 1 Stocks from USDA NASS Grain Stocks report. "
-                "Capacity from USDA FSA WCMD licensed grain warehouse file.</p>",
+                f"<p style='color:{MUTED};font-size:0.77rem;margin-top:4px;'>"
+                f"Supply = annual production (corn+sorghum, soybeans, wheat, oats). "
+                f"Storage layer: {storage_layer} (USDA FSA WCMD / USDA NASS Grain Storage Capacity). "
+                "Ratio = Storage ÷ Supply; values &lt; 1.00 indicate a space deficit.</p>",
                 unsafe_allow_html=True,
             )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # EIA BIOFUELS TAB
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab_eia:
+        st.markdown(
+            f"<h3 style='color:{ACCENT};margin-bottom:4px;'>US Biofuels — EIA Data</h3>"
+            f"<p style='color:{MUTED};font-size:0.85rem;margin-top:0;'>"
+            "Ethanol and biodiesel production by PADD region (weekly/monthly) and "
+            "national feedstock consumption (corn → ethanol, soybean oil → biodiesel). "
+            "Source: US Energy Information Administration (EIA) Open Data API.</p>",
+            unsafe_allow_html=True,
+        )
+
+        _PADD_LABELS = {
+            "NUS": "US Total",
+            "R10": "PADD 1 — East Coast",
+            "R20": "PADD 2 — Midwest",
+            "R30": "PADD 3 — Gulf Coast",
+            "R40": "PADD 4 — Rocky Mountain",
+            "R50": "PADD 5 — West Coast",
+        }
+        _PADD_COLORS = {
+            "NUS": "#94a3b8",
+            "R10": "#60a5fa",
+            "R20": "#34d399",
+            "R30": "#f59e0b",
+            "R40": "#c084fc",
+            "R50": "#f87171",
+        }
+        _FEED_LABELS = {
+            "EPOOBDAFC": "Corn (→ Ethanol)",
+            "EPOOBDAFS": "Grain Sorghum (→ Ethanol)",
+            "EPOOBDSO":  "Soybean Oil (→ Biodiesel)",
+            "EPOOBDCNOD":"Corn Oil (→ Biodiesel)",
+        }
+        _FEED_COLORS = {
+            "EPOOBDAFC": "#f59e0b",
+            "EPOOBDAFS": "#94a3b8",
+            "EPOOBDSO":  "#34d399",
+            "EPOOBDCNOD":"#60a5fa",
+        }
+
+        if not EIA_API_KEY:
+            st.warning(
+                "⚠️ EIA API key not configured. "
+                "Register for a free key at https://www.eia.gov/opendata/register.php "
+                "then set `EIA_API_KEY` at the top of app.py."
+            )
+        else:
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def load_eia_ethanol_weekly(weeks: int = 260) -> pd.DataFrame:
+                """Weekly ethanol plant production by PADD (kbbl/day).
+                Aggregated to monthly averages for trend charts."""
+                rows = []
+                for area in ["NUS", "R10", "R20", "R30", "R40", "R50"]:
+                    params = urllib.parse.urlencode({
+                        "api_key": EIA_API_KEY,
+                        "frequency": "weekly",
+                        "data[]": "value",
+                        "facets[product][]": "EPOOXE",
+                        "facets[process][]": "YOP",
+                        f"facets[duoarea][]": area,
+                        "sort[0][column]": "period",
+                        "sort[0][direction]": "desc",
+                        "length": str(weeks),
+                    }, doseq=False)
+                    url = f"{EIA_BASE_URL}petroleum/pnp/wprode/data?{params}"
+                    try:
+                        with urllib.request.urlopen(url, timeout=30) as r:
+                            data = json.load(r).get("response", {}).get("data", [])
+                        for rec in data:
+                            try:
+                                rows.append({
+                                    "period": rec["period"],
+                                    "padd": area,
+                                    "kbblday": float(rec["value"]) if rec["value"] not in (None, "") else None,
+                                })
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                if not rows:
+                    return pd.DataFrame()
+                df = pd.DataFrame(rows)
+                df["period_dt"] = pd.to_datetime(df["period"])
+                df["mgal_day"] = df["kbblday"] * 42 / 1000   # kbbl/day → million gallons/day
+                # Monthly averages for trend charting
+                df["month"] = df["period_dt"].dt.to_period("M").dt.to_timestamp()
+                monthly = df.groupby(["month", "padd"]).agg(
+                    kbblday=("kbblday", "mean"),
+                    mgal_day=("mgal_day", "mean"),
+                ).reset_index()
+                monthly = monthly.rename(columns={"month": "period"})
+                return monthly.sort_values("period")
+
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def load_eia_feedstocks(months: int = 72) -> pd.DataFrame:
+                """Monthly biofuel feedstock consumption — national (million lbs)."""
+                rows = []
+                for prod in ["EPOOBDAFC", "EPOOBDAFS", "EPOOBDSO", "EPOOBDCNOD"]:
+                    url = (
+                        f"{EIA_BASE_URL}petroleum/pnp/feedbiofuel/data"
+                        f"?api_key={EIA_API_KEY}"
+                        f"&frequency=monthly"
+                        f"&facets[product][]={prod}"
+                        f"&facets[duoarea][]=NUS"
+                        f"&data[]=value"
+                        f"&sort[0][column]=period&sort[0][direction]=desc"
+                        f"&length={months}"
+                    )
+                    try:
+                        with urllib.request.urlopen(url, timeout=30) as r:
+                            data = json.load(r).get("response", {}).get("data", [])
+                        for rec in data:
+                            try:
+                                rows.append({
+                                    "period": rec["period"],
+                                    "product": prod,
+                                    "mmlb": float(rec["value"]) if rec["value"] not in (None, "") else None,
+                                })
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                if not rows:
+                    return pd.DataFrame()
+                df = pd.DataFrame(rows)
+                df["period"] = pd.to_datetime(df["period"])
+                df["label"] = df["product"].map(_FEED_LABELS)
+                df["mbu_corn"] = df.apply(
+                    lambda r: r["mmlb"] * 1e6 / 56 / 1e6
+                    if r["product"] == "EPOOBDAFC" else None, axis=1
+                )
+                df["mbu_sorg"] = df.apply(
+                    lambda r: r["mmlb"] * 1e6 / 56 / 1e6
+                    if r["product"] == "EPOOBDAFS" else None, axis=1
+                )
+                return df.sort_values("period")
+
+            with st.spinner("Loading EIA data…"):
+                eth_df  = load_eia_ethanol_weekly(weeks=365)
+                feed_df = load_eia_feedstocks(months=72)
+
+            if eth_df.empty and feed_df.empty:
+                st.error("Could not fetch EIA data. Check API key or network connection.")
+            else:
+                # ── KPI row ───────────────────────────────────────────────────
+                if not eth_df.empty:
+                    latest_m = eth_df["period"].max()
+                    prev_yr_m = latest_m - pd.DateOffset(years=1)
+                    nat_latest = eth_df[(eth_df["padd"] == "NUS") & (eth_df["period"] == latest_m)]["kbblday"].sum()
+                    nat_prev   = eth_df[(eth_df["padd"] == "NUS") &
+                                        (eth_df["period"].dt.year == (latest_m - pd.DateOffset(years=1)).year) &
+                                        (eth_df["period"].dt.month == latest_m.month)]["kbblday"].sum()
+                    nat_mgal_yr = nat_latest * 42 / 1000 * 365
+                    delta_pct   = (nat_latest - nat_prev) / nat_prev * 100 if nat_prev > 0 else 0
+                else:
+                    latest_m = None
+                    nat_latest = nat_mgal_yr = delta_pct = 0
+
+                corn_latest = feed_df[
+                    (feed_df["product"] == "EPOOBDAFC") &
+                    (feed_df["period"] == feed_df[feed_df["product"] == "EPOOBDAFC"]["period"].max())
+                ]["mbu_corn"].sum() if not feed_df.empty else 0
+
+                soy_latest = feed_df[
+                    (feed_df["product"] == "EPOOBDSO") &
+                    (feed_df["period"] == feed_df[feed_df["product"] == "EPOOBDSO"]["period"].max())
+                ]["mmlb"].sum() if not feed_df.empty else 0
+
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric(
+                    "US Ethanol Production",
+                    f"{nat_latest:,.0f} kbbl/day" if nat_latest > 0 else "—",
+                    delta=f"{delta_pct:+.1f}% YoY" if delta_pct != 0 else None,
+                    help=f"Latest month: {latest_m.strftime('%b %Y') if latest_m else '—'}",
+                )
+                k2.metric(
+                    "Annualized Rate",
+                    f"{nat_mgal_yr:,.0f} M gal/yr" if nat_mgal_yr > 0 else "—",
+                    help="kbbl/day × 42 gal × 365 days",
+                )
+                k3.metric(
+                    "Corn Feedstock (latest mo.)",
+                    f"{corn_latest:,.0f} M bu" if corn_latest > 0 else "—",
+                    help="Corn consumed for ethanol production (million bushels)",
+                )
+                k4.metric(
+                    "Soybean Oil Feedstock",
+                    f"{soy_latest:,.0f} M lbs" if soy_latest > 0 else "—",
+                    help="Soybean oil consumed for biodiesel production (million lbs)",
+                )
+
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+                # ── Controls ──────────────────────────────────────────────────
+                ec1, ec2 = st.columns([2, 1])
+                with ec1:
+                    eia_yr_range = st.slider(
+                        "Year range",
+                        min_value=2010, max_value=datetime.datetime.now().year,
+                        value=(2015, datetime.datetime.now().year),
+                        key="eia_yr_range",
+                    )
+                with ec2:
+                    eia_padds = st.multiselect(
+                        "PADD Regions",
+                        options=["R10","R20","R30","R40","R50"],
+                        default=["R10","R20","R30","R40","R50"],
+                        format_func=lambda x: _PADD_LABELS[x],
+                        key="eia_padds",
+                    )
+
+                yr_start, yr_end = eia_yr_range
+
+                # ── PADD Ethanol Production — stacked area / bar ──────────────
+                st.markdown(
+                    f"<h4 style='color:{ACCENT};margin-bottom:6px;margin-top:12px;'>"
+                    "Ethanol Plant Production by PADD Region (Monthly, Million Gallons/Day)</h4>",
+                    unsafe_allow_html=True,
+                )
+
+                if not eth_df.empty:
+                    eth_plot = eth_df[
+                        (eth_df["padd"].isin(eia_padds)) &
+                        (eth_df["period"].dt.year >= yr_start) &
+                        (eth_df["period"].dt.year <= yr_end)
+                    ].copy()
+
+                    fig_eth = go.Figure()
+                    for area in ["R10","R20","R30","R40","R50"]:
+                        if area not in eia_padds:
+                            continue
+                        sub = eth_plot[eth_plot["padd"] == area].sort_values("period")
+                        fig_eth.add_trace(go.Scatter(
+                            x=sub["period"], y=sub["mgal_day"],
+                            mode="lines",
+                            name=_PADD_LABELS[area],
+                            line=dict(color=_PADD_COLORS[area], width=1.5),
+                            stackgroup="one",
+                            fillcolor=_PADD_COLORS[area],
+                            hovertemplate=f"{_PADD_LABELS[area]}: %{{y:.1f}} Mgal/day<extra></extra>",
+                        ))
+                    # US Total overlay line (monthly avg)
+                    nat_plot = eth_df[
+                        (eth_df["padd"] == "NUS") &
+                        (eth_df["period"].dt.year >= yr_start) &
+                        (eth_df["period"].dt.year <= yr_end)
+                    ].sort_values("period")
+                    fig_eth.add_trace(go.Scatter(
+                        x=nat_plot["period"], y=nat_plot["mgal_day"],
+                        mode="lines",
+                        name="US Total",
+                        line=dict(color="#ffffff", width=2, dash="dot"),
+                        hovertemplate="US Total: %{y:.1f} Mgal/day<extra></extra>",
+                    ))
+                    fig_eth.update_layout(
+                        paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                        font=dict(color=TEXT, family="Arial"),
+                        margin=dict(l=60, r=20, t=20, b=50),
+                        height=380,
+                        showlegend=True,
+                        legend=dict(font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)",
+                                    orientation="h", yanchor="bottom", y=1.02, x=0),
+                        xaxis=dict(title="Month", gridcolor=BORDER, tickfont=dict(color=MUTED),
+                                   title_font=dict(color=MUTED)),
+                        yaxis=dict(title="Million Gallons/Day", gridcolor=BORDER,
+                                   tickfont=dict(color=MUTED), title_font=dict(color=MUTED)),
+                        hovermode="x unified",
+                    )
+                    _add_logo(fig_eth, logo_50yr)
+                    _chart(fig_eth, use_container_width=True, config={"displayModeBar": False})
+
+                    # ── PADD snapshot bar (latest 12-month average) ───────────
+                    st.markdown(
+                        f"<h4 style='color:{ACCENT};margin-bottom:6px;margin-top:20px;'>"
+                        "PADD Region Share — Latest 12-Month Average</h4>",
+                        unsafe_allow_html=True,
+                    )
+                    cutoff_12m = eth_df["period"].max() - pd.DateOffset(months=11)
+                    padd_avg = eth_df[
+                        (eth_df["padd"] != "NUS") &
+                        (eth_df["period"] >= cutoff_12m)
+                    ].groupby("padd")["mgal_day"].mean().reset_index()
+                    padd_avg["label"] = padd_avg["padd"].map(_PADD_LABELS)
+                    padd_avg["color"] = padd_avg["padd"].map(_PADD_COLORS)
+                    padd_avg = padd_avg.sort_values("mgal_day", ascending=True)
+                    padd_avg["share_pct"] = padd_avg["mgal_day"] / padd_avg["mgal_day"].sum() * 100
+
+                    fig_padd = go.Figure(go.Bar(
+                        x=padd_avg["mgal_day"],
+                        y=padd_avg["label"],
+                        orientation="h",
+                        marker_color=padd_avg["color"],
+                        text=padd_avg.apply(lambda r: f"{r['mgal_day']:.1f} ({r['share_pct']:.0f}%)", axis=1),
+                        textposition="outside",
+                        textfont=dict(color=TEXT, size=10),
+                        hovertemplate="%{y}: %{x:.1f} Mgal/day<extra></extra>",
+                    ))
+                    fig_padd.update_layout(
+                        paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                        font=dict(color=TEXT, family="Arial"),
+                        margin=dict(l=20, r=100, t=10, b=50),
+                        height=300,
+                        xaxis=dict(title="Avg. Million Gallons/Day", gridcolor=BORDER,
+                                   tickfont=dict(color=MUTED), title_font=dict(color=MUTED)),
+                        yaxis=dict(tickfont=dict(color=TEXT), gridcolor=BORDER),
+                    )
+                    _add_logo(fig_padd, logo_50yr)
+                    _chart(fig_padd, use_container_width=True, config={"displayModeBar": False})
+
+                # ── Feedstock Consumption ─────────────────────────────────────
+                if not feed_df.empty:
+                    st.markdown("<hr style='border-color:#3a3f47;margin:24px 0 16px 0;'>",
+                                unsafe_allow_html=True)
+                    st.markdown(
+                        f"<h4 style='color:{ACCENT};margin-bottom:4px;'>Biofuel Feedstock Consumption — National (Monthly)</h4>"
+                        f"<p style='color:{MUTED};font-size:0.82rem;margin-top:0;'>"
+                        "Feedstocks consumed at US biofuel plants. Corn converted to million bushels (÷ 56 lbs/bu). "
+                        "Data available from Jan 2019. Source: EIA Monthly Biofuels Capacity and Feedstocks Update.</p>",
+                        unsafe_allow_html=True,
+                    )
+
+                    feed_plot = feed_df[feed_df["period"].dt.year.between(yr_start, yr_end)].copy()
+
+                    fig_feed = go.Figure()
+
+                    # Corn on primary axis (million bu)
+                    corn_sub = feed_plot[feed_plot["product"] == "EPOOBDAFC"].sort_values("period")
+                    if not corn_sub.empty:
+                        fig_feed.add_trace(go.Bar(
+                            x=corn_sub["period"],
+                            y=corn_sub["mbu_corn"],
+                            name="Corn (M bu)",
+                            marker_color=_FEED_COLORS["EPOOBDAFC"],
+                            hovertemplate="Corn: %{y:.1f}M bu<extra></extra>",
+                        ))
+
+                    # Grain sorghum on primary axis (million bu), stacked with corn
+                    sorg_sub = feed_plot[feed_plot["product"] == "EPOOBDAFS"].sort_values("period")
+                    if not sorg_sub.empty:
+                        fig_feed.add_trace(go.Bar(
+                            x=sorg_sub["period"],
+                            y=sorg_sub["mbu_sorg"],
+                            name="Grain Sorghum (M bu)",
+                            marker_color=_FEED_COLORS["EPOOBDAFS"],
+                            hovertemplate="Grain Sorghum: %{y:,.1f}M bu<extra></extra>",
+                        ))
+
+                    # Soy oil on secondary axis (million lbs)
+                    soy_sub = feed_plot[feed_plot["product"] == "EPOOBDSO"].sort_values("period")
+                    if not soy_sub.empty:
+                        fig_feed.add_trace(go.Scatter(
+                            x=soy_sub["period"],
+                            y=soy_sub["mmlb"],
+                            name="Soy Oil (M lbs)",
+                            mode="lines+markers",
+                            line=dict(color=_FEED_COLORS["EPOOBDSO"], width=2),
+                            marker=dict(size=4),
+                            yaxis="y2",
+                            hovertemplate="Soy Oil: %{y:,.0f}M lbs<extra></extra>",
+                        ))
+
+                    # Corn oil for biodiesel (secondary axis, M lbs)
+                    cno_sub = feed_plot[feed_plot["product"] == "EPOOBDCNOD"].sort_values("period")
+                    if not cno_sub.empty:
+                        fig_feed.add_trace(go.Scatter(
+                            x=cno_sub["period"],
+                            y=cno_sub["mmlb"],
+                            name="Corn Oil (M lbs)",
+                            mode="lines+markers",
+                            line=dict(color=_FEED_COLORS["EPOOBDCNOD"], width=1.5, dash="dot"),
+                            marker=dict(size=4),
+                            yaxis="y2",
+                            hovertemplate="Corn Oil: %{y:,.0f}M lbs<extra></extra>",
+                        ))
+
+                    fig_feed.update_layout(
+                        paper_bgcolor=DARK, plot_bgcolor=SURFACE,
+                        font=dict(color=TEXT, family="Arial"),
+                        margin=dict(l=60, r=70, t=20, b=50),
+                        height=380,
+                        barmode="stack",
+                        showlegend=True,
+                        legend=dict(font=dict(color=TEXT, size=10), bgcolor="rgba(0,0,0,0)",
+                                    orientation="h", yanchor="bottom", y=1.02, x=0),
+                        xaxis=dict(title="Month", gridcolor=BORDER,
+                                   tickfont=dict(color=MUTED), title_font=dict(color=MUTED)),
+                        yaxis=dict(title="Grain Feedstocks (Million Bushels)", gridcolor=BORDER,
+                                   tickfont=dict(color=_FEED_COLORS["EPOOBDAFC"]),
+                                   title_font=dict(color=_FEED_COLORS["EPOOBDAFC"])),
+                        yaxis2=dict(title="Million Lbs (Oils)", overlaying="y", side="right",
+                                    tickfont=dict(color=_FEED_COLORS["EPOOBDSO"], size=10),
+                                    title_font=dict(color=_FEED_COLORS["EPOOBDSO"]),
+                                    showgrid=False),
+                        hovermode="x unified",
+                    )
+                    _add_logo(fig_feed, logo_50yr)
+                    _chart(fig_feed, use_container_width=True, config={"displayModeBar": False})
+
+                    # ── Annual feedstock table ────────────────────────────────
+                    st.markdown(
+                        f"<h4 style='color:{ACCENT};margin-bottom:6px;margin-top:20px;'>Annual Feedstock Summary</h4>",
+                        unsafe_allow_html=True,
+                    )
+                    feed_ann = feed_df.copy()
+                    feed_ann["year"] = feed_ann["period"].dt.year
+                    corn_ann = feed_ann[feed_ann["product"] == "EPOOBDAFC"].groupby("year").agg(
+                        corn_mbu=("mbu_corn", "sum"),
+                        corn_mmlb=("mmlb", "sum"),
+                    ).reset_index()
+                    sorg_ann = feed_ann[feed_ann["product"] == "EPOOBDAFS"].groupby("year").agg(
+                        sorg_mbu=("mbu_sorg", "sum"),
+                        sorg_mmlb=("mmlb", "sum"),
+                    ).reset_index()
+                    soy_ann  = feed_ann[feed_ann["product"] == "EPOOBDSO"].groupby("year").agg(
+                        soy_mmlb=("mmlb", "sum"),
+                    ).reset_index()
+                    cno_ann  = feed_ann[feed_ann["product"] == "EPOOBDCNOD"].groupby("year").agg(
+                        cno_mmlb=("mmlb", "sum"),
+                    ).reset_index()
+                    ann_tbl = corn_ann.merge(sorg_ann, on="year", how="outer") \
+                                      .merge(soy_ann, on="year", how="outer") \
+                                      .merge(cno_ann, on="year", how="outer") \
+                                      .sort_values("year", ascending=False)
+
+                    ann_disp = pd.DataFrame({
+                        "Year":                  ann_tbl["year"].astype(str),
+                        "Corn for Ethanol (M bu)": ann_tbl["corn_mbu"].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "—"),
+                        "Grain Sorghum for Ethanol (M bu)": ann_tbl["sorg_mbu"].map(lambda v: f"{v:,.1f}" if pd.notna(v) else "—"),
+                        "Soy Oil for Biodiesel (M lbs)": ann_tbl["soy_mmlb"].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "—"),
+                        "Corn Oil for Biodiesel (M lbs)": ann_tbl["cno_mmlb"].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "—"),
+                    })
+                    st.dataframe(ann_disp, use_container_width=True, hide_index=True)
+
+                    st.caption(
+                        "EIA Monthly Biofuels Capacity and Feedstocks Update (petroleum/pnp/feedbiofuel). "
+                        "Feedstock data available from Jan 2019 – present. "
+                        "Ethanol production data: petroleum/pnp/wprode, PADD 1–5 + US Total, Jun 2010 – present."
+                    )
 
     # ── Disclaimer footer ────────────────────────────────────────────────────
     st.markdown("<hr style='border-color:#3a3f47;margin-top:40px;margin-bottom:12px;'>", unsafe_allow_html=True)
