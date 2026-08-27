@@ -294,7 +294,7 @@ c1, c2 = st.columns([7, 3])
 with c1:
     st.markdown(
         f"<h1 style='color:{DM_TEXT};margin:0;padding:0;font-size:1.9rem;'>"
-        "Daily Beef Cutout</h1>"
+        "JSA - Daily Beef Cutout</h1>"
         f"<div style='color:{DM_MUTED};font-size:0.8rem;margin-top:2px;'>"
         "Choice &amp; Select Composite 600–900 lbs · USDA LMR LM_XB403</div>",
         unsafe_allow_html=True,

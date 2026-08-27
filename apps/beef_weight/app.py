@@ -647,7 +647,7 @@ with hdr_l:
       <img src="{JSA_LOGO_FULL}" style="height:68px" />
       <div>
         <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
-          USDA Beef Slaughter Weights
+          JSA - USDA Beef Slaughter Weights
         </div>
         <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
           Weekly snapshot &nbsp;·&nbsp; USDA NASS QuickStats &nbsp;·&nbsp; Federally Inspected &nbsp;·&nbsp; Commercial Slaughter
