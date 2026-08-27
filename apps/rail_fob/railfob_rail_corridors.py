@@ -54,4 +54,9 @@ RAIL_DISPLAY = {
 }
 
 RAIL_COLORS = {"CSX": "#0693e3", "NS": "#7c3aed", "UP": "#d97706",
-               "BNSF": "#16a34a", "CN": "#b91c1c"}
+               "BNSF": "#16a34a", "CN": "#b91c1c",
+               # Added for the Shipments tab's carload data (Kolten's rail_freight
+               # dashboard merge, 2026-08-26) — CP/CPKC/KCS don't appear in the
+               # rail_fob bid boards above, only in USDA carload volumes.
+               "CP": "#0891b2", "CPKC": "#0e7490", "CP/CPKC": "#0891b2",
+               "KCS": "#db2777"}

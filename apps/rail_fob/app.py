@@ -18,16 +18,21 @@ import os
 import re
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path as _Path
 
-sys.path.insert(0, str(_Path(__file__).parent))
-
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+
+sys.path.insert(0, str(_Path(__file__).parent))
 
 import freight_data as FD
 import rail_data as RD
 import river_data as RVD
+import shipment_data as SD
 # Renamed on disk (rail_corridors.py -> railfob_rail_corridors.py) for the JSA
 # Admin Portal merge: basis_tracker has its OWN same-named module, and
 # Python's sys.modules cache would silently hand one page's import to the
@@ -42,7 +47,7 @@ except ModuleNotFoundError:
     pass
 
 try:
-    for _secret_key in ("BASIS_DATABASE_URL", "RIVER_DATABASE_URL"):
+    for _secret_key in ("BASIS_DATABASE_URL", "RIVER_DATABASE_URL", "USDA_APP_TOKEN"):
         if _secret_key in st.secrets and not os.environ.get(_secret_key):
             os.environ[_secret_key] = st.secrets[_secret_key]
 except Exception:
@@ -1035,6 +1040,47 @@ def _bn_tab(sel_date):
 _CN_LETTER = {v: k[-1].upper() for k, v in FD.CN_RATE_FIELD.items()}
 
 
+def _cn_state_fob_table(filtered, cif, months, active_cols, commodity):
+    """One row per state per active car size/source variant, one column per
+    CIF month — best (highest) FOB among every origin/volume-tier in that
+    state for that variant. Mirrors CSX's per-variant FOB Index by State
+    (_state_fob_table above), but built against CN's CIF-month columns and
+    per-row size/source freight instead of a period-keyed bid market."""
+    by_state = {}
+    for r in filtered:
+        by_state.setdefault(r["state"], []).append(r)
+    if not by_state:
+        st.caption("No data to index by state yet.")
+        return
+
+    ncols = 1 + len(months)
+    html = ['<table class="sheet"><tbody><tr>', '<th class="lblhdr">State</th>']
+    html += [f'<th>{m}</th>' for m in months]
+    html.append('</tr>')
+    for s in sorted(by_state):
+        rows_s = by_state[s]
+        label_rows = []
+        for size, source, field in active_cols:
+            vals = []
+            for m in months:
+                base = cif.get(m)
+                if base is None:
+                    vals.append(None)
+                    continue
+                best = max(base - FD.cn_freight_cpb(r[field], size, commodity) for r in rows_s)
+                vals.append(best)
+            label_rows.append((f"{size} · {source}", vals))
+        html.append(f'<tr class="origin-hdr"><td colspan="{ncols}">{s}</td></tr>')
+        html.extend(_variant_value_rows(label_rows))
+    html.append('</tbody></table>')
+    table_html = ''.join(html)
+    st.markdown(_card_open() + table_html + _card_close(), unsafe_allow_html=True)
+    _table_actions(table_html, "cn_state_index.png")
+    st.caption("Best (highest) FOB among every origin/volume-tier in that state, per car "
+               "size/source, per CIF month — an index, not any single origin's actual "
+               "number. Blue = the better size/source for that state/month.")
+
+
 def _cn_tab():
     st.caption("Raw CN Gulf Export tariff rates (Supplement 41 to Tariff CN 004050-A8), plus "
                "a FOB netback against CIF NOLA from the River FOB Portal — CN's freight "
@@ -1072,6 +1118,66 @@ def _cn_tab():
     filtered = sorted((r for r in rows if r["state"] in sel_states and r["tier"] in sel_tiers),
                        key=lambda r: (r["state"], r["origin"], tier_order.index(r["tier"])))
 
+    # ── FOB (CIF netback) sections up top; the raw tariff table moves to the
+    # bottom for reference — Kolten's call, 2026-08-26: the FOB values are
+    # what's actually used day to day, the raw $/car rates are backup detail.
+    cif_error = None
+    as_of, cif, months = None, {}, []
+    if not RVD.configured():
+        cif_error = ("RIVER_DATABASE_URL isn't set, so this can't reach the River FOB Portal's "
+                     "CIF NOLA archive yet. Add it to `.env` locally or as a Streamlit secret.")
+    else:
+        try:
+            as_of, cif = RVD.latest_cif(commodity)
+        except Exception as e:
+            cif_error = f"Couldn't reach the River FOB Portal's database: {e}"
+        else:
+            if not as_of or not cif:
+                cif_error = f"No {commodity} CIF NOLA history found in the River FOB Portal's archive yet."
+            else:
+                months = sorted(cif, key=RVD.month_sort_key)
+
+    st.markdown(f"### {commodity} FOB Index by State")
+    if cif_error:
+        st.info(cif_error)
+    else:
+        _cn_state_fob_table(filtered, cif, months, active_cols, commodity)
+
+    st.markdown(f"### {commodity} FOB by Origin")
+    if cif_error:
+        st.info(cif_error)
+    else:
+        ncols = 1 + len(months)
+        html = _origin_table_open(months, ncols)
+        for r in filtered:
+            variants = [(f"{size} · {source}", FD.cn_freight_cpb(r[field], size, commodity))
+                        for size, source, field in active_cols]
+            label_rows = [(lbl, [None if cif.get(m) is None else cif[m] - frt for m in months])
+                          for lbl, frt in variants]
+            switch_mark = ' <span class="fut-sub">⇄ recip. switch</span>' if r["switch"] else ''
+            html.append(
+                f'<tr class="origin-hdr"><td colspan="{ncols}">{r["state"]} · {r["origin"]}'
+                f'<span class="fut-sub"> &nbsp;{r["tier"] or r["notes"] or ""}</span>{switch_mark}</td></tr>'
+            )
+            html.extend(_variant_value_rows(label_rows))
+        html.append('</tbody></table>')
+        table_html = ''.join(html)
+        st.markdown(_card_open() + table_html + _card_close(), unsafe_allow_html=True)
+        _table_actions(table_html, "cn_fob.png")
+        bpc = FD.CN_BU_PER_CAR[commodity]
+        soy_note = (' (derived from the same car\'s weight capacity as corn, ÷60 lb/bu instead of 56)'
+                    if commodity == "Soybeans" else '')
+        st.markdown(
+            f'<div class="legend">FOB(origin) = {commodity} CIF NOLA (as of {as_of}, River FOB '
+            'Portal) − rail freight (¢/bu = $/car ÷ bu/car). Bu/car is by car SIZE only — '
+            f'{bpc["Small"]:,} bu for Small (≤5149 ft³), {bpc["Large"]:,} bu for Large '
+            f'(>5149 ft³){soy_note} — railroad- vs private-supplied doesn\'t change how many '
+            'bushels physically fit. One column per CIF delivery month currently archived; blue = '
+            'the better car size/source for that origin/month.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("### Raw CN Gulf Export Rates")
     html = ['<table class="sheet"><tbody><tr>',
             '<th class="lblhdr">State</th>', '<th class="lblhdr">Origin</th>',
             '<th class="lblhdr">Volume Tier</th>']
@@ -1083,7 +1189,7 @@ def _cn_tab():
         letter = _CN_LETTER[field]
         mark = ' <span class="fut-sub">(C)</span>' if letter.lower() in (r.get("changed") or ()) else ''
         cpb = FD.cn_freight_cpb(v, size, commodity)
-        return f'<td>{v:,.0f}{mark}<br><span class="fut-sub">{cpb:.1f}¢/bu</span></td>'
+        return f'<td>{cpb:.1f}¢/bu{mark}<br><span class="fut-sub">&#36;{v:,.0f}/car</span></td>'
 
     for r in filtered:
         switch_mark = ' <span class="fut-sub">⇄ recip. switch</span>' if r["switch"] else ''
@@ -1098,10 +1204,10 @@ def _cn_tab():
     table_html = ''.join(html)
     st.markdown(_card_open() + table_html + _card_close(), unsafe_allow_html=True)
     _table_actions(table_html, "cn_rates.png")
-    st.caption(f"{len(filtered)} of {len(rows)} rate rows shown (\\$/car, with the {commodity.lower()} "
-               f"¢/bu equivalent below each — {FD.CN_LB_PER_BU[commodity]} lb/bu). All rows currently "
-               "go to Gulf Exports Group — multiple rows per origin are different volume "
-               "tiers, not different destinations. (C) = tariff-flagged as recently changed. "
+    st.caption(f"{len(filtered)} of {len(rows)} rate rows shown as {commodity.lower()} ¢/bu "
+               f"({FD.CN_LB_PER_BU[commodity]} lb/bu), with the tariff's own \\$/car rate below each. "
+               "All rows currently go to Gulf Exports Group — multiple rows per origin are different "
+               "volume tiers, not different destinations. (C) = tariff-flagged as recently changed. "
                "⇄ recip. switch = this rate includes a reciprocal switch at origin (up to "
                "\\$139/car) — most rows exclude it, this just flags the ones that don't.")
 
@@ -1109,47 +1215,6 @@ def _cn_tab():
         st.markdown(
             "  \n".join(f"**{k}** — {v}" for k, v in FD.CN_NOTES.items())
         )
-
-    st.markdown(f"### {commodity} FOB by Origin")
-    if not RVD.configured():
-        st.info("RIVER_DATABASE_URL isn't set, so this can't reach the River FOB Portal's "
-                 "CIF NOLA archive yet. Add it to `.env` locally or as a Streamlit secret.")
-        return
-    as_of, cif = RVD.latest_cif(commodity)
-    if not as_of or not cif:
-        st.caption(f"No {commodity} CIF NOLA history found in the River FOB Portal's archive yet.")
-        return
-    months = sorted(cif, key=RVD.month_sort_key)
-
-    ncols = 1 + len(months)
-    html = _origin_table_open(months, ncols)
-    for r in filtered:
-        variants = [(f"{size} · {source}", FD.cn_freight_cpb(r[field], size, commodity))
-                    for size, source, field in active_cols]
-        label_rows = [(lbl, [None if cif.get(m) is None else cif[m] - frt for m in months])
-                      for lbl, frt in variants]
-        switch_mark = ' <span class="fut-sub">⇄ recip. switch</span>' if r["switch"] else ''
-        html.append(
-            f'<tr class="origin-hdr"><td colspan="{ncols}">{r["state"]} · {r["origin"]}'
-            f'<span class="fut-sub"> &nbsp;{r["tier"] or r["notes"] or ""}</span>{switch_mark}</td></tr>'
-        )
-        html.extend(_variant_value_rows(label_rows))
-    html.append('</tbody></table>')
-    table_html = ''.join(html)
-    st.markdown(_card_open() + table_html + _card_close(), unsafe_allow_html=True)
-    _table_actions(table_html, "cn_fob.png")
-    bpc = FD.CN_BU_PER_CAR[commodity]
-    soy_note = (' (derived from the same car\'s weight capacity as corn, ÷60 lb/bu instead of 56)'
-                if commodity == "Soybeans" else '')
-    st.markdown(
-        f'<div class="legend">FOB(origin) = {commodity} CIF NOLA (as of {as_of}, River FOB '
-        'Portal) − rail freight (¢/bu = $/car ÷ bu/car). Bu/car is by car SIZE only — '
-        f'{bpc["Small"]:,} bu for Small (≤5149 ft³), {bpc["Large"]:,} bu for Large '
-        f'(>5149 ft³){soy_note} — railroad- vs private-supplied doesn\'t change how many '
-        'bushels physically fit. One column per CIF delivery month currently archived; blue = '
-        'the better car size/source for that origin/month.</div>',
-        unsafe_allow_html=True,
-    )
 
 
 def _expanded_freight_table(rows, state_key, label_cols, variants, name="all_origins"):
@@ -1231,8 +1296,607 @@ def _references_tab():
     _table_actions(table_html, "reference_links.png")
 
 
-bids_tab, csx_tab, ns_tab, bn_tab, cn_tab, map_tab, refs_tab = st.tabs(
-    ["📋 Bids", "CSX", "NS", "BN", "CN", "🗺️ Map", "🔗 References"])
+# ─────────────────────────────────────────────────────────────────────────────
+# SHIPMENTS TAB — USDA AMS carload/shipment-volume data, merged in from the
+# standalone "JSA Rail Freight Dashboard" (jsa-home-page/apps/rail_freight),
+# 2026-08-26. That app had its own dark-green CSS theme; Kolten's call was to
+# drop that and re-theme its charts to this portal's existing light JPSI
+# palette instead, so this reads as one product rather than two apps bolted
+# together. The underlying data/math (MY week convention, Olympic average,
+# bu/car conversion) is untouched — only the presentation layer changed.
+# ─────────────────────────────────────────────────────────────────────────────
+_SHIP_MONTH_ORDER = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_SHIP_WESTERN_STATES = ["IA", "NE", "SD", "ND", "MN", "KS", "MO"]
+_SHIP_EASTERN_STATES = ["IL", "IN", "OH", "MI", "KY"]
+_SHIP_VALID_STATES = [
+    'AL', 'AR', 'AZ', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'IA', 'ID', 'IL', 'IN', 'KS',
+    'KY', 'LA', 'MA', 'MD', 'ME', 'MI', 'MN', 'MO', 'MS', 'MT', 'NC', 'ND', 'NE', 'NH',
+    'NJ', 'NM', 'NV', 'NY', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT',
+    'VA', 'VT', 'WA', 'WI', 'WV', 'WY',
+]
+_SHIP_POS, _SHIP_NEG, _SHIP_GOLD = "#16a34a", "#dc2626", "#b45309"
+_SHIP_PARQUET_PATH = _Path(__file__).parent / "data" / "rail_data.parquet"
+
+
+def _ship_layout(**kwargs):
+    """Plotly layout defaults matching this portal's light JPSI theme
+    (paper/plot white, muted-gray axis text, JPSI_BLUE/DARK accents) rather
+    than the source dashboard's own dark theme."""
+    layout = dict(
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        font=dict(color="#6b7280", family="Source Sans Pro, system-ui, sans-serif", size=11),
+        margin=dict(l=8, r=8, t=36, b=8),
+        legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)",
+                    font=dict(color="#6b7280", size=10)),
+        xaxis=dict(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", tickfont=dict(color="#6b7280")),
+        yaxis=dict(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", tickfont=dict(color="#6b7280")),
+    )
+    layout.update(kwargs)
+    return layout
+
+
+def _ship_oly_avg(vals):
+    """Olympic average: drop highest and lowest, mean of the rest (simple
+    mean under 4 values, 0 if empty)."""
+    v = [x for x in vals if x is not None and not np.isnan(x)]
+    if not v:
+        return 0
+    if len(v) >= 4:
+        return float(np.mean(sorted(v)[1:-1]))
+    return float(np.mean(v))
+
+
+def _ship_pct(curr, base):
+    return None if not base else round((curr / base - 1) * 100, 1)
+
+
+def _ship_fbu(n):
+    n = float(n)
+    if abs(n) >= 1_000_000_000:
+        return f"{n/1_000_000_000:.2f}B"
+    if abs(n) >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if abs(n) >= 1_000:
+        return f"{n/1_000:.0f}K"
+    return str(int(n))
+
+
+def _ship_fdiff(curr, base):
+    if not base:
+        return "—"
+    diff = curr - base
+    return f"{'+' if diff >= 0 else ''}{_ship_fbu(diff)}"
+
+
+def _ship_fpct(v):
+    return "—" if v is None else f"{'+' if v >= 0 else ''}{v:.1f}%"
+
+
+def _ship_prep_df(df, cp_mode):
+    if cp_mode == "Combined":
+        df = df.copy()
+        df['Railroad'] = df['Railroad'].replace({'CP': 'CP/CPKC', 'CPKC': 'CP/CPKC'})
+    return df
+
+
+def _ship_get_rrs(df, cp_mode):
+    rrs = sorted(df['Railroad'].dropna().unique().tolist())
+    if cp_mode != "Combined":
+        return rrs
+    merged = []
+    for r in rrs:
+        if r in ('CP', 'CPKC'):
+            if 'CP/CPKC' not in merged:
+                merged.append('CP/CPKC')
+        else:
+            merged.append(r)
+    return merged
+
+
+@st.cache_data(ttl=3600)
+def _ship_load_from_api(token=""):
+    df = SD.load_usda_data(app_token=token or None)
+    return df, datetime.now().strftime("%b %d %Y %I:%M %p")
+
+
+@st.cache_data
+def _ship_load_from_file():
+    df = pd.read_parquet(_SHIP_PARQUET_PATH)
+    ts = datetime.fromtimestamp(_SHIP_PARQUET_PATH.stat().st_mtime).strftime("%b %d %Y")
+    return df, ts
+
+
+def _shipments_tab():
+    st.caption("USDA AMS weekly grain rail carloads (agtransport.usda.gov), converted to "
+               "bushels at 4,000 bu/car — merged in from the standalone Rail Freight "
+               "Dashboard. This is shipment VOLUME, not a freight rate — a different "
+               "question from the FOB tabs above (\"how much moved\" vs. \"what does it cost\").")
+
+    with st.expander("Data source"):
+        token = st.text_input("USDA App Token (optional)", type="password",
+                               help="Free token from agtransport.usda.gov — increases rate limits.",
+                               key="ship_token")
+        if st.button("Refresh from live API", key="ship_refresh"):
+            st.cache_data.clear()
+            st.session_state["ship_force_api"] = True
+            st.rerun()
+        st.caption("Loads from bundled data by default; use the button above for the latest.")
+        st.caption("KCS reported as a national total only (no state breakdown).")
+
+    _secret_token = os.environ.get("USDA_APP_TOKEN", "")
+    effective_token = token or _secret_token
+
+    if st.session_state.get("ship_force_api"):
+        with st.spinner("Fetching latest USDA data from API…"):
+            try:
+                df, last_updated = _ship_load_from_api(effective_token)
+                data_source = "LIVE API"
+            except Exception as e:
+                st.error(f"API fetch failed: {e}")
+                st.session_state["ship_force_api"] = False
+                st.rerun()
+    elif _SHIP_PARQUET_PATH.exists():
+        df, last_updated = _ship_load_from_file()
+        data_source = "Bundled"
+    else:
+        with st.spinner("Fetching USDA data…"):
+            try:
+                df, last_updated = _ship_load_from_api(effective_token)
+                data_source = "LIVE API"
+            except Exception as e:
+                st.error(f"Failed to load data: {e}")
+                st.stop()
+
+    badge = ("🟢 LIVE API" if data_source == "LIVE API" else f"🔵 data as of {last_updated}")
+    st.caption(f"**{badge}**")
+
+    all_years = sorted(df['Market Year'].dropna().unique().tolist())
+
+    (sub_progress, sub_month, sub_map, sub_weekly, sub_yearly, sub_summary) = st.tabs([
+        "Progress", "Railroad by month", "State map", "Weekly by year",
+        "Yearly by railroad", "Summary",
+    ])
+
+    with sub_progress:
+        _ship_tab_progress(df, all_years)
+    with sub_month:
+        _ship_tab_by_month(df)
+    with sub_map:
+        _ship_tab_state_map(df, all_years)
+    with sub_weekly:
+        _ship_tab_weekly(df, all_years)
+    with sub_yearly:
+        _ship_tab_yearly(df)
+    with sub_summary:
+        _ship_tab_summary(df, all_years)
+
+
+def _ship_tab_progress(df, all_years):
+    c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 2])
+    with c1:
+        sel_yr = st.selectbox("Market year", list(reversed(all_years)), index=0, key="t1_year")
+    with c2:
+        cp_mode1 = st.radio("CP/CPKC", ["Combined", "Split"], horizontal=True, key="t1_cp")
+    with c3:
+        dfc1 = _ship_prep_df(df, cp_mode1)
+        sel_rr1 = st.selectbox("Railroad", ["All"] + _ship_get_rrs(df, cp_mode1), key="t1_rr")
+    with c4:
+        states_avail1 = sorted(df['State'].dropna().unique().tolist())
+        st.selectbox("State", ["All"] + states_avail1, key="t1_state")
+
+    max_wk = int(df[df['Market Year'] == sel_yr]['MY Week'].max())
+    _yr_idx = all_years.index(sel_yr)
+    ly_yr = all_years[_yr_idx - 1] if _yr_idx > 0 else None
+    pool_years = sorted([y for y in all_years if y < sel_yr])[-6:]
+    is_split = (cp_mode1 == "Split")
+    pool_label = f"{min(pool_years)}–{max(pool_years)}" if pool_years else "—"
+    st.caption(f"{sel_yr} — Week {max_wk} · vs LY: {ly_yr or 'N/A'} · "
+               f"6-yr avg: {pool_label} (drop hi/lo)")
+
+    def _s(d, year, rr=None, state=None):
+        mask = (d['Market Year'] == year) & (d['MY Week'] <= max_wk)
+        if rr:
+            mask &= (d['Railroad'] == rr)
+        if state:
+            mask &= (d['State'] == state)
+        return float(d.loc[mask, 'Est Bushels'].sum())
+
+    def metrics(rr=None, state=None):
+        curr = _s(dfc1, sel_yr, rr, state)
+        ly = _s(dfc1, ly_yr, rr, state)
+        avg = _ship_oly_avg([_s(dfc1, y, rr, state) for y in pool_years])
+        return dict(current=curr, ly=ly, avg=avg,
+                    pct_ly=_ship_pct(curr, ly), pct_avg=_ship_pct(curr, avg))
+
+    st.markdown("#### Railroad summary")
+    all_rrs = _ship_get_rrs(dfc1, cp_mode1)
+    rr_rows = []
+    for rr in all_rrs:
+        m = metrics(rr=rr)
+        hide = is_split and rr in ("CP", "CPKC")
+        rr_rows.append({
+            "Railroad": rr, "MYtD bu": _ship_fbu(m['current']),
+            "vs LY": "—" if hide else _ship_fdiff(m['current'], m['ly']),
+            "% vs LY": "—" if hide else _ship_fpct(m['pct_ly']),
+            "vs 6-yr avg": "—" if hide else _ship_fdiff(m['current'], m['avg']),
+            "% vs avg": "—" if hide else _ship_fpct(m['pct_avg']),
+        })
+    tot = metrics()
+    rr_rows.append({"Railroad": "TOTAL", "MYtD bu": _ship_fbu(tot['current']),
+                     "vs LY": _ship_fdiff(tot['current'], tot['ly']),
+                     "% vs LY": _ship_fpct(tot['pct_ly']),
+                     "vs 6-yr avg": _ship_fdiff(tot['current'], tot['avg']),
+                     "% vs avg": _ship_fpct(tot['pct_avg'])})
+    with st.container(border=True):
+        st.dataframe(pd.DataFrame(rr_rows), width='stretch', hide_index=True,
+                     height=min(42 * (len(rr_rows) + 1) + 38, 500))
+
+    st.markdown("#### Railroad deviation")
+    dev_rrs, pct_ly_vals, pct_avg_vals, diff_ly_vals, diff_avg_vals = [], [], [], [], []
+    for rr in all_rrs:
+        m = metrics(rr=rr)
+        if is_split and rr in ("CP", "CPKC"):
+            continue
+        dev_rrs.append(rr)
+        pct_ly_vals.append(m['pct_ly'] or 0)
+        pct_avg_vals.append(m['pct_avg'] or 0)
+        diff_ly_vals.append(_ship_fdiff(m['current'], m['ly']))
+        diff_avg_vals.append(_ship_fdiff(m['current'], m['avg']))
+
+    fig_rr = go.Figure()
+    fig_rr.add_trace(go.Bar(name="% vs last year", y=dev_rrs, x=pct_ly_vals, orientation='h',
+                             marker_color=[_SHIP_POS if v >= 0 else _SHIP_NEG for v in pct_ly_vals],
+                             text=diff_ly_vals, textposition='outside'))
+    fig_rr.add_trace(go.Bar(name="% vs 6-yr avg", y=dev_rrs, x=pct_avg_vals, orientation='h',
+                             marker_color=[JPSI_BLUE if v >= 0 else _SHIP_GOLD for v in pct_avg_vals],
+                             text=diff_avg_vals, textposition='outside'))
+    rr_layout = _ship_layout(barmode='group', height=max(300, len(dev_rrs) * 52 + 80),
+                              title=dict(text=f"Deviation from LY & 6-yr avg — Week {max_wk}",
+                                         font=dict(color=JPSI_DARK, size=13)))
+    rr_layout['xaxis'].update(tickformat='+.0f', ticksuffix='%')
+    fig_rr.update_layout(**rr_layout)
+    with st.container(border=True):
+        st.plotly_chart(fig_rr, width='stretch')
+
+    st.markdown("#### State deviation")
+    state_group = st.radio("State group",
+                            ["Top 15", "All states", "Western (IA NE SD ND MN KS MO)",
+                             "Eastern (IL IN OH MI KY)"], horizontal=True, key="t1_state_group")
+    if "Western" in state_group:
+        state_universe = _SHIP_WESTERN_STATES
+    elif "Eastern" in state_group:
+        state_universe = _SHIP_EASTERN_STATES
+    else:
+        state_universe = states_avail1
+
+    rel_years = [sel_yr, ly_yr] + pool_years
+    dfc1_filt = dfc1[dfc1['Market Year'].isin(rel_years)]
+    if sel_rr1 != "All":
+        dfc1_filt = dfc1_filt[dfc1_filt['Railroad'] == sel_rr1]
+
+    def _ss(d, year, state):
+        mask = (d['Market Year'] == year) & (d['MY Week'] <= max_wk) & (d['State'] == state)
+        return float(d.loc[mask, 'Est Bushels'].sum())
+
+    state_data = []
+    for st_code in state_universe:
+        curr = _ss(dfc1_filt, sel_yr, st_code)
+        ly = _ss(dfc1_filt, ly_yr, st_code)
+        avg = _ship_oly_avg([_ss(dfc1_filt, y, st_code) for y in pool_years])
+        state_data.append(dict(state=st_code, current=curr, ly=ly, avg=avg,
+                                pct_ly=_ship_pct(curr, ly), pct_avg=_ship_pct(curr, avg)))
+    state_data.sort(key=lambda x: x['pct_ly'] if x['pct_ly'] is not None else -999, reverse=True)
+    if state_group == "Top 15":
+        state_data = state_data[:15]
+
+    s_names = [x['state'] for x in state_data]
+    s_pct_ly = [x['pct_ly'] or 0 for x in state_data]
+    s_pct_avg = [x['pct_avg'] or 0 for x in state_data]
+    s_diff_ly = [_ship_fdiff(x['current'], x['ly']) for x in state_data]
+    s_diff_avg = [_ship_fdiff(x['current'], x['avg']) for x in state_data]
+
+    fig_st = go.Figure()
+    fig_st.add_trace(go.Bar(name="% vs last year", y=s_names, x=s_pct_ly, orientation='h',
+                             marker_color=[_SHIP_POS if v >= 0 else _SHIP_NEG for v in s_pct_ly],
+                             text=s_diff_ly, textposition='outside'))
+    fig_st.add_trace(go.Bar(name="% vs 6-yr avg", y=s_names, x=s_pct_avg, orientation='h',
+                             marker_color=[JPSI_BLUE if v >= 0 else _SHIP_GOLD for v in s_pct_avg],
+                             text=s_diff_avg, textposition='outside'))
+    st_layout = _ship_layout(barmode='group', height=max(500, len(s_names) * 34 + 80),
+                              title=dict(text=f"State deviation — Week {max_wk}",
+                                         font=dict(color=JPSI_DARK, size=13)))
+    st_layout['xaxis'].update(tickformat='+.0f', ticksuffix='%')
+    fig_st.update_layout(**st_layout)
+    with st.container(border=True):
+        st.plotly_chart(fig_st, width='stretch')
+
+
+def _ship_tab_by_month(df):
+    c1, c2, c3 = st.columns([2, 1.5, 2])
+    with c1:
+        all_years = sorted(df['Market Year'].dropna().unique().tolist())
+        sel_yr2 = st.selectbox("Market year", ["All years"] + list(reversed(all_years)), key="t2_year")
+    with c2:
+        cp_mode2 = st.radio("CP/CPKC", ["Combined", "Split"], horizontal=True, key="t2_cp")
+    with c3:
+        states_avail2 = sorted(df['State'].dropna().unique().tolist())
+        sel_state2 = st.selectbox("State", ["All"] + states_avail2, key="t2_state")
+
+    dfc2 = _ship_prep_df(df, cp_mode2)
+    if sel_yr2 != "All years":
+        dfc2 = dfc2[dfc2['Market Year'] == sel_yr2]
+    if sel_state2 != "All":
+        dfc2 = dfc2[dfc2['State'] == sel_state2]
+    dfc2 = dfc2.copy()
+    dfc2['Calendar Month'] = dfc2['Calendar Month'].astype(str).str.strip()
+
+    grp2 = dfc2.groupby(['Calendar Month', 'Railroad'], as_index=False)['Est Bushels'].sum()
+    month_map = {'1': 'Jan', '2': 'Feb', '3': 'Mar', '4': 'Apr', '5': 'May', '6': 'Jun',
+                 '7': 'Jul', '8': 'Aug', '9': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec',
+                 'January': 'Jan', 'February': 'Feb', 'March': 'Mar', 'April': 'Apr',
+                 'May': 'May', 'June': 'Jun', 'July': 'Jul', 'August': 'Aug',
+                 'September': 'Sep', 'October': 'Oct', 'November': 'Nov', 'December': 'Dec'}
+    grp2['Month'] = grp2['Calendar Month'].map(lambda x: month_map.get(x, x))
+    grp2 = grp2[grp2['Month'].isin(_SHIP_MONTH_ORDER)]
+    grp2['Month'] = pd.Categorical(grp2['Month'], categories=_SHIP_MONTH_ORDER, ordered=True)
+    grp2 = grp2.sort_values('Month')
+
+    fig2 = go.Figure()
+    for rr in _ship_get_rrs(dfc2, cp_mode2):
+        sub = grp2[grp2['Railroad'] == rr]
+        fig2.add_trace(go.Bar(name=rr, x=sub['Month'], y=sub['Est Bushels'],
+                               marker_color=RAIL_COLORS.get(rr, JPSI_DARK)))
+    title2 = "Bushels by month & railroad" + (f" — {sel_yr2}" if sel_yr2 != "All years" else " — all years")
+    lay2 = _ship_layout(barmode='stack', height=480,
+                         title=dict(text=title2, font=dict(color=JPSI_DARK, size=13)))
+    lay2['xaxis'].update(categoryorder='array', categoryarray=_SHIP_MONTH_ORDER)
+    lay2['yaxis'].update(tickformat='.2s')
+    fig2.update_layout(**lay2)
+    with st.container(border=True):
+        st.plotly_chart(fig2, width='stretch')
+
+
+def _ship_tab_state_map(df, all_years):
+    c1, c2, c3 = st.columns([1.5, 2, 2])
+    with c1:
+        sel_yr3 = st.selectbox("Market year", list(reversed(all_years)), key="t3_year")
+    with c2:
+        rr_list3 = _ship_get_rrs(df, "Combined")
+        sel_rr3 = st.selectbox("Railroad", ["All"] + rr_list3, key="t3_rr")
+    with c3:
+        metric3 = st.radio("Metric", ["Total bu", "% vs LY", "% vs 6-yr avg"],
+                            horizontal=True, key="t3_metric")
+
+    dfc3 = _ship_prep_df(df, "Combined")
+    if sel_rr3 != "All":
+        dfc3 = dfc3[dfc3['Railroad'] == sel_rr3]
+
+    _idx3 = all_years.index(sel_yr3)
+    ly_yr3 = all_years[_idx3 - 1] if _idx3 > 0 else None
+    comp3 = sorted([y for y in all_years if y < sel_yr3])[-6:]
+
+    map_data = []
+    for st_code in _SHIP_VALID_STATES:
+        curr3 = float(dfc3.loc[(dfc3['Market Year'] == sel_yr3) & (dfc3['State'] == st_code), 'Est Bushels'].sum())
+        ly3 = float(dfc3.loc[(dfc3['Market Year'] == ly_yr3) & (dfc3['State'] == st_code), 'Est Bushels'].sum())
+        pool_v3 = [float(dfc3.loc[(dfc3['Market Year'] == y) & (dfc3['State'] == st_code), 'Est Bushels'].sum())
+                   for y in comp3]
+        avg3 = _ship_oly_avg(pool_v3)
+        map_data.append(dict(state=st_code, curr=curr3, ly=ly3, avg=avg3,
+                              pct_ly=_ship_pct(curr3, ly3), pct_avg=_ship_pct(curr3, avg3)))
+    map_df = pd.DataFrame(map_data)
+
+    if metric3 == "Total bu":
+        z_vals, z_label = map_df['curr'].tolist(), "Bushels"
+        colorscale = [[0.0, "#eaf4fc"], [0.5, "#4db3f0"], [1.0, JPSI_BLUE]]
+        zmid, tickfmt = None, ".2s"
+    else:
+        col = 'pct_ly' if metric3 == "% vs LY" else 'pct_avg'
+        z_vals = [x if x is not None else 0 for x in map_df[col].tolist()]
+        z_label, colorscale, zmid, tickfmt = metric3, "RdYlGn", 0, "+.0f"
+
+    hover_text = [
+        f"<b>{row['state']}</b><br>Current: {_ship_fbu(row['curr'])}<br>"
+        f"vs LY: {_ship_fpct(row['pct_ly'])}<br>vs 6-yr avg: {_ship_fpct(row['pct_avg'])}"
+        for _, row in map_df.iterrows()
+    ]
+    fig3 = go.Figure(go.Choropleth(
+        locations=map_df['state'], z=z_vals, locationmode='USA-states',
+        colorscale=colorscale, zmid=zmid,
+        colorbar=dict(title=dict(text=z_label, font=dict(color="#6b7280")),
+                      tickformat=tickfmt, tickfont=dict(color="#6b7280"),
+                      bgcolor="#ffffff", bordercolor="#e2e8f0"),
+        hoverinfo='text', text=hover_text,
+    ))
+    map_layout = _ship_layout(height=480)
+    map_layout.update(
+        geo=dict(scope='usa', bgcolor="#ffffff", lakecolor="#f6f8fa",
+                 landcolor="#f6f8fa", subunitcolor="#e2e8f0"),
+        title=dict(text=f"State {metric3} — {sel_yr3}", font=dict(color=JPSI_DARK, size=13)),
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+    fig3.update_layout(**map_layout)
+
+    map_col, detail_col = st.columns([3, 2])
+    with map_col:
+        with st.container(border=True):
+            st.plotly_chart(fig3, width='stretch')
+    with detail_col:
+        detail_state = st.selectbox("Select state", ["(none)"] + _SHIP_VALID_STATES,
+                                     key="t3_detail_state")
+        if detail_state != "(none)":
+            dfc3_state = dfc3[(dfc3['State'] == detail_state) & (dfc3['Market Year'] == sel_yr3)]
+            rr_bu = dfc3_state.groupby('Railroad')['Est Bushels'].sum().reset_index()
+            rr_bu = rr_bu.sort_values('Est Bushels', ascending=True)
+            fig3b = go.Figure(go.Bar(
+                x=rr_bu['Est Bushels'], y=rr_bu['Railroad'], orientation='h',
+                marker_color=[RAIL_COLORS.get(r, JPSI_DARK) for r in rr_bu['Railroad']],
+                text=[_ship_fbu(v) for v in rr_bu['Est Bushels']], textposition='outside',
+            ))
+            lay3b = _ship_layout(height=300, title=dict(
+                text=f"{detail_state} by railroad — {sel_yr3}", font=dict(color=JPSI_DARK, size=12)))
+            lay3b['xaxis'].update(tickformat='.2s')
+            fig3b.update_layout(**lay3b)
+            with st.container(border=True):
+                st.plotly_chart(fig3b, width='stretch')
+
+
+def _ship_tab_weekly(df, all_years):
+    c1, c2, c3 = st.columns([2, 2, 2])
+    with c1:
+        sel_yrs4 = st.multiselect("Years", list(reversed(all_years)),
+                                   default=list(reversed(all_years))[:4], key="t4_years")
+    with c2:
+        rr_list4 = _ship_get_rrs(df, "Combined")
+        sel_rr4 = st.selectbox("Railroad", ["All"] + rr_list4, key="t4_rr")
+    with c3:
+        states_avail4 = sorted(df['State'].dropna().unique().tolist())
+        sel_state4 = st.selectbox("State", ["All"] + states_avail4, key="t4_state")
+
+    if not sel_yrs4:
+        st.info("Select at least one year above.")
+        return
+
+    dfc4 = df.copy()
+    if sel_rr4 != "All":
+        dfc4 = dfc4[dfc4['Railroad'] == sel_rr4]
+    if sel_state4 != "All":
+        dfc4 = dfc4[dfc4['State'] == sel_state4]
+    dfc4 = dfc4[dfc4['Market Year'].isin(sel_yrs4)]
+    wk_grp = dfc4.groupby(['Market Year', 'MY Week'], as_index=False)['Est Bushels'].sum()
+
+    year_palette = [_SHIP_POS, JPSI_BLUE, _SHIP_GOLD, _SHIP_NEG,
+                     "#7c3aed", "#fb923c", "#0e7490", "#db2777"]
+
+    fig4a = go.Figure()
+    for i, yr in enumerate(sorted(sel_yrs4)):
+        sub = wk_grp[wk_grp['Market Year'] == yr].sort_values('MY Week')
+        fig4a.add_trace(go.Bar(name=str(yr), x=sub['MY Week'], y=sub['Est Bushels'],
+                                marker_color=year_palette[i % len(year_palette)]))
+    lay4a = _ship_layout(barmode='group', height=320,
+                          title=dict(text="Weekly shipments by year", font=dict(color=JPSI_DARK, size=13)))
+    lay4a['yaxis'].update(tickformat='.2s')
+    fig4a.update_layout(**lay4a)
+    with st.container(border=True):
+        st.plotly_chart(fig4a, width='stretch')
+
+    fig4b = go.Figure()
+    for i, yr in enumerate(sorted(sel_yrs4)):
+        sub = wk_grp[wk_grp['Market Year'] == yr].sort_values('MY Week').copy()
+        sub['Cumulative'] = sub['Est Bushels'].cumsum()
+        fig4b.add_trace(go.Scatter(name=str(yr), x=sub['MY Week'], y=sub['Cumulative'],
+                                    mode='lines', line=dict(color=year_palette[i % len(year_palette)], width=2)))
+    lay4b = _ship_layout(height=320,
+                          title=dict(text="Cumulative shipments by year", font=dict(color=JPSI_DARK, size=13)))
+    lay4b['yaxis'].update(tickformat='.2s')
+    fig4b.update_layout(**lay4b)
+    with st.container(border=True):
+        st.plotly_chart(fig4b, width='stretch')
+
+
+def _ship_tab_yearly(df):
+    c1, c2, c3 = st.columns([1.5, 2, 2])
+    with c1:
+        cp_mode5 = st.radio("CP/CPKC", ["Combined", "Split"], horizontal=True, key="t5_cp")
+    with c2:
+        rr_list5 = _ship_get_rrs(df, cp_mode5)
+        focus_rr5 = st.selectbox("Focus railroad (dims others)", ["All"] + rr_list5, key="t5_focus")
+    with c3:
+        states_avail5 = sorted(df['State'].dropna().unique().tolist())
+        sel_state5 = st.selectbox("State", ["All"] + states_avail5, key="t5_state")
+
+    dfc5 = _ship_prep_df(df, cp_mode5)
+    if sel_state5 != "All":
+        dfc5 = dfc5[dfc5['State'] == sel_state5]
+    yr_rr_grp = dfc5.groupby(['Market Year', 'Railroad'], as_index=False)['Est Bushels'].sum()
+
+    fig5 = go.Figure()
+    for rr in rr_list5:
+        sub = yr_rr_grp[yr_rr_grp['Railroad'] == rr].sort_values('Market Year')
+        opacity = 1.0 if (focus_rr5 in ("All", rr)) else 0.25
+        fig5.add_trace(go.Bar(name=rr, x=sub['Market Year'].astype(str), y=sub['Est Bushels'],
+                               marker=dict(color=RAIL_COLORS.get(rr, JPSI_DARK), opacity=opacity)))
+    lay5 = _ship_layout(barmode='stack', height=480, title=dict(
+        text="Annual shipments by railroad" + (f" — focus: {focus_rr5}" if focus_rr5 != "All" else ""),
+        font=dict(color=JPSI_DARK, size=13)))
+    lay5['yaxis'].update(tickformat='.2s')
+    fig5.update_layout(**lay5)
+    with st.container(border=True):
+        st.plotly_chart(fig5, width='stretch')
+
+
+def _ship_tab_summary(df, all_years):
+    c1, c2 = st.columns([2, 2])
+    with c1:
+        sel_yrs6 = st.multiselect("Years", list(reversed(all_years)),
+                                   default=list(reversed(all_years))[:3], key="t6_years")
+    with c2:
+        rr_list6 = _ship_get_rrs(df, "Combined")
+        sel_rr6 = st.selectbox("Railroad", ["All"] + rr_list6, key="t6_rr")
+
+    if not sel_yrs6:
+        st.info("Select at least one year above.")
+        return
+
+    dfc6 = df.copy()
+    if sel_rr6 != "All":
+        dfc6 = _ship_prep_df(dfc6, "Combined")
+        dfc6 = dfc6[dfc6['Railroad'] == sel_rr6]
+
+    cur_yr6 = max(sel_yrs6)
+    _idx6 = all_years.index(cur_yr6)
+    ly_yr6 = all_years[_idx6 - 1] if _idx6 > 0 else None
+    cur_data6 = dfc6[dfc6['Market Year'] == cur_yr6]
+    ly_data6 = dfc6[dfc6['Market Year'] == ly_yr6]
+    cur_total6 = float(cur_data6['Est Bushels'].sum())
+    ly_total6 = float(ly_data6['Est Bushels'].sum())
+    cur_wk6 = int(cur_data6['MY Week'].max()) if not cur_data6.empty else 0
+    pct_ly6 = _ship_pct(cur_total6, ly_total6)
+    min_yr6, max_yr6 = min(sel_yrs6), max(sel_yrs6)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric(f"Total bu ({cur_yr6})", _ship_fbu(cur_total6))
+    k2.metric("vs last year", _ship_fpct(pct_ly6), delta=_ship_fdiff(cur_total6, ly_total6))
+    k3.metric("Current week", str(cur_wk6))
+    k4.metric("Data range", f"{min_yr6}–{max_yr6}")
+
+    dfc6_sel = dfc6[dfc6['Market Year'].isin(sel_yrs6)]
+    dfc6_cp = _ship_prep_df(dfc6_sel, "Combined")
+    yr_rr6 = dfc6_cp.groupby(['Market Year', 'Railroad'], as_index=False)['Est Bushels'].sum()
+    rr_list6b = sorted(dfc6_cp['Railroad'].dropna().unique().tolist())
+
+    fig6a = go.Figure()
+    for rr in rr_list6b:
+        sub = yr_rr6[yr_rr6['Railroad'] == rr].sort_values('Market Year')
+        fig6a.add_trace(go.Bar(name=rr, x=sub['Market Year'].astype(str), y=sub['Est Bushels'],
+                                marker_color=RAIL_COLORS.get(rr, JPSI_DARK)))
+    lay6a = _ship_layout(barmode='stack', height=360,
+                          title=dict(text="Annual totals by railroad", font=dict(color=JPSI_DARK, size=13)))
+    lay6a['yaxis'].update(tickformat='.2s')
+    fig6a.update_layout(**lay6a)
+    with st.container(border=True):
+        st.plotly_chart(fig6a, width='stretch')
+
+    year_pal6 = [_SHIP_POS, JPSI_BLUE, _SHIP_GOLD, _SHIP_NEG, "#7c3aed", "#fb923c"]
+    wk_grp6 = dfc6_sel.groupby(['Market Year', 'MY Week'], as_index=False)['Est Bushels'].sum()
+    fig6b = go.Figure()
+    for i, yr in enumerate(sorted(sel_yrs6)):
+        sub = wk_grp6[wk_grp6['Market Year'] == yr].sort_values('MY Week').copy()
+        sub['Cumulative'] = sub['Est Bushels'].cumsum()
+        fig6b.add_trace(go.Scatter(name=str(yr), x=sub['MY Week'], y=sub['Cumulative'],
+                                    mode='lines', line=dict(color=year_pal6[i % len(year_pal6)], width=2)))
+    lay6b = _ship_layout(height=320,
+                          title=dict(text="Cumulative weekly shipments", font=dict(color=JPSI_DARK, size=13)))
+    lay6b['yaxis'].update(tickformat='.2s')
+    fig6b.update_layout(**lay6b)
+    with st.container(border=True):
+        st.plotly_chart(fig6b, width='stretch')
+
+
+bids_tab, csx_tab, ns_tab, bn_tab, cn_tab, map_tab, refs_tab, ship_tab = st.tabs(
+    ["📋 Bids", "CSX", "NS", "BN", "CN", "🗺️ Map", "🔗 References", "📦 Shipments"])
 
 with bids_tab:
     st.markdown("### Manual Rail Corridors (chat-fed)")
@@ -1255,3 +1919,6 @@ with map_tab:
 
 with refs_tab:
     _references_tab()
+
+with ship_tab:
+    _shipments_tab()
