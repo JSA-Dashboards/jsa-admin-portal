@@ -4812,7 +4812,7 @@ def compute_yield_proba(
         # Trendline on yields (all years including current)
         yr_arr = merged["year"].values.astype(float)
         yd_arr = merged["yield_buac"].values.astype(float)
-        slope_y, int_y = float(np.polyfit(yr_arr, yd_arr, 1))
+        slope_y, int_y = np.polyfit(yr_arr, yd_arr, 1)
         trend_vals = slope_y * yr_arr + int_y
         merged["yield_dev"] = yd_arr - trend_vals
 
