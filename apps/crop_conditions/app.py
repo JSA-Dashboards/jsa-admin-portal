@@ -4866,7 +4866,7 @@ def compute_yield_proba(
     return pd.DataFrame(rows)
 
 
-def build_probability_map(prob_df: pd.DataFrame) -> go.Figure:
+def build_probability_map(prob_df: pd.DataFrame, title: str = "") -> go.Figure:
     """
     Choropleth showing P(below trendline yield) by state.
     Blue = likely above trend, Red = likely below trend, White = ~50%.
@@ -4928,6 +4928,8 @@ def build_probability_map(prob_df: pd.DataFrame) -> go.Figure:
     ))
 
     fig.update_layout(
+        title=dict(text=title, x=0.5, xanchor="center",
+                   font=dict(size=14, color="#1e2533", family="Arial Black")) if title else {},
         geo=dict(
             scope="usa",
             showlakes=False,
@@ -4937,7 +4939,7 @@ def build_probability_map(prob_df: pd.DataFrame) -> go.Figure:
             subunitwidth=1.2,
         ),
         paper_bgcolor="white",
-        margin=dict(l=0, r=0, t=52, b=10),
+        margin=dict(l=0, r=0, t=52 if not title else 68, b=10),
         height=500,
         dragmode=False,
     )
