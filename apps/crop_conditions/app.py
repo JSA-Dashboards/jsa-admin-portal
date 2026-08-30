@@ -12234,6 +12234,129 @@ with _tab_abandon:
     else:
         st.info("The % Harvested study is currently available for Winter Wheat only.")
 
+    # ── Yield Probability Model Backtest ──────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sec-hdr">📐 Yield Probability Model — Leave-One-Out Backtest</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Validates the JSA-Index → P(below trendline yield) model using leave-one-out cross-validation. "
+        "For each state × year, the model is re-fit on all other years at the same calendar week, then used "
+        "to predict P(below trend) for the held-out year. "
+        "Accuracy = % of years where the directional call (>50% → predict below) was correct. "
+        "Brier score: 0 = perfect, 0.25 = random coin flip, 1 = perfectly wrong."
+    )
+
+    if sel_week is not None:
+        _bt_iso_wk = int(pd.Timestamp(sel_week).isocalendar().week)
+        with st.spinner("Running leave-one-out backtest…"):
+            _bt_yield_df = fetch_state_yields(
+                commodity_cfg["commodity_desc"], commodity_cfg.get("class_desc", ""),
+            )
+            _bt_df = backtest_yield_proba(jsa_df, _bt_yield_df, _bt_iso_wk)
+
+        if _bt_df.empty:
+            st.info("Not enough historical data to backtest this commodity / week combination.")
+        else:
+            n_obs      = len(_bt_df)
+            accuracy   = float(_bt_df["correct"].mean() * 100)
+            brier      = float(((_bt_df["p_below_pred"] / 100 - _bt_df["actual_below"]) ** 2).mean())
+            base_rate  = float(_bt_df["actual_below"].mean() * 100)
+            n_states   = _bt_df["state_alpha"].nunique()
+
+            _bk_cols = st.columns(4)
+            for _bkc, (_bkv, _bkl) in zip(_bk_cols, [
+                (f"{accuracy:.1f}%",          f"Directional Accuracy  (n={n_obs})"),
+                (f"{brier:.3f}",              "Brier Score  (random = 0.250)"),
+                (f"{base_rate:.1f}%",         "Historical Below-Trend Rate"),
+                (f"{n_states} states",        f"Wk {_bt_iso_wk} of season"),
+            ]):
+                with _bkc:
+                    st.markdown(
+                        f'<div class="kpi-card"><div class="kpi-main">{_bkv}</div>'
+                        f'<div class="kpi-label">{_bkl}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
+
+            # ── Calibration chart ──────────────────────────────────────────────────
+            _bins       = [0, 20, 40, 60, 80, 101]
+            _bin_labels = ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"]
+            _bin_mids   = [10, 30, 50, 70, 90]
+            _bt_df2     = _bt_df.copy()
+            _bt_df2["bin"] = pd.cut(
+                _bt_df2["p_below_pred"], bins=_bins, labels=_bin_labels, right=False
+            )
+            _cal = (
+                _bt_df2.groupby("bin", observed=True)
+                .agg(actual_rate=("actual_below", "mean"), n=("actual_below", "count"))
+                .reset_index()
+            )
+            _cal["actual_pct"] = (_cal["actual_rate"] * 100).round(1)
+
+            _cal_fig = go.Figure()
+            _cal_fig.add_trace(go.Bar(
+                x=_cal["bin"].astype(str),
+                y=_cal["actual_pct"],
+                name="Actual below-trend rate",
+                marker_color=JPSI_BLUE,
+                opacity=0.85,
+                text=[f"{v:.0f}%<br>n={n}" for v, n in zip(_cal["actual_pct"], _cal["n"])],
+                textposition="outside",
+            ))
+            _cal_fig.add_trace(go.Scatter(
+                x=_cal["bin"].astype(str),
+                y=_bin_mids[:len(_cal)],
+                name="Perfect calibration",
+                mode="lines+markers",
+                line=dict(color="#dc2626", dash="dash", width=2),
+                marker=dict(size=7, color="#dc2626"),
+            ))
+            _cal_fig.update_layout(
+                title=dict(text="Calibration: Predicted P(Below Trend) vs Actual Outcome Rate",
+                           font=dict(size=13)),
+                xaxis_title="Predicted P(below trendline yield)",
+                yaxis=dict(title="Actual below-trend rate (%)", range=[0, 115]),
+                legend=dict(orientation="h", y=-0.25),
+                paper_bgcolor="white", plot_bgcolor="white",
+                height=380,
+                margin=dict(l=40, r=20, t=50, b=60),
+            )
+            _show_chart(_cal_fig, "yield_prob_calibration")
+
+            # ── Per-state accuracy ─────────────────────────────────────────────────
+            with st.expander("Per-state accuracy detail", expanded=False):
+                _state_bt = (
+                    _bt_df.groupby("state_alpha")
+                    .apply(lambda g: pd.Series({
+                        "N Years":               len(g),
+                        "Accuracy %":            round(g["correct"].mean() * 100, 1),
+                        "Brier Score":           round(((g["p_below_pred"] / 100 - g["actual_below"]) ** 2).mean(), 3),
+                        "Actual Below-Trend %":  round(g["actual_below"].mean() * 100, 1),
+                        "Avg Predicted P(below)":round(g["p_below_pred"].mean(), 1),
+                    }), include_groups=False)
+                    .reset_index()
+                    .rename(columns={"state_alpha": "State"})
+                    .sort_values("Accuracy %", ascending=False)
+                    .reset_index(drop=True)
+                )
+                st.dataframe(_state_bt, use_container_width=True, hide_index=True)
+                _dl_btn(_state_bt, "yield_prob_backtest_by_state.xlsx")
+
+            # ── Raw predictions ────────────────────────────────────────────────────
+            with st.expander("Raw backtest predictions", expanded=False):
+                _bt_raw = _bt_df.copy()
+                _bt_raw["actual_below"] = _bt_raw["actual_below"].map({1: "Yes ↓", 0: "No ↑"})
+                _bt_raw["correct"]      = _bt_raw["correct"].map({1: "✓", 0: "✗"})
+                _bt_raw = _bt_raw.sort_values(["state_alpha", "year"]).reset_index(drop=True)
+                _bt_raw.columns = ["State", "Year", "JSA Index", "P(Below) %", "Actual Below Trend", "Correct"]
+                st.dataframe(_bt_raw, use_container_width=True, hide_index=True)
+                _dl_btn(_bt_raw, "yield_prob_backtest_raw.xlsx")
+    else:
+        st.info("Select a marketing week in the filter bar to run the backtest.")
+
 with _tab_info:
     # ── Wheat Classes Reference ─────────────────────────────────────────────────
     if commodity_label == "Winter Wheat":
