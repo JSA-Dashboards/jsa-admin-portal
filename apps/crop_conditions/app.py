@@ -7425,12 +7425,34 @@ with _tab_yield:
                     "n_analogs": _mf["n_analogs"],
                 }
 
-            if _sfcast:
-                _ym_tog = st.radio(
-                    "Color metric",
-                    ["vs Trend %", "vs Last Year %", "vs Olympic Avg %", "Forecast (bu/ac)"],
-                    horizontal=True, key="ym_tog",
+            _ym_tog = st.radio(
+                "Map view",
+                ["vs Trend %", "vs Last Year %", "vs Olympic Avg %", "Forecast (bu/ac)", "Yield Probability"],
+                horizontal=True, key="ym_tog",
+            )
+
+            if _ym_tog == "Yield Probability":
+                _yp_yield_df = fetch_state_yields(
+                    commodity_cfg["commodity_desc"], commodity_cfg.get("class_desc", ""),
                 )
+                _yp_iso_wk = int(pd.Timestamp(sel_week).isocalendar().week)
+                _yp_result = compute_yield_proba(jsa_df, _yp_yield_df, pd.Timestamp(sel_week), sel_usda_yr)
+                if _yp_result.empty:
+                    st.info("Not enough historical data to compute yield probabilities for this week.")
+                else:
+                    _yp_fig = build_probability_map(
+                        _yp_result,
+                        f"Yield Probability — {commodity_label} {selected_mkt} · Wk {_yp_iso_wk}",
+                    )
+                    _show_chart(_yp_fig, "yield_prob_map_yield_tab")
+                    with st.expander("State probability detail", expanded=False):
+                        _yp_tbl = _yp_result[["state_alpha","p_below","p_above","trend_yield","current_jsa","n_years"]].copy()
+                        _yp_tbl.columns = ["State","P(Below) %","P(Above) %","Trend Yield","JSA Index","N Years"]
+                        st.dataframe(_yp_tbl.sort_values("P(Below) %", ascending=False).reset_index(drop=True),
+                                     use_container_width=True, hide_index=True)
+                        _dl_btn(_yp_tbl, "yield_prob_by_state.xlsx")
+
+            elif _sfcast:
                 _ym_key = {"vs Trend %": "vs_trend", "vs Last Year %": "vs_ly",
                            "vs Olympic Avg %": "vs_oly", "Forecast (bu/ac)": "forecast"}[_ym_tog]
 
