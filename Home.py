@@ -70,7 +70,7 @@ LIVE_DASHBOARDS = [
      "desc": "Rail corridor bids/offers plus CSX/NS origin freight netback to FOB.",
      "page": "apps/rail_fob/app.py", "url_path": "rail-fob"},
 
-    {"title": "Cost of Carry Calculator", "category": "Futures, Options & Spreads",
+    {"title": "Cost of Carry & Seasonal Spreads", "category": "Futures, Options & Spreads",
      "desc": "CBOT/MGEX grain spreads priced against full carry, with seasonal spread analysis.",
      "page": "apps/cost_of_carry/app.py", "url_path": "cost-of-carry"},
 

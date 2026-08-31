@@ -1391,7 +1391,7 @@ def main():
     with col_logo:
         st.image(asset(LOGO_FILE), width=150)
     with col_title:
-        st.title("Cost of Carry Calculator")
+        st.title("Cost of Carry & Seasonal Spreads")
     st.caption(
         "Live CBOT & MGEX grain futures curves priced against full financial cost of carry "
         "(storage + interest), every near month against every deferred month. "
