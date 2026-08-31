@@ -40,6 +40,7 @@ _ENV_SECRET_KEYS = (
     "FOB_VESSEL_SERVICE_NAME",
     "APP_PASSWORD",
     "VIEW_ONLY",
+    "MASSIVE_API_KEY",           # cost_of_carry's Massive futures feed
     # crop_conditions reads NASS_API_KEY straight from st.secrets (with a
     # working hardcoded fallback) — no os.environ bridge needed for it.
 )
@@ -68,6 +69,10 @@ LIVE_DASHBOARDS = [
     {"title": "Rail FOB", "category": "Cash Grain",
      "desc": "Rail corridor bids/offers plus CSX/NS origin freight netback to FOB.",
      "page": "apps/rail_fob/app.py", "url_path": "rail-fob"},
+
+    {"title": "Cost of Carry Calculator", "category": "Futures, Options & Spreads",
+     "desc": "CBOT/MGEX grain spreads priced against full carry, with seasonal spread analysis.",
+     "page": "apps/cost_of_carry/app.py", "url_path": "cost-of-carry"},
 
     {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",
