@@ -1645,13 +1645,18 @@ def run_prune() -> None:
 
 
 def run_futures_capture() -> int:
-    """Harvest the current futures curve from ADM's feed and store it under today's
-    date, so historical forward-basis curves can later anchor on each day's actual
-    futures (instead of always today's). Best-effort — never blocks the scrape."""
+    """Harvest the current futures curve (Massive's CBOT settlement feed, with
+    ADM's Gradable feed filling gaps / serving as fallback) and store it under
+    today's date, so historical forward-basis curves can later anchor on each
+    day's actual futures (instead of always today's). Best-effort — never
+    blocks the scrape."""
     try:
         import adm_futures
+        import massive_futures
         from database import save_futures_curve
-        curve = adm_futures.fetch_futures_curve()
+        curve = massive_futures.fetch_futures_curve()
+        for sym, px in adm_futures.fetch_futures_curve().items():
+            curve.setdefault(sym, px)
         if not curve:
             log.warning("Futures capture: empty curve — skipped")
             return 0

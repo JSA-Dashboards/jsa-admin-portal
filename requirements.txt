@@ -21,3 +21,4 @@ beautifulsoup4==4.12.3
 pillow>=11.0.0
 reportlab>=4.0
 msal>=1.28.0
+boto3>=1.34.0

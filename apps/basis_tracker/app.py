@@ -131,9 +131,17 @@ def _cached_get_map_data() -> list[dict]:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _cached_futures_curve() -> dict:
-    """Today's live futures curve {symbol -> cents} harvested from ADM's feed."""
+    """Today's live futures curve {symbol -> cents}. Massive's CBOT settlement
+    feed (corn/soy/wheat/meal/oil/oats/KC wheat) is primary — it's the
+    official exchange close, not a merchandiser's derived quote; ADM's
+    Gradable feed fills anything Massive doesn't carry (Minneapolis wheat)
+    and is the fallback if Massive is unreachable."""
     import adm_futures
-    return adm_futures.fetch_futures_curve()
+    import massive_futures
+    curve = massive_futures.fetch_futures_curve()
+    for sym, px in adm_futures.fetch_futures_curve().items():
+        curve.setdefault(sym, px)
+    return curve
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _cached_futures_curve_for(date_str: str) -> dict:
