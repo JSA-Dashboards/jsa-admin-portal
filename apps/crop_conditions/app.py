@@ -7444,7 +7444,7 @@ with _tab_yield:
                 else:
                     _yp_fig = build_probability_map(
                         _yp_result,
-                        f"Yield Probability — {commodity_label} {selected_mkt} · Wk {_yp_iso_wk}",
+                        f"Probability of Yield Below Trendline — {commodity_label} {selected_mkt} · Wk {_yp_iso_wk}",
                     )
                     _show_chart(_yp_fig, "yield_prob_map_yield_tab")
                     with st.expander("State probability detail", expanded=False):
