@@ -2836,6 +2836,15 @@ with tab_railfob:
                                                color="#c0392b")
                     .encode(x=_x, y=_y, text=_alt.Text("Bid:Q", format="+.0f")),
                 ]
+        # Prior complete marketing year — hero blue line + end-label (re-added Sep 2026,
+        # so the just-finished year stays visible once the new year is a stub).
+        if not _hist_prev.empty:
+            _layers.append(_alt.Chart(_hist_prev).mark_line(color="#2563eb", strokeWidth=2.5)
+                           .encode(x=_x, y=_y))
+            _layers.append(
+                _alt.Chart(_hist_prev.nlargest(1, "MktWeek"))
+                .mark_text(align="left", dx=6, fontSize=9, fontWeight="bold", color="#2563eb")
+                .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("Bid:Q", scale=_ry_scale), text="MktYear:N"))
         # Current year — thickest black line, drawn OVER everything.
         _layers += [_cur_ln, _cur_lb]
         _fut = _pd.DataFrame([{"MktWeek": 13, "code": "Z"}, {"MktWeek": 27, "code": "H"},
@@ -2856,6 +2865,7 @@ with tab_railfob:
             'Seasonal Bid — Marketing Year (Sep–Aug)'
             + '&nbsp;&nbsp;<span style="font-weight:400;text-transform:none">'
             + (f'<b style="color:#000">{_curr_yr} = black</b>' if _curr_yr else '')
+            + (f'  ·  <b style="color:#2563eb">{_prev_yr} = blue</b>' if _prev_yr else '')
             + ('  ·  <b style="color:#4b6a4b">5-yr avg = dashed</b>'
                '  ·  <b style="color:#8bab7f">5-yr range = shaded</b>' if not _rband.empty else '')
             + '  ·  <b style="color:#c0392b">Forward = red</b>'
@@ -4398,6 +4408,15 @@ with tab_bids:
                                 .encode(x=_x_s, y=_y_s, text=_alt.Text("Basis:Q", format="+.0f")),
                             ]
 
+                # Prior complete marketing year — hero blue line + end-label (re-added
+                # Sep 2026 so the just-finished year stays visible vs the new-year stub).
+                if not _hist_prev.empty:
+                    _s_layers.append(_alt.Chart(_hist_prev).mark_line(color="#2563eb", strokeWidth=2.5)
+                                     .encode(x=_x_s, y=_y_s))
+                    _s_layers.append(
+                        _alt.Chart(_hist_prev.nlargest(1, "MktWeek"))
+                        .mark_text(align="left", dx=6, fontSize=10, fontWeight="bold", color="#2563eb")
+                        .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("Basis:Q", scale=_y_scale), text="MktYear:N"))
                 # Current year — thickest black line, drawn OVER everything.
                 _s_layers += [_s_curr, _s_curr_end]
 
@@ -4438,6 +4457,9 @@ with tab_bids:
                     _s_layers = [_s_vlines, _s_vlbls] + _s_layers
 
                 _leg = (f'<b style="color:#000">{_curr_yr} = black</b>' if _curr_yr else '')
+                if _prev_yr:
+                    _leg += (('  ·  ' if _leg else '')
+                             + f'<b style="color:#2563eb">{_prev_yr} = blue</b>')
                 if _byrs:
                     _leg += (('  ·  ' if _leg else '')
                              + '<b style="color:#4b6a4b">5-yr avg = dashed</b>'
