@@ -192,8 +192,12 @@ def load_all(years: tuple, qyears: tuple):
     # Heifer/steer share needs the on-feed total over the SAME full history as
     # the quarterly heifer/steer series, not just the shorter monthly window
     # used for the flows tabs — fetched separately to keep that window fast.
-    inv_full = fetch_series("CATTLE, ON FEED - INVENTORY", qyears, CAP_1000)
-    return inv, place, sales, other, heifer, steer, inv_full
+    # The seasonality tab (year-over-year lines, YoY% bars, annual snapshots)
+    # needs the same full-history depth for placements and marketings too.
+    inv_full   = fetch_series("CATTLE, ON FEED - INVENTORY", qyears, CAP_1000)
+    place_full = fetch_series("CATTLE, ON FEED - PLACEMENTS, MEASURED IN HEAD", qyears, CAP_1000)
+    sales_full = fetch_series("CATTLE, ON FEED - SALES FOR SLAUGHTER, MEASURED IN HEAD", qyears, CAP_1000)
+    return inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full
 
 
 # ── Analytics helpers ────────────────────────────────────────────────────────
@@ -327,6 +331,75 @@ def heifer_share_bar_chart(hp: pd.DataFrame, avg_years: int = 15, height: int = 
     return fig
 
 
+YEAR_PALETTE = ["#e2e8e4", "#c8d4ca", "#a8bfae", "#8db89a", "#6fa8c4", "#9b89c4", "#c98a56", COL_NEG]
+
+
+def seasonal_by_year_chart(df_full: pd.DataFrame, state: str, n_years: int = 7, y_title: str = "Head",
+                            height: int = 420) -> go.Figure:
+    """One line per year, Jan-Dec on the x-axis — classic seasonal overlay.
+    Latest year drawn last (on top) in red so it stands out against the
+    muted-to-bold palette used for prior years.
+    """
+    sub = series_for(df_full, state)
+    if sub.empty:
+        return go.Figure()
+    years = sorted(sub["year"].unique())[-min(n_years, len(YEAR_PALETTE)):]
+    colors = YEAR_PALETTE[-len(years):]
+
+    fig = go.Figure()
+    for yr, color in zip(years, colors):
+        yr_df = sub[sub["year"] == yr].sort_values("month")
+        fig.add_trace(go.Scatter(
+            x=yr_df["month"], y=yr_df["Value"], mode="lines+markers", name=str(yr),
+            line=dict(color=color, width=2.6 if yr == years[-1] else 1.8),
+            marker=dict(size=5 if yr == years[-1] else 4),
+        ))
+    _apply(fig, height=height, y_title=y_title)
+    fig.update_xaxes(tickmode="array", tickvals=list(range(1, 13)),
+                      ticktext=[MONTH_ABBR[m] for m in range(1, 13)])
+    return fig
+
+
+def yoy_pct_frame(df_full: pd.DataFrame, state: str) -> pd.DataFrame:
+    sub = series_for(df_full, state)[["year", "month", "date", "Value"]].copy()
+    prior = sub.rename(columns={"Value": "prior_value", "year": "prior_year"})
+    prior["year"] = prior["prior_year"] + 1
+    m = sub.merge(prior[["year", "month", "prior_value"]], on=["year", "month"], how="left")
+    m["yoy_pct"] = (m["Value"] - m["prior_value"]) / m["prior_value"] * 100
+    return m.dropna(subset=["yoy_pct"]).sort_values("date").reset_index(drop=True)
+
+
+def yoy_bar_chart(df_full: pd.DataFrame, state: str, height: int = 380) -> go.Figure:
+    d = yoy_pct_frame(df_full, state)
+    if d.empty:
+        return go.Figure()
+    colors = [COL_POS if v >= 0 else COL_NEG for v in d["yoy_pct"]]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=d["date"], y=d["yoy_pct"], marker_color=colors,
+                          hovertemplate="%{x|%b %Y}: %{y:+.1f}%<extra></extra>"))
+    _apply(fig, height=height, y_title="% change vs. year-ago")
+    fig.update_yaxes(ticksuffix="%")
+    fig.update_layout(showlegend=False)
+    return fig
+
+
+def annual_snapshot_chart(df_full: pd.DataFrame, state: str, month: int, height: int = 380) -> go.Figure:
+    """One bar per year for a single calendar month — e.g. 'on-feed as of Aug 1'
+    or 'placed on feed in April', going back across the full data history.
+    """
+    sub = series_for(df_full, state)
+    d = sub[sub["month"] == month].sort_values("year")
+    if d.empty:
+        return go.Figure()
+    colors = [COL_NEG if yr == d["year"].iloc[-1] else JSA_GREEN for yr in d["year"]]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=d["year"].astype(str), y=d["Value"], marker_color=colors,
+                          hovertemplate="%{x}: %{y:,.0f}<extra></extra>"))
+    _apply(fig, height=height, y_title="Head")
+    fig.update_layout(showlegend=False)
+    return fig
+
+
 def _to_excel(sheets: dict) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -374,7 +447,7 @@ st.sidebar.markdown(
 # ── Load data ────────────────────────────────────────────────────────────────
 
 with st.spinner("Loading USDA NASS data…"):
-    inv, place, sales, other, heifer, steer, inv_full = load_all(LOAD_YEARS, Q_YEARS)
+    inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
 
 if inv.empty:
     st.error("No data returned from USDA NASS. Check your API key in st.secrets.")
@@ -441,8 +514,8 @@ st.divider()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab_summary, tab_flows, tab_heifer, tab_state, tab_data = st.tabs([
-    "⭐  Summary", "📊  On-Feed & Flows", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
+tab_summary, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
+    "⭐  Summary", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
 ])
 
 # ── Summary ────────────────────────────────────────────────────────────────────
@@ -535,6 +608,36 @@ with tab_flows:
     merged = merged.tail(18).iloc[::-1].copy()
     merged["date"] = merged["date"].dt.strftime("%b %Y")
     st.dataframe(merged, hide_index=True, width="stretch")
+
+# ── Seasonality ────────────────────────────────────────────────────────────────
+with tab_season:
+    SEASON_METRICS = {
+        "On-feed inventory": {"df": inv_full, "verb": "on feed as of"},
+        "Placements":        {"df": place_full, "verb": "placed on feed in"},
+        "Marketings":        {"df": sales_full, "verb": "marketed in"},
+    }
+    season_metric = st.radio("Metric", list(SEASON_METRICS.keys()), horizontal=True, label_visibility="collapsed")
+    m = SEASON_METRICS[season_metric]
+    m_df = m["df"]
+    m_sub = series_for(m_df, state)
+
+    if m_sub.empty:
+        st.info("No data available for this metric/state.")
+    else:
+        latest_month = int(m_sub["month"].iloc[-1])
+        month_label  = MONTH_ABBR[latest_month]
+
+        st.markdown(f'<div class="sec-hdr">{season_metric} by year — seasonal pattern</div>', unsafe_allow_html=True)
+        st.caption(f"Each line is one year, Jan–Dec. Latest year ({int(m_sub['year'].iloc[-1])}) highlighted in red.")
+        st.plotly_chart(seasonal_by_year_chart(m_df, state, n_years=trend_years), width="stretch")
+
+        st.markdown(f'<div class="sec-hdr">{season_metric} — year-over-year % change</div>', unsafe_allow_html=True)
+        st.plotly_chart(yoy_bar_chart(m_df, state), width="stretch")
+
+        st.markdown(f'<div class="sec-hdr">{STATE_NAMES.get(state, state)} cattle {m["verb"]} {month_label} — by year</div>',
+                    unsafe_allow_html=True)
+        st.caption("Same calendar month, every year back to 1996 — isolates the year-over-year trend from seasonality.")
+        st.plotly_chart(annual_snapshot_chart(m_df, state, latest_month), width="stretch")
 
 # ── Heifers on Feed ───────────────────────────────────────────────────────────
 with tab_heifer:
