@@ -84,6 +84,30 @@ def _require_password():
 # _require_password() no longer invoked here — the JSA Home Page shell
 # (Home.py) handles the one shared login for all merged dashboards.
 
+# ── Retired: superseded by the Streamlit-in-Snowflake app ────────────────────
+# After the Snowflake cutover the basis tracker lives in Streamlit-in-Snowflake;
+# this hub page reads Postgres, which no longer updates. Redirect anyone here.
+# Set ALLOW_POSTGRES_UI=1 to restore this page for a rollback.
+if not os.getenv("ALLOW_POSTGRES_UI"):
+    _SIS_URL = ("https://app.snowflake.com/eofnxsc/qtc58073/#/streamlit-apps/"
+                "JSA.BASIS_TRACKER.BASIS_TRACKER_APP")
+    st.markdown(
+        "<div style='max-width:640px;margin:64px auto;text-align:center;"
+        "font-family:Georgia,serif'>"
+        "<div style='font-size:26px;font-weight:700;color:#32373c'>"
+        "Basis Tracker has moved to Snowflake</div>"
+        "<div style='font-family:sans-serif;color:#64748b;font-size:14px;margin:12px 0 20px'>"
+        "This dashboard now runs inside Snowflake and reads live data there. "
+        "This version is retired and no longer updates.</div>"
+        f"<a href='{_SIS_URL}' target='_blank' style='font-family:sans-serif;"
+        "display:inline-block;background:#0693e3;color:#fff;padding:10px 18px;"
+        "border-radius:6px;text-decoration:none;font-weight:600'>"
+        "Open the Snowflake app &rarr;</a>"
+        "<div style='font-family:sans-serif;color:#94a3b8;font-size:12px;margin-top:14px'>"
+        "(Sign in with your Snowflake account.)</div></div>",
+        unsafe_allow_html=True)
+    st.stop()
+
 if _view_only():
     # No sidebar at all in the read-only build (and hide its expand control).
     st.markdown(
