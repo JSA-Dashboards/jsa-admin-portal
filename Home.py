@@ -112,6 +112,9 @@ LIVE_DASHBOARDS = [
     {"title": "Livestock Inventory", "category": "Livestock",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production.",
      "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory"},
+    {"title": "Cash Cattle Trade", "category": "Livestock",
+     "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume.",
+     "page": "apps/cash_trade/app.py", "url_path": "cash-trade"},
 
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
