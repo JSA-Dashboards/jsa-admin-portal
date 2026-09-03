@@ -48,7 +48,7 @@ PERIOD_LABEL = {
 }
 BASIS_LABEL = {"Live": "Live FOB", "Dressed": "Dressed Delivered"}
 
-# st.set_page_config removed — the Livestock Portal shell (Home.py) makes the
+# st.set_page_config removed — the portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
 st.markdown(f"""
@@ -345,12 +345,14 @@ if not combo.empty:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=fob_trend["report_date"], y=fob_trend["combo_price"],
-        name="Live FOB (combined)", mode="lines", line=dict(color=FOB_COLOR, width=2),
+        name="Live FOB (combined)", mode="lines+markers",
+        line=dict(color=FOB_COLOR, width=2), marker=dict(size=4),
         hovertemplate="<b>Live FOB</b>: $%{y:.2f}<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         x=del_trend["report_date"], y=del_trend["combo_price"],
-        name="Dressed Delivered (combined)", mode="lines", line=dict(color=DEL_COLOR, width=2),
+        name="Dressed Delivered (combined)", mode="lines+markers",
+        line=dict(color=DEL_COLOR, width=2), marker=dict(size=4),
         hovertemplate="<b>Dressed Delivered</b>: $%{y:.2f}<extra></extra>",
     ))
 
@@ -487,17 +489,20 @@ if not vol_df.empty:
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(
         x=vol_df["report_date"], y=vol_df["total_head_count"],
-        name="Total Confirmed", mode="lines", line=dict(color=CONF_COLOR, width=2),
+        name="Total Confirmed", mode="lines+markers",
+        line=dict(color=CONF_COLOR, width=2), marker=dict(size=4),
         hovertemplate="<b>Total Confirmed</b>: %{y:,.0f} hd<extra></extra>",
     ))
     fig2.add_trace(go.Scatter(
         x=vol_df["report_date"], y=vol_df["total_head_count_1"],
-        name="1-14 Day Delivery", mode="lines", line=dict(color=D14_COLOR, width=2),
+        name="1-14 Day Delivery", mode="lines+markers",
+        line=dict(color=D14_COLOR, width=2), marker=dict(size=4),
         hovertemplate="<b>1-14 Day</b>: %{y:,.0f} hd<extra></extra>",
     ))
     fig2.add_trace(go.Scatter(
         x=vol_df["report_date"], y=vol_df["total_head_count_2"],
-        name="15-30 Day Delivery", mode="lines", line=dict(color=D30_COLOR, width=2),
+        name="15-30 Day Delivery", mode="lines+markers",
+        line=dict(color=D30_COLOR, width=2), marker=dict(size=4),
         hovertemplate="<b>15-30 Day</b>: %{y:,.0f} hd<extra></extra>",
     ))
 
