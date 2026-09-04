@@ -1,10 +1,16 @@
 import os
+import sys
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import openpyxl
 from pathlib import Path
 from datetime import datetime, timedelta
+
+# st.Page runs this file via exec(), not as a standalone script, so its own
+# directory is never added to sys.path automatically -- without this, the
+# local snowflake_db import below raises ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).parent))
 
 # On Streamlit Community Cloud, secrets live in st.secrets rather than a
 # local .env file -- forward anything relevant into os.environ so
