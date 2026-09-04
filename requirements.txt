@@ -22,3 +22,4 @@ pillow>=11.0.0
 reportlab>=4.0
 msal>=1.28.0
 boto3>=1.34.0
+snowflake-connector-python>=3.12  # cme_feeder_cattle DB backend when USE_SNOWFLAKE=1
