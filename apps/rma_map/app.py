@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import streamlit as st
 import pandas as pd
@@ -30,7 +30,14 @@ LOGO_TRANS = HERE / "assets" / "Transparent Smal logo.png"
 LOGO_FULL  = HERE / "assets" / "logo-full.png"
 
 # ── NASS API ───────────────────────────────────────────────────────────────────
-NASS_API_KEY  = "9A6D1EB8-4D94-3221-BA0C-ADD4533EA0C1"
+# Key comes from Streamlit secrets (Cloud) or the environment (dev); no key is
+# committed. County-level NASS data is not in the shared cache (usda-nass-etl
+# caches NATIONAL and STATE only), so this dashboard still calls NASS live.
+try:
+    NASS_API_KEY = st.secrets.get("NASS_API_KEY", "")
+except Exception:
+    NASS_API_KEY = ""
+NASS_API_KEY  = NASS_API_KEY or os.environ.get("NASS_API_KEY", "")
 NASS_BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
 
 # ── EIA API ────────────────────────────────────────────────────────────────────

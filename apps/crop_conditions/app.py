@@ -12,6 +12,21 @@ import math
 from concurrent.futures import ThreadPoolExecutor
 warnings.filterwarnings("ignore")
 
+# This dashboard reads NASS data from a shared, scheduled-pull cache (see the
+# usda-nass-etl repo) instead of calling the API live -- it no longer holds a
+# NASS API key at all. NASS registers API keys per individual, not for public/
+# shared use, so a client-facing dashboard hitting NASS live under one shared
+# key would violate NASS's terms.
+import sys
+from pathlib import Path
+
+# st.Page runs this file via exec(), not as a standalone script, so its own
+# directory is never added to sys.path automatically -- without this, the
+# local nass_cache_client import below raises ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).parent))
+
+from nass_cache_client import fetch_cached
+
 def _to_excel(df) -> bytes:
     """Return an Excel (.xlsx) byte string from a DataFrame or Styler."""
     data = df.data if hasattr(df, "data") else df
@@ -138,8 +153,9 @@ body{{background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-API_KEY  = st.secrets.get("NASS_API_KEY", "9A6D1EB8-4D94-3221-BA0C-ADD4533EA0C1")
-BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+# NASS QuickStats access goes through the shared cache (see nass_cache_client.py
+# / fetch_cached above) -- this app no longer holds a NASS API key or calls the
+# live QuickStats endpoint.
 
 PSD_BASE    = "https://apps.fas.usda.gov/psdonline/api"
 PSD_US_CODE = "0000US"
@@ -412,102 +428,134 @@ def available_usda_years(n: int = 42) -> list[int]:
 # ── Data Layer ─────────────────────────────────────────────────────────────────
 
 def _nass_get(params: dict, retries: int = 3, timeout: int = 60) -> dict:
-    """GET the NASS API with automatic retries on timeout or server errors."""
-    for attempt in range(retries):
-        try:
-            r = requests.get(BASE_URL, params=params, timeout=timeout)
-            if r.status_code >= 500:
-                # Server error (502, 503, etc.) — retry
-                if attempt < retries - 1:
-                    continue
-                return {"_error": f"HTTP {r.status_code}", "_text": r.text[:300]}
-            if r.status_code >= 400:
-                # Client error — no point retrying
-                return {"_error": f"HTTP {r.status_code}", "_text": r.text[:300]}
-            try:
-                return r.json()
-            except Exception:
-                return {"_error": "JSON decode failed", "_text": r.text[:300]}
-        except requests.exceptions.Timeout:
-            if attempt < retries - 1:
-                continue   # retry immediately
-            return {"_error": "timeout"}
-        except Exception as e:
-            return {"_error": str(e)}
-    return {}
+    """
+    Read the shared NASS cache (see usda-nass-etl) instead of calling NASS
+    live. `retries`/`timeout` are accepted for call-site compatibility but are
+    no-ops now — a DB read doesn't need HTTP retry logic. Returns {} (rather
+    than raising) on a cache/DB error so existing "if 'data' in payload"
+    call sites degrade to empty results instead of crashing.
+    """
+    try:
+        return fetch_cached(params)
+    except Exception as e:
+        st.error(f"NASS cache error: {e}")
+        return {}
+
+
+# ── Annual-metric cache reads ───────────────────────────────────────────────
+# jobs/crop_conditions.py in usda-nass-etl caches ONE broad, unfiltered-by-year
+# row per (commodity_desc, class_desc, statisticcat_desc, agg_level_desc) combo
+# for YIELD / PRODUCTION / AREA PLANTED / AREA HARVESTED / STOCKS — no year__LE,
+# no reference_period_desc, no freq_desc. This helper builds that exact shape
+# (year__GE pinned to "1985", matching MIN_METRIC_YEAR in that job) so the
+# cache lookup hits; callers filter the returned DataFrame locally (by year,
+# reference_period_desc, state, etc.) instead of re-querying with narrower
+# params, since only this one broad shape is ever cached.
+_METRIC_UNIT = {
+    "YIELD":          "BU / ACRE",
+    "PRODUCTION":     "BU",
+    "AREA PLANTED":   "ACRES",
+    "AREA HARVESTED": "ACRES",
+    "STOCKS":         "BU",
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False, persist="disk")
+def _fetch_annual_broad(commodity_desc: str, class_desc: str, statisticcat_desc: str,
+                        agg_level_desc: str, unit_desc: str | None = None) -> pd.DataFrame:
+    params = {
+        "source_desc":       "SURVEY",
+        "sector_desc":       "CROPS",
+        "group_desc":        "FIELD CROPS",
+        "commodity_desc":    commodity_desc,
+        "class_desc":        class_desc,
+        "statisticcat_desc": statisticcat_desc,
+        "unit_desc":         unit_desc or _METRIC_UNIT.get(statisticcat_desc, ""),
+        "agg_level_desc":    agg_level_desc,
+        "year__GE":          "1985",
+    }
+    payload = _nass_get(params)
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    if "year" in df.columns:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+        df = df.dropna(subset=["year"])
+        df["year"] = df["year"].astype(int)
+    if agg_level_desc == "NATIONAL" and "state_alpha" in df.columns:
+        # NASS is inconsistent about how it populates state_alpha for national
+        # rows ("", "US", "US TOTAL" all show up in the wild) — normalise to
+        # "US" so every caller's `state_alpha == "US"` filter works.
+        _natl_mask = df["state_alpha"].astype(str).str.upper().isin({"", "US", "US TOTAL", "NAN"})
+        df.loc[_natl_mask, "state_alpha"] = "US"
+    return df
 
 
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
 def fetch_conditions(commodity_desc: str, class_desc: str, years: tuple, known_states: tuple = ()) -> pd.DataFrame:
     """
-    Pull weekly crop condition data from USDA NASS Quick Stats.
+    Pull weekly crop condition data from the shared NASS cache.
 
-    Strategy to stay under the NASS 50k-row-per-request limit:
-    • State rows:  one API call PER STATE, using only year__GE (no year__LE).
-      The NASS API silently ignores year__LE for weekly condition records, so
-      year-chunked calls (e.g. year__GE=1986, year__LE=1988) actually return ALL
-      years from 1986 to present for all ~40 states, which far exceeds the 50k
-      row limit and causes those calls to fail silently.  Fetching one state at a
-      time keeps each call to ~3,750 rows (one state × 37 yrs × 35 wks × 5 conds)
-      — well under the limit — and returns the full historical record.
-    • State discovery: a single cheap "current year only" call retrieves the list
-      of states currently reporting, so we don't have to hard-code it per commodity.
-    • US TOTAL:  fetched in a single bulk call (state_name=US TOTAL).
-      National rows are ~7k total (35 wks × 5 conds × 40 yrs) — no limit risk.
+    Strategy (mirrors usda-nass-etl/jobs/crop_conditions.py exactly, since only
+    that shape is cached):
+    • State rows:  one cache read PER STATE, using only year__GE (no year__LE) —
+      this is how the ETL job cached them (NASS ignores year__LE for weekly
+      condition records, so per-state calls were used to stay under the 50k-row
+      cap when the job originally pulled from NASS).
+    • State list: the commodity's full static `all_state_alphas` universe
+      (passed in via `known_states`), NOT live state-discovery — a state that
+      stops/starts reporting shouldn't create a cache-key mismatch, and this
+      dashboard can no longer query NASS live to discover reporters anyway.
+    • US TOTAL:  fetched as a single cache read (state_name=US TOTAL).
 
     class_desc handling:
-      We deliberately omit class_desc from the API query for conditions data.
-      NASS QuickStats does not reliably index class_desc for weekly conditions records —
-      the class appears in the short_desc field (e.g. "WHEAT, WINTER - CONDITION,
-      MEASURED IN PCT GOOD") but is not stored as a separate indexed class_desc value
-      for condition survey rows.  We fetch all classes and filter by short_desc below,
-      which is the only robust approach.
+      We deliberately omit class_desc from the cache query for conditions data,
+      matching the ETL job — NASS QuickStats does not reliably index class_desc
+      for weekly conditions records, so it fetches all classes and this app
+      filters by short_desc below, which is the only robust approach.
     """
     if not years:
         return pd.DataFrame()
 
     year_list = sorted(years)
-    min_year  = year_list[0]
 
     _base = {
-        "key":               API_KEY,
         "source_desc":       "SURVEY",
         "sector_desc":       "CROPS",
         "group_desc":        "FIELD CROPS",
         "commodity_desc":    commodity_desc,
         "statisticcat_desc": "CONDITION",
         "freq_desc":         "WEEKLY",
-        "format":            "JSON",
         # class_desc intentionally omitted — see docstring
     }
 
     frames = []
     errors = []
 
-    # ── Step 1: Discover which states currently report for this commodity ────────
-    # Only fetch active reporters — fetching all historical states balloons memory.
-    # The dropdown is populated separately from the commodity's all_state_alphas list.
-    _disc_params = {**_base, "agg_level_desc": "STATE", "year__GE": year_list[-1]}
-    _disc_payload = _nass_get(_disc_params)
-    _reporting_states = sorted({
-        r["state_alpha"] for r in _disc_payload.get("data", [])
-        if len(r.get("state_alpha", "")) == 2 and r.get("state_alpha") != "US"
-    }) or [
+    # ── States to read — the commodity's full cached state universe ──────────────
+    # No live discovery: the ETL cached exactly this list per commodity (see
+    # COMMODITY_STATES in usda-nass-etl/jobs/crop_conditions.py). Fall back to a
+    # reasonable default only if the caller didn't pass one.
+    _reporting_states = list(known_states) or [
         "AL", "AR", "CA", "CO", "GA", "ID", "IL", "IN", "KS", "KY",
         "LA", "MD", "MI", "MN", "MO", "MS", "MT", "NC", "NE", "NJ",
         "NY", "OH", "OK", "OR", "PA", "SD", "TN", "TX", "VA", "WA",
         "WI", "WY",
     ]
 
-    # ── Step 2: Fetch full history for each state — parallelised ─────────────────
-    # year__LE is omitted intentionally — NASS ignores it for condition records
-    # (confirmed via diagnostic: year__LE=1995 returned data through 2026).
-    # Each per-state call returns ~3,750 rows regardless of history depth.
-    # Using ThreadPoolExecutor so all ~35 state calls fire concurrently rather
-    # than sequentially, cutting cold-start time from ~90s to ~5-10s.
+    # ── Fetch full history for each state — parallelised cache reads ─────────────
+    # year__GE is pinned to "1986" (MIN_CONDITION_YEAR in the ETL job) rather
+    # than the caller's own min_year -- the cache key must match exactly what
+    # was cached, and the ETL always caches the full 1986+ history regardless
+    # of which Marketing Year window a given dashboard session requested.
+    # The filter to the caller's actual `years` happens locally below
+    # ("Filter to requested year range"). year__LE is omitted for the same
+    # reason it was omitted when the ETL cached this (NASS ignores it for
+    # weekly condition records).
     def _fetch_state(st):
         params = {**_base, "agg_level_desc": "STATE",
-                  "state_alpha": st, "year__GE": min_year}
+                  "state_alpha": st, "year__GE": "1986"}
         return st, _nass_get(params)
 
     with ThreadPoolExecutor(max_workers=10) as _pool:
@@ -523,7 +571,8 @@ def fetch_conditions(commodity_desc: str, class_desc: str, years: tuple, known_s
                 pass
 
     # ── Step 3: US TOTAL — single bulk call ───────────────────────────────────────
-    _us_params = {**_base, "state_name": "US TOTAL", "year__GE": min_year}
+    # Same year__GE="1986" pinning as the per-state reads above, for the same reason.
+    _us_params = {**_base, "state_name": "US TOTAL", "year__GE": "1986"}
     _us_payload = _nass_get(_us_params)
     if "_error" in _us_payload:
         errors.append(f"US TOTAL: {_us_payload['_error']}")
@@ -573,27 +622,14 @@ def fetch_conditions(commodity_desc: str, class_desc: str, years: tuple, known_s
 @st.cache_data(ttl=86400, show_spinner=False, persist="disk")
 def fetch_state_yields(commodity_desc: str, class_desc: str = "") -> pd.DataFrame:
     """
-    Fetch annual state-level crop yields from NASS QuickStats.
+    Fetch annual state-level crop yields from the shared NASS cache.
     Returns: year (int), state_alpha (str), yield_buac (float)
     """
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    commodity_desc,
-        "statisticcat_desc": "YIELD",
-        "unit_desc":         "BU / ACRE",
-        "agg_level_desc":    "STATE",
-        "freq_desc":         "ANNUAL",
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    rows = payload.get("data", [])
-    if not rows:
+    _cd = class_desc or "ALL CLASSES"
+    df = _fetch_annual_broad(commodity_desc, _cd, "YIELD", "STATE", "BU / ACRE")
+    if df.empty:
         return pd.DataFrame(columns=["year", "state_alpha", "yield_buac"])
 
-    df = pd.DataFrame(rows)
     df = df[df["state_alpha"].str.len() == 2].copy()
     df["year"]       = pd.to_numeric(df["year"], errors="coerce")
     df["yield_buac"] = pd.to_numeric(df["Value"], errors="coerce")
@@ -710,12 +746,13 @@ WHITE_WEIGHTS = {"WA": 0.57, "ID": 0.28, "OR": 0.15}   # WA/ID/OR core soft-whit
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
 def fetch_hrw_production(years: tuple) -> pd.DataFrame:
     """
-    Pull annual WINTER WHEAT PRODUCTION (BU) by state from USDA NASS.
+    Pull annual WINTER WHEAT PRODUCTION (BU) by state from the shared NASS cache.
     Used to compute HRW state weights (HRW states grow predominantly HRW,
     so total WINTER production is a reliable proxy for HRW production share).
 
-    class_desc intentionally omitted — filter by short_desc after fetching
-    (same approach as fetch_conditions / fetch_winter_wheat_acres).
+    Cached broad (class_desc="WINTER", no year filter — see
+    usda-nass-etl/jobs/crop_conditions.py) and filtered to the requested years
+    locally.
 
     Reference-period priority: for completed crop years NASS publishes multiple
     estimates (May/Jun/Jul/Aug Crop Production forecasts + Annual Summary final).
@@ -735,29 +772,15 @@ def fetch_hrw_production(years: tuple) -> pd.DataFrame:
 
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        # class_desc intentionally omitted — filter by short_desc after fetching
-        "statisticcat_desc": "PRODUCTION",
-        "unit_desc":         "BU",
-        "agg_level_desc":    "STATE",          # pin to state rows — avoids county/district bloat
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "_error" in payload or "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", "WINTER", "PRODUCTION", "STATE", "BU")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "state_name", "short_desc",
                          "reference_period_desc", "Value"]
               if c in df.columns]].copy()
-    # Filter to WINTER wheat only via short_desc (same approach as conditions data)
+    # Filter to WINTER wheat only via short_desc (belt-and-suspenders — class_desc
+    # already scoped the cache read to WINTER)
     if "short_desc" in df.columns:
         df = df[df["short_desc"].str.contains("WINTER", case=False, na=False)]
     # Strip commas (NASS formats large numbers with commas) and handle (D)/(NA)
@@ -806,18 +829,7 @@ def fetch_ww_national_totals(years: tuple) -> pd.DataFrame:
     if not years:
         return pd.DataFrame()
 
-    _base = {
-        "key":            API_KEY,
-        "source_desc":    "SURVEY",
-        "sector_desc":    "CROPS",
-        "group_desc":     "FIELD CROPS",
-        "commodity_desc": "WHEAT",
-        "state_name":     "US TOTAL",
-        "freq_desc":      "ANNUAL",
-        "year__GE":       str(min(years)),
-        "year__LE":       str(max(years)),
-        "format":         "JSON",
-    }
+    _yr_min, _yr_max = min(years), max(years)
 
     def _best_by_year(df: pd.DataFrame) -> dict:
         """Return {year: value} picking highest-priority reference_period."""
@@ -851,16 +863,15 @@ def fetch_ww_national_totals(years: tuple) -> pd.DataFrame:
     }
     _field_data: dict = {}   # {field_name: {year: value}}
 
-    # One API call per statisticcat_desc; filter to exact short_desc
+    # One cache read per statisticcat_desc (agg_level_desc=NATIONAL, class_desc=
+    # WINTER — matching the cached shape); filter to exact short_desc and the
+    # requested year range locally.
     for _sd, _field in _SD_NATIONAL.items():
         _scat = _SD_SCAT[_sd]
-        _r = _nass_get({**_base, "statisticcat_desc": _scat})
-        if "data" not in _r or not _r["data"]:
+        _df = _fetch_annual_broad("WHEAT", "WINTER", _scat, "NATIONAL")
+        if _df.empty or "short_desc" not in _df.columns:
             continue
-        _df = pd.DataFrame(_r["data"])
-        if "short_desc" not in _df.columns:
-            continue
-        _df = _df[_df["short_desc"] == _sd]          # exact match — no wrong rows
+        _df = _df[(_df["short_desc"] == _sd) & (_df["year"] >= _yr_min) & (_df["year"] <= _yr_max)]
         if _df.empty:
             continue
         _field_data[_field] = _best_by_year(_df)
@@ -902,25 +913,10 @@ def _fetch_class_production(class_desc: str, valid_states: set, years: tuple) ->
     """
     if not years or not valid_states:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        "class_desc":        class_desc,
-        "statisticcat_desc": "PRODUCTION",
-        "unit_desc":         "BU",
-        "agg_level_desc":    "STATE",
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", class_desc, "PRODUCTION", "STATE", "BU")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "reference_period_desc", "Value"]
               if c in df.columns]].copy()
     df["Value"] = df["Value"].astype(str).str.replace(",", "", regex=False)
@@ -1016,29 +1012,12 @@ def fetch_commodity_production(commodity_desc: str, class_desc: str, years: tupl
     """
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    commodity_desc,
-        "class_desc":        class_desc,
-        "statisticcat_desc": "PRODUCTION",
-        "agg_level_desc":    "STATE",
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    if unit_desc:
-        params["unit_desc"] = unit_desc
-    payload = _nass_get(params)
-    frames = []
-    if "data" in payload and payload["data"]:
-        frames.append(pd.DataFrame(payload["data"]))
-    if not frames:
+    df = _fetch_annual_broad(commodity_desc, class_desc, "PRODUCTION", "STATE", unit_desc)
+    if df.empty:
         return pd.DataFrame()
-    df = pd.concat(frames, ignore_index=True)
+    df = df[df["year"].isin(set(years))]
+    if df.empty:
+        return pd.DataFrame()
     df = df[[c for c in ["year", "state_alpha", "state_name", "unit_desc",
                          "reference_period_desc", "Value"] if c in df.columns]].copy()
     df["Value"] = df["Value"].astype(str).str.replace(",", "", regex=False)
@@ -1532,64 +1511,34 @@ def _fill_harvest_fallback(df: pd.DataFrame, cur_year: int, n_years: int = 5) ->
 def fetch_winter_wheat_acres(years: tuple, class_desc: str = "WINTER") -> pd.DataFrame:
     """
     Fetch national winter wheat planted and harvested acres from USDA NASS.
-    Uses bulk calls (year__GE / year__LE) — 3 API calls total.
-    class_desc: keyword matched against short_desc (e.g. 'WINTER', 'HARD RED WINTER').
+    Reads the shared cache — one broad (class_desc, NATIONAL) pull per stat
+    category (see usda-nass-etl/jobs/crop_conditions.py) filtered locally by
+    reference_period_desc and the requested years.
     Returns DataFrame: year, planted_ac, harvested_ac, abandoned_ac, abandonment_pct, pct_harvested
-
-    class_desc handling: class_desc is NOT sent to the API (NASS does not reliably
-    index it for area records).  We fetch all wheat area data and filter by short_desc
-    — the same approach used for conditions data.
     """
     if not years:
         return pd.DataFrame()
-    min_yr, max_yr = min(years), max(years)
     yr_set = set(years)
 
-    base = {
-        "key":          API_KEY,
-        "commodity_desc": "WHEAT",
-        # class_desc intentionally omitted — filter by short_desc after fetching
-        "agg_level_desc": "NATIONAL",
-        "unit_desc":    "ACRES",
-        "source_desc":  "SURVEY",
-        "year__GE":     str(min_yr),
-        "year__LE":     str(max_yr),
-        "format":       "JSON",
-    }
-
-    def _parse(payload, val_key):
-        if "_error" in payload:
+    def _parse(df: pd.DataFrame, val_key: str, ref_periods: set) -> list:
+        if df.empty or "reference_period_desc" not in df.columns:
             return []
         rows = []
-        for r in payload.get("data", []):
+        sub = df[df["reference_period_desc"].str.strip().str.upper().isin(ref_periods)]
+        for _, r in sub.iterrows():
             v  = pd.to_numeric(str(r.get("Value", "")).replace(",", ""), errors="coerce")
             yr = r.get("year")
-            sd = r.get("short_desc", "")
             if pd.notna(v) and yr and int(yr) in yr_set:
-                rows.append({"year": int(yr), "short_desc": sd, val_key: v})
+                rows.append({"year": int(yr), val_key: v})
         return rows
 
-    def _class_filter(rows: list) -> list:
-        """Keep only rows whose short_desc contains the class keyword."""
-        _skip = {"ALL CLASSES", "ALL", ""}
-        if class_desc and class_desc.upper() not in _skip:
-            return [r for r in rows if class_desc.lower() in r.get("short_desc", "").lower()]
-        return rows
-
-    # Planted — query both reference periods; take max per year for full coverage
-    planted_rows = []
-    for ref in ["YEAR", "YEAR - DEC ACREAGE"]:
-        planted_rows += _parse(
-            _nass_get({**base, "statisticcat_desc": "AREA PLANTED", "reference_period_desc": ref}),
-            "planted_ac",
-        )
-    planted_rows = _class_filter(planted_rows)
+    # Planted — take max across the two reference periods per year for full coverage
+    _planted_df = _fetch_annual_broad("WHEAT", class_desc, "AREA PLANTED", "NATIONAL", "ACRES")
+    planted_rows = _parse(_planted_df, "planted_ac", {"YEAR", "YEAR - DEC ACREAGE"})
 
     # Harvested — annual final figure
-    harvested_rows = _class_filter(_parse(
-        _nass_get({**base, "statisticcat_desc": "AREA HARVESTED", "reference_period_desc": "YEAR"}),
-        "harvested_ac",
-    ))
+    _harvested_df = _fetch_annual_broad("WHEAT", class_desc, "AREA HARVESTED", "NATIONAL", "ACRES")
+    harvested_rows = _parse(_harvested_df, "harvested_ac", {"YEAR"})
 
     if not planted_rows or not harvested_rows:
         return pd.DataFrame()
@@ -1624,7 +1573,6 @@ def fetch_ww_state_acres(years: tuple) -> pd.DataFrame:
     """
     if not years:
         return pd.DataFrame()
-    min_yr, max_yr = min(years), max(years)
     yr_set = set(years)
 
     # Priority order for reference_period_desc — higher = more authoritative.
@@ -1640,30 +1588,19 @@ def fetch_ww_state_acres(years: tuple) -> pd.DataFrame:
         "YEAR - DEC ACREAGE":    20,  # December Seedings — earliest estimate, often overestimates planted
     }
 
-    base = {
-        "key":            API_KEY,
-        "commodity_desc": "WHEAT",
-        "agg_level_desc": "STATE",
-        "unit_desc":      "ACRES",
-        "source_desc":    "SURVEY",
-        "year__GE":       str(min_yr),
-        "year__LE":       str(max_yr),
-        "format":         "JSON",
-    }
-
-    def _parse_state(payload, val_key, include_ref=False):
-        if "_error" in payload:
+    def _parse_state(df: pd.DataFrame, val_key, include_ref=False):
+        if df.empty:
             return []
         rows = []
-        for r in payload.get("data", []):
+        for _, r in df.iterrows():
             v     = pd.to_numeric(str(r.get("Value", "")).replace(",", ""), errors="coerce")
             yr    = r.get("year")
-            state = r.get("state_alpha", "").strip().upper()
+            state = str(r.get("state_alpha", "")).strip().upper()
             sd    = r.get("short_desc", "")
             if pd.notna(v) and v > 0 and yr and state and int(yr) in yr_set:
                 row = {"year": int(yr), "state": state, "short_desc": sd, val_key: float(v)}
                 if include_ref:
-                    ref = r.get("reference_period_desc", "").strip().upper()
+                    ref = str(r.get("reference_period_desc", "")).strip().upper()
                     row["ref_period"] = ref   # store raw string for priority remapping
                 rows.append(row)
         return rows
@@ -1671,10 +1608,11 @@ def fetch_ww_state_acres(years: tuple) -> pd.DataFrame:
     def _winter_filter(rows: list) -> list:
         return [r for r in rows if "winter" in r.get("short_desc", "").lower()]
 
-    # Planted — no reference_period_desc filter: one call gets all NASS reports
+    # Planted — no reference_period_desc filter: the cached broad pull already
+    # covers every NASS report type; filter locally instead of re-querying.
     planted_rows = _winter_filter(
         _parse_state(
-            _nass_get({**base, "statisticcat_desc": "AREA PLANTED"}),
+            _fetch_annual_broad("WHEAT", "WINTER", "AREA PLANTED", "STATE", "ACRES"),
             "planted_ac",
             include_ref=True,
         )
@@ -1692,7 +1630,7 @@ def fetch_ww_state_acres(years: tuple) -> pd.DataFrame:
     }
     harvested_rows = _winter_filter(
         _parse_state(
-            _nass_get({**base, "statisticcat_desc": "AREA HARVESTED"}),
+            _fetch_annual_broad("WHEAT", "WINTER", "AREA HARVESTED", "STATE", "ACRES"),
             "harvested_ac",
             include_ref=True,
         )
@@ -1754,27 +1692,15 @@ def fetch_class_state_acres(class_desc_str: str, years: tuple) -> pd.DataFrame:
     }
     if not years:
         return pd.DataFrame()
-    min_yr, max_yr = min(years), max(years)
     yr_set = set(years)
-    base = {
-        "key":            API_KEY,
-        "commodity_desc": "WHEAT",
-        "class_desc":     class_desc_str,
-        "agg_level_desc": "STATE",
-        "unit_desc":      "ACRES",
-        "source_desc":    "SURVEY",
-        "year__GE":       str(min_yr),
-        "year__LE":       str(max_yr),
-        "format":         "JSON",
-    }
 
-    def _parse(payload, val_key, pri_map):
+    def _parse(df: pd.DataFrame, val_key, pri_map):
         rows = []
-        for r in payload.get("data", []):
+        for _, r in df.iterrows():
             v     = pd.to_numeric(str(r.get("Value", "")).replace(",", ""), errors="coerce")
             yr    = r.get("year")
-            state = r.get("state_alpha", "").strip().upper()
-            ref   = r.get("reference_period_desc", "").strip().upper()
+            state = str(r.get("state_alpha", "")).strip().upper()
+            ref   = str(r.get("reference_period_desc", "")).strip().upper()
             if pd.notna(v) and v > 0 and yr and state and int(yr) in yr_set and len(state) == 2:
                 rows.append({"year": int(yr), "state": state,
                              "value": float(v),
@@ -1787,16 +1713,19 @@ def fetch_class_state_acres(class_desc_str: str, years: tuple) -> pd.DataFrame:
                   .drop_duplicates(subset=["year", "state"], keep="first")
                   [["year", "state", "value"]])
 
-    plt_payload = _nass_get({**base, "statisticcat_desc": "AREA PLANTED"})
-    hrv_payload = _nass_get({**base, "statisticcat_desc": "AREA HARVESTED"})
+    plt_df = _fetch_annual_broad("WHEAT", class_desc_str, "AREA PLANTED", "STATE", "ACRES")
+    hrv_df = _fetch_annual_broad("WHEAT", class_desc_str, "AREA HARVESTED", "STATE", "ACRES")
 
-    p_df = _parse(plt_payload, "planted_ac",  _REF_PRIORITY)
-    h_df = _parse(hrv_payload, "harvested_ac", _REF_PRIORITY_HARV)
+    p_df = _parse(plt_df, "planted_ac",  _REF_PRIORITY)
+    h_df = _parse(hrv_df, "harvested_ac", _REF_PRIORITY_HARV)
 
     # NASS uses different class_desc values across commodities and stat categories.
     # White winter wheat is sometimes recorded as "SOFT WHITE WINTER" for area
     # queries even though production uses "SOFT WHITE".  Try the alternate descriptor
     # so we don't silently return empty and fall back to the total-WW proxy.
+    # NOTE: usda-nass-etl only caches the primary class_desc values listed in
+    # COMMODITY_CLASS_PAIRS, so this alt-descriptor fallback will only ever hit
+    # the cache if that alt value is also cached — otherwise it stays empty.
     if p_df.empty and h_df.empty:
         _alt_map = {
             "SOFT WHITE":        "SOFT WHITE WINTER",
@@ -1805,10 +1734,9 @@ def fetch_class_state_acres(class_desc_str: str, years: tuple) -> pd.DataFrame:
         }
         _alt = _alt_map.get(class_desc_str.upper())
         if _alt:
-            _base_alt = {**base, "class_desc": _alt}
-            _p2 = _parse(_nass_get({**_base_alt, "statisticcat_desc": "AREA PLANTED"}),
+            _p2 = _parse(_fetch_annual_broad("WHEAT", _alt, "AREA PLANTED", "STATE", "ACRES"),
                          "planted_ac", _REF_PRIORITY)
-            _h2 = _parse(_nass_get({**_base_alt, "statisticcat_desc": "AREA HARVESTED"}),
+            _h2 = _parse(_fetch_annual_broad("WHEAT", _alt, "AREA HARVESTED", "STATE", "ACRES"),
                          "harvested_ac", _REF_PRIORITY_HARV)
             if not _p2.empty or not _h2.empty:
                 p_df, h_df = _p2, _h2
@@ -1850,8 +1778,17 @@ def fetch_class_national_acres(class_key: str, years: tuple) -> pd.DataFrame:
         "SRW":   "WHEAT, WINTER, RED, SOFT",
         "White": "WHEAT, WINTER, WHITE",
     }
+    # class_desc values as cached by usda-nass-etl (COMMODITY_CLASS_PAIRS) —
+    # distinct from the short_desc prefixes above, which describe how NASS
+    # labels the returned rows rather than how the query is filtered.
+    _CK_CLASS_DESC = {
+        "HRW":   "HARD RED WINTER",
+        "SRW":   "SOFT RED WINTER",
+        "White": "SOFT WHITE",
+    }
     _pfx = _SD_PREFIX.get(class_key)
-    if not _pfx or not years:
+    _cls_desc = _CK_CLASS_DESC.get(class_key)
+    if not _pfx or not _cls_desc or not years:
         return pd.DataFrame()
 
     _REF_PRI = {
@@ -1859,19 +1796,7 @@ def fetch_class_national_acres(class_key: str, years: tuple) -> pd.DataFrame:
         "YEAR - JUN ACREAGE": 55, "YEAR - JUN FORECAST": 50,
         "YEAR - MAR ACREAGE": 40, "YEAR - MAY FORECAST": 30, "YEAR - DEC ACREAGE": 20,
     }
-
-    _base = {
-        "key":            API_KEY,
-        "source_desc":    "SURVEY",
-        "sector_desc":    "CROPS",
-        "group_desc":     "FIELD CROPS",
-        "commodity_desc": "WHEAT",
-        "state_name":     "US TOTAL",
-        "freq_desc":      "ANNUAL",
-        "year__GE":       str(min(years)),
-        "year__LE":       str(max(years)),
-        "format":         "JSON",
-    }
+    _yr_min, _yr_max = min(years), max(years)
 
     def _best_by_year(df: pd.DataFrame, sd_exact: str) -> dict:
         if df.empty or "short_desc" not in df.columns or "Value" not in df.columns:
@@ -1890,8 +1815,9 @@ def fetch_class_national_acres(class_key: str, years: tuple) -> pd.DataFrame:
         return result
 
     _hrv_sd = f"{_pfx} - AREA HARVESTED, MEASURED IN ACRES"
-    _h_raw  = _nass_get({**_base, "statisticcat_desc": "AREA HARVESTED"})
-    _h_df   = pd.DataFrame(_h_raw.get("data", []))
+    _h_df   = _fetch_annual_broad("WHEAT", _cls_desc, "AREA HARVESTED", "NATIONAL", "ACRES")
+    if not _h_df.empty:
+        _h_df = _h_df[(_h_df["year"] >= _yr_min) & (_h_df["year"] <= _yr_max)]
     _hrv_by_yr = _best_by_year(_h_df, _hrv_sd)
 
     if not _hrv_by_yr:
@@ -1928,26 +1854,15 @@ def fetch_commodity_acres(commodity_desc: str, class_desc: str, years: tuple) ->
     if not years:
         return pd.DataFrame()
     min_yr, max_yr = min(years), max(years)
-    base = {
-        "key":            API_KEY,
-        "commodity_desc": commodity_desc,
-        "class_desc":     class_desc,
-        "agg_level_desc": "STATE",
-        "unit_desc":      "ACRES",
-        "source_desc":    "SURVEY",
-        "freq_desc":      "ANNUAL",
-        "year__GE":       str(min_yr),
-        "year__LE":       str(max_yr),
-        "format":         "JSON",
-        # No reference_period_desc filter — accept all report types and dedup below
-    }
+    # No reference_period_desc filter — accept all report types and dedup below
     frames = []
     for stat in ("AREA PLANTED", "AREA HARVESTED"):
-        p = {**base, "statisticcat_desc": stat}
-        pl = _nass_get(p)
-        if "data" not in pl or not pl["data"]:
+        df = _fetch_annual_broad(commodity_desc, class_desc, stat, "STATE", "ACRES")
+        if df.empty:
             continue
-        df = pd.DataFrame(pl["data"])
+        df = df[(df["year"] >= min_yr) & (df["year"] <= max_yr)]
+        if df.empty:
+            continue
         col = "planted_ac" if stat == "AREA PLANTED" else "harvested_ac"
         df["value"] = pd.to_numeric(
             df["Value"].astype(str).str.replace(",", "", regex=False), errors="coerce"
@@ -2013,29 +1928,21 @@ def fetch_planted_acres_for_year(year: int) -> pd.DataFrame:
         "YEAR - DEC ACREAGE":    20,  # December Seedings — earliest, often overestimates
     }
 
-    params = {
-        "key":               API_KEY,
-        "commodity_desc":    "WHEAT",
-        "agg_level_desc":    "STATE",
-        "unit_desc":         "ACRES",
-        "source_desc":       "SURVEY",
-        "statisticcat_desc": "AREA PLANTED",
-        "year":              str(year),
-        "format":            "JSON",
-        # No reference_period_desc filter — return all reports for the year
-    }
-    payload = _nass_get(params)
-    if "_error" in payload or "data" not in payload:
+    # This is only ever called for Winter Wheat (the only commodity with
+    # has_classes=True), so class_desc="WINTER" matches the cached pair.
+    df = _fetch_annual_broad("WHEAT", "WINTER", "AREA PLANTED", "STATE", "ACRES")
+    if df.empty:
         return pd.DataFrame()
+    df = df[df["year"] == year]
 
     rows: list = []
-    for r in payload.get("data", []):
+    for _, r in df.iterrows():
         sd   = r.get("short_desc", "")
         if "winter" not in sd.lower():
             continue
         v    = pd.to_numeric(str(r.get("Value", "")).replace(",", ""), errors="coerce")
-        st_a = r.get("state_alpha", "").strip().upper()
-        ref  = r.get("reference_period_desc", "").strip().upper()
+        st_a = str(r.get("state_alpha", "")).strip().upper()
+        ref  = str(r.get("reference_period_desc", "")).strip().upper()
         if pd.notna(v) and v > 0 and len(st_a) == 2 and st_a != "US":
             rows.append({
                 "state_alpha": st_a,
@@ -2608,43 +2515,29 @@ def fetch_yields(commodity_desc: str, class_desc: str, years: tuple,
     if not years:
         return pd.DataFrame()
 
-    _base = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    commodity_desc,
-        "class_desc":        class_desc,
-        "statisticcat_desc": "YIELD",
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    if unit_desc:
-        _base["unit_desc"] = unit_desc
-
+    _yr_min, _yr_max = min(years), max(years)
     frames = []
 
-    # Call 1: all state-level rows (agg_level_desc=STATE keeps rows well under NASS 50k limit)
-    _p_state = {**_base, "agg_level_desc": "STATE"}
-    _pl = _nass_get(_p_state)
-    if "data" in _pl and _pl["data"]:
-        frames.append(pd.DataFrame(_pl["data"]))
+    # Call 1: all state-level rows
+    _df_state = _fetch_annual_broad(commodity_desc, class_desc, "YIELD", "STATE", unit_desc)
+    if not _df_state.empty:
+        frames.append(_df_state)
 
-    # Call 2: US TOTAL national row — agg_level=NATIONAL is unreliable for class-specific queries;
-    # filtering by state_name directly is more robust and returns only ~40 rows total.
-    # For class_desc="ALL CLASSES" (corn, soybeans, sorghum), NASS may not index the national
-    # row under that class tag — drop class_desc from the US call so we always get the row back.
-    _p_us = {k: v for k, v in _base.items() if k != "class_desc"} if class_desc == "ALL CLASSES" else {**_base}
-    _p_us["state_name"] = "US TOTAL"
-    _pl_us = _nass_get(_p_us)
-    if "data" in _pl_us and _pl_us["data"]:
-        frames.append(pd.DataFrame(_pl_us["data"]))
+    # Call 2: NATIONAL agg-level row (returns the US TOTAL benchmark row). Unlike
+    # the old live-API call, class_desc is always included here — the ETL cache
+    # is keyed on the exact (commodity_desc, class_desc) pair including
+    # "ALL CLASSES" for corn/soybeans/sorghum, so there's no need to (and no way
+    # to) drop it for a broader NASS match.
+    _df_us = _fetch_annual_broad(commodity_desc, class_desc, "YIELD", "NATIONAL", unit_desc)
+    if not _df_us.empty:
+        frames.append(_df_us)
 
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
+    df = df[(df["year"] >= _yr_min) & (df["year"] <= _yr_max)]
+    if df.empty:
+        return pd.DataFrame()
     df = df[[c for c in ["year", "state_alpha", "state_name", "unit_desc",
                          "reference_period_desc", "Value"]
               if c in df.columns]].copy()
@@ -2696,32 +2589,25 @@ def fetch_usda_monthly_yield_history(commodity_desc: str, class_desc: str, years
     """
     if not years:
         return pd.DataFrame()
-    _params = {k: v for k, v in {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "commodity_desc":    commodity_desc,
-        "statisticcat_desc": "YIELD",
-        "unit_desc":         unit_desc,
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "state_alpha":       state_alpha if state_alpha else None,
-        "state_name":        None if state_alpha else "US TOTAL",
-        "agg_level_desc":    "STATE" if state_alpha else None,
-        "format":            "JSON",
-    }.items() if v is not None}
-    if class_desc and class_desc != "ALL CLASSES":
-        _params["class_desc"] = class_desc
-    _resp = _nass_get(_params)
+    _yr_min, _yr_max = min(years), max(years)
+    _agg = "STATE" if state_alpha else "NATIONAL"
+    _cd  = class_desc or "ALL CLASSES"
+    _df = _fetch_annual_broad(commodity_desc, _cd, "YIELD", _agg, unit_desc)
+    if _df.empty:
+        return pd.DataFrame()
+    _df = _df[(_df["year"] >= _yr_min) & (_df["year"] <= _yr_max)]
+    if state_alpha:
+        _df = _df[_df["state_alpha"].astype(str).str.upper() == state_alpha.upper()]
+    elif "state_alpha" in _df.columns:
+        _df = _df[_df["state_alpha"].astype(str).str.upper() == "US"]
     _rows = []
-    for _rec in _resp.get("data", []):
+    for _, _rec in _df.iterrows():
         try:
             _val = float(str(_rec.get("Value", "")).replace(",", ""))
             _ref = str(_rec.get("reference_period_desc", "")).strip().upper()
             _yr  = int(_rec["year"])
             _rows.append({"crop_year": _yr, "ref_period": _ref, "yield_bu_ac": _val})
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             continue
     if not _rows:
         return pd.DataFrame()
@@ -2745,28 +2631,34 @@ def fetch_usda_monthly_yield_history(commodity_desc: str, class_desc: str, years
 
 
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
-def fetch_first_of_sep_stocks(commodity_desc: str, years: tuple) -> pd.DataFrame:
-    """Pull Sep 1 grain stocks from USDA NASS — STATE and NATIONAL totals."""
-    # Keep params minimal: over-specifying (group_desc, freq_desc, domain_desc)
-    # causes the QuickStats API to return 0 results for the Grain Stocks report.
-    _base = {
-        "key":                   API_KEY,
-        "source_desc":           "SURVEY",
-        "commodity_desc":        commodity_desc,
-        "statisticcat_desc":     "STOCKS",
-        "reference_period_desc": "FIRST OF SEP",
-        "year__GE":              min(years),
-        "year__LE":              max(years),
-        "format":                "JSON",
-    }
+def fetch_first_of_sep_stocks(commodity_desc: str, years: tuple, class_desc: str = "ALL CLASSES") -> pd.DataFrame:
+    """
+    Pull Sep 1 grain stocks from the shared NASS cache — STATE and NATIONAL totals.
+    Reads the one broad STOCKS pull per (commodity_desc, class_desc, agg_level)
+    (no reference_period_desc filter at the cache layer — see
+    usda-nass-etl/jobs/crop_conditions.py) and filters to FIRST OF SEP locally.
+
+    NOTE: NASS Grain Stocks are typically reported at the ALL-CLASSES commodity
+    level (not broken out by wheat class), so for WHEAT sub-classes (WINTER,
+    SPRING, etc.) this cache entry is very likely to come back empty — that
+    mirrors what usda-nass-etl actually cached for those combos.
+    """
+    if not years:
+        return pd.DataFrame()
+    _yr_min, _yr_max = min(years), max(years)
     frames = []
     for _lvl in ("STATE", "NATIONAL"):
-        _pl = _nass_get({**_base, "agg_level_desc": _lvl})
-        if "data" in _pl and _pl["data"]:
-            frames.append(pd.DataFrame(_pl["data"]))
+        _df = _fetch_annual_broad(commodity_desc, class_desc, "STOCKS", _lvl, "BU")
+        if not _df.empty:
+            frames.append(_df)
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
+    df = df[(df["year"] >= _yr_min) & (df["year"] <= _yr_max)]
+    if "reference_period_desc" in df.columns:
+        df = df[df["reference_period_desc"].astype(str).str.strip().str.upper() == "FIRST OF SEP"]
+    if df.empty:
+        return pd.DataFrame()
     _keep = [c for c in ["year", "state_alpha", "short_desc", "unit_desc", "Value"] if c in df.columns]
     df = df[_keep].copy()
     df["year"]  = df["year"].astype(int)
@@ -2793,32 +2685,35 @@ def fetch_quarterly_stocks(
     commodity_desc: str,
     ref_period: str,
     years: tuple,
+    class_desc: str = "ALL CLASSES",
 ) -> pd.DataFrame:
     """
-    Fetch USDA NASS grain stocks for any quarterly reference period.
+    Fetch grain stocks for any quarterly reference period from the shared cache.
     ref_period: 'FIRST OF SEP' | 'FIRST OF DEC' | 'FIRST OF MAR' | 'FIRST OF JUN'
     Returns DataFrame with columns: year, state_alpha, stocks_bu
+
+    Reads the one broad STOCKS pull per (commodity_desc, class_desc, agg_level)
+    and filters to `ref_period` locally — the cache has no reference_period_desc
+    filter (see usda-nass-etl/jobs/crop_conditions.py). As with
+    fetch_first_of_sep_stocks, WHEAT sub-classes will likely come back empty
+    since NASS reports grain stocks at the ALL-CLASSES commodity level.
     """
     if not years:
         return pd.DataFrame()
-    _base = {
-        "key":                   API_KEY,
-        "source_desc":           "SURVEY",
-        "commodity_desc":        commodity_desc,
-        "statisticcat_desc":     "STOCKS",
-        "reference_period_desc": ref_period,
-        "year__GE":              min(years),
-        "year__LE":              max(years),
-        "format":                "JSON",
-    }
+    _yr_min, _yr_max = min(years), max(years)
     frames = []
     for _lvl in ("STATE", "NATIONAL"):
-        _pl = _nass_get({**_base, "agg_level_desc": _lvl})
-        if "data" in _pl and _pl["data"]:
-            frames.append(pd.DataFrame(_pl["data"]))
+        _df = _fetch_annual_broad(commodity_desc, class_desc, "STOCKS", _lvl, "BU")
+        if not _df.empty:
+            frames.append(_df)
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
+    df = df[(df["year"] >= _yr_min) & (df["year"] <= _yr_max)]
+    if "reference_period_desc" in df.columns:
+        df = df[df["reference_period_desc"].astype(str).str.strip().str.upper() == ref_period.upper()]
+    if df.empty:
+        return pd.DataFrame()
     _keep = [c for c in ["year", "state_alpha", "short_desc", "unit_desc", "Value"] if c in df.columns]
     df = df[_keep].copy()
     df["year"]  = df["year"].astype(int)
@@ -3225,24 +3120,10 @@ def fetch_soft_white_yields(years: tuple) -> pd.DataFrame:
     """
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        "class_desc":        "SOFT WHITE",
-        "statisticcat_desc": "YIELD",
-        "agg_level_desc":    "STATE",
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", "SOFT WHITE", "YIELD", "STATE", "BU / ACRE")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "state_name", "Value"] if c in df.columns]].copy()
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
     df["year"]  = df["year"].astype(int)
@@ -3271,24 +3152,10 @@ def _fetch_class_yields(class_desc: str, valid_states: set, years: tuple) -> pd.
     """
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        "class_desc":        class_desc,
-        "statisticcat_desc": "YIELD",
-        "agg_level_desc":    "STATE",
-        "freq_desc":         "ANNUAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", class_desc, "YIELD", "STATE", "BU / ACRE")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "state_name", "Value"] if c in df.columns]].copy()
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
     df["year"]  = df["year"].astype(int)
@@ -3494,24 +3361,10 @@ def fetch_nass_srw_national_yield(years: tuple) -> pd.DataFrame:
     """
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        "class_desc":        "SOFT RED WINTER",
-        "statisticcat_desc": "YIELD",
-        "freq_desc":         "ANNUAL",
-        "state_name":        "US TOTAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", "SOFT RED WINTER", "YIELD", "NATIONAL", "BU / ACRE")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "Value"] if c in df.columns]].copy()
     df["Value"] = df["Value"].astype(str).str.replace(",", "", regex=False)
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
@@ -3527,30 +3380,16 @@ def fetch_nass_srw_national_yield(years: tuple) -> pd.DataFrame:
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
 def fetch_nass_white_national_yield(years: tuple) -> pd.DataFrame:
     """
-    Pull NASS-published U.S. national Soft White YIELD (bu/ac).
-    Uses state_name=US TOTAL — NASS stores national rows this way, not agg_level_desc=NATIONAL.
+    Pull NASS-published U.S. national Soft White YIELD (bu/ac) from the shared cache.
+    Uses agg_level_desc=NATIONAL — matching what usda-nass-etl actually cached.
     Returns DataFrame with columns: year, nass_yield.
     """
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        "class_desc":        "SOFT WHITE",
-        "statisticcat_desc": "YIELD",
-        "freq_desc":         "ANNUAL",
-        "state_name":        "US TOTAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", "SOFT WHITE", "YIELD", "NATIONAL", "BU / ACRE")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "Value"] if c in df.columns]].copy()
     df["Value"] = df["Value"].astype(str).str.replace(",", "", regex=False)
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
@@ -3566,30 +3405,16 @@ def fetch_nass_white_national_yield(years: tuple) -> pd.DataFrame:
 @st.cache_data(ttl=3600, show_spinner=False, persist="disk")
 def fetch_hrw_national_yield(years: tuple) -> pd.DataFrame:
     """
-    Pull NASS-published U.S. national Hard Red Winter YIELD (bu/ac).
-    Uses state_name=US TOTAL — NASS stores national rows this way, not agg_level_desc=NATIONAL.
+    Pull NASS-published U.S. national Hard Red Winter YIELD (bu/ac) from the shared cache.
+    Uses agg_level_desc=NATIONAL — matching what usda-nass-etl actually cached.
     Returns DataFrame with columns: year, nass_yield.
     """
     if not years:
         return pd.DataFrame()
-    params = {
-        "key":               API_KEY,
-        "source_desc":       "SURVEY",
-        "sector_desc":       "CROPS",
-        "group_desc":        "FIELD CROPS",
-        "commodity_desc":    "WHEAT",
-        "class_desc":        "HARD RED WINTER",
-        "statisticcat_desc": "YIELD",
-        "freq_desc":         "ANNUAL",
-        "state_name":        "US TOTAL",
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
-    }
-    payload = _nass_get(params)
-    if "data" not in payload or not payload["data"]:
+    df = _fetch_annual_broad("WHEAT", "HARD RED WINTER", "YIELD", "NATIONAL", "BU / ACRE")
+    if df.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(payload["data"])
+    df = df[df["year"].isin(set(years))]
     df = df[[c for c in ["year", "state_alpha", "Value"] if c in df.columns]].copy()
     df["Value"] = df["Value"].astype(str).str.replace(",", "", regex=False)
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
@@ -4947,6 +4772,99 @@ def build_probability_map(prob_df: pd.DataFrame, title: str = "") -> go.Figure:
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def backtest_yield_proba(
+    jsa_df: pd.DataFrame,
+    yield_df: pd.DataFrame,
+    current_iso_wk: int,
+    min_train_years: int = 8,
+) -> pd.DataFrame:
+    """
+    Leave-one-out cross-validation of the JSA-Index yield probability model.
+    For each state × year, fits the model on all OTHER years at the same
+    calendar week, then predicts P(below trend) for the held-out year.
+
+    Returns: state_alpha, year, jsa_pct, p_below_pred, actual_below (0/1), correct (0/1)
+    """
+    if jsa_df.empty or yield_df.empty:
+        return pd.DataFrame()
+
+    gdf = jsa_df.copy()
+    gdf["week_ending"] = pd.to_datetime(gdf["week_ending"])
+    gdf["iso_wk"]  = gdf["week_ending"].apply(lambda d: d.isocalendar().week)
+    gdf["wk_dist"] = (gdf["iso_wk"] - current_iso_wk).abs()
+    gdf = gdf[gdf["wk_dist"] <= 3]
+    gdf = gdf.loc[gdf.groupby(["year", "state_alpha"])["wk_dist"].idxmin()].reset_index(drop=True)
+
+    rows = []
+    for state in sorted(gdf["state_alpha"].unique()):
+        sg = gdf[gdf["state_alpha"] == state].copy()
+        sy = yield_df[yield_df["state_alpha"] == state].copy()
+        if sg.empty or sy.empty:
+            continue
+
+        merged = sg.merge(sy, on="year", how="inner").dropna(subset=["jsa_pct", "yield_buac"])
+        if len(merged) < min_train_years + 2:
+            continue
+
+        # Full-sample trendline → "true" above/below determination for each year
+        yr_all = merged["year"].values.astype(float)
+        yd_all = merged["yield_buac"].values.astype(float)
+        slope_full, int_full = np.polyfit(yr_all, yd_all, 1)
+        merged = merged.copy()
+        merged["trend_full"]   = slope_full * yr_all + int_full
+        merged["actual_below"] = (merged["yield_buac"] < merged["trend_full"]).astype(int)
+
+        for hold_yr in sorted(merged["year"].unique()):
+            train  = merged[merged["year"] != hold_yr]
+            target = merged[merged["year"] == hold_yr]
+            if len(train) < min_train_years or target.empty:
+                continue
+
+            # Fit trendline on training years only
+            yr_tr = train["year"].values.astype(float)
+            yd_tr = train["yield_buac"].values.astype(float)
+            slope_tr, int_tr = np.polyfit(yr_tr, yd_tr, 1)
+
+            train = train.copy()
+            train["yield_dev_tr"] = yd_tr - (slope_tr * yr_tr + int_tr)
+
+            # OLS: yield_dev ~ JSA Index
+            x = train["jsa_pct"].values.astype(float)
+            y = train["yield_dev_tr"].values.astype(float)
+            x_mean, y_mean = x.mean(), y.mean()
+            ss_x = float(np.dot(x - x_mean, x - x_mean))
+            if ss_x < 1e-6:
+                continue
+            slope_r = float(np.dot(x - x_mean, y - y_mean)) / ss_x
+            int_r   = y_mean - slope_r * x_mean
+
+            residuals = y - (slope_r * x + int_r)
+            sigma = float(np.std(residuals, ddof=1))
+            if sigma < 0.1:
+                continue
+
+            hold_jsa = float(target["jsa_pct"].iloc[0])
+            pred_dev = slope_r * hold_jsa + int_r
+            z        = pred_dev / sigma
+            p_above  = (1.0 + math.erf(z / math.sqrt(2.0))) / 2.0
+            p_below  = 1.0 - p_above
+
+            actual_below = int(target["actual_below"].iloc[0])
+            correct      = int((p_below >= 0.5) == bool(actual_below))
+
+            rows.append({
+                "state_alpha":  state,
+                "year":         int(hold_yr),
+                "jsa_pct":      round(hold_jsa, 1),
+                "p_below_pred": round(p_below * 100, 1),
+                "actual_below": actual_below,
+                "correct":      correct,
+            })
+
+    return pd.DataFrame(rows)
+
+
 def build_stacked_area(
     raw_df: pd.DataFrame,
     state_alpha: str,
@@ -5076,6 +4994,7 @@ def build_stacked_area(
     return fig
 
 
+# ── Page Config ────────────────────────────────────────────────────────────────
 # st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
@@ -5503,6 +5422,7 @@ with st.spinner("Fetching USDA crop condition data…"):
             commodity_cfg["commodity_desc"],
             commodity_cfg["class_desc"],
             tuple(sorted(fetch_usda_years)),
+            commodity_cfg["all_state_alphas"],
         )
     except RuntimeError as _fetch_err:
         st.error(
@@ -5565,8 +5485,15 @@ with st.spinner("Loading USDA historical data…"):
     with ThreadPoolExecutor(max_workers=16) as _pool:
         # Annual yields — all commodities
         _f_yields      = _pool.submit(fetch_yields, _c_desc, _cl_desc, _yield_years, _yield_unit)
-        _f_sep1_stocks = _pool.submit(fetch_first_of_sep_stocks, _c_desc, _prod_tab_years)
-        _f_jun1_stocks = _pool.submit(fetch_quarterly_stocks, _c_desc, "FIRST OF JUN", _prod_tab_years)
+        # Grain Stocks is published at the ALL-CLASSES commodity level, not
+        # broken out by wheat class (WINTER/SPRING/HRW/SRW/SOFT WHITE) -- so
+        # unlike the yield/production/acreage fetches above, these two always
+        # use "ALL CLASSES" regardless of which wheat class tab is selected.
+        # (Passing _cl_desc here would query a class combo NASS doesn't
+        # publish stocks for and the cache doesn't have -- see
+        # usda-nass-etl/jobs/crop_conditions.py's STOCKS_COMMODITIES.)
+        _f_sep1_stocks = _pool.submit(fetch_first_of_sep_stocks, _c_desc, _prod_tab_years, "ALL CLASSES")
+        _f_jun1_stocks = _pool.submit(fetch_quarterly_stocks, _c_desc, "FIRST OF JUN", _prod_tab_years, "ALL CLASSES")
         _f_psd_es      = _pool.submit(fetch_psd_ending_stocks, _c_desc, sel_usda_yr - 1)
 
         if _has_cls:
@@ -8858,8 +8785,8 @@ with _tab_validation:
                         "Current Weight":   _cal_reg["weights_current"][bc],
                         "Empirical Weight": _cal_reg["weights_empirical"][bc],
                         "β (yield_dev / pp)": round(_co, 4),
-                        "SE":               round(_se, 4) if not np.isnan(_se) else np.nan,
-                        "t-stat":           round(_t,  2)  if not np.isnan(_t)  else np.nan,
+                        "SE":               round(_se, 4) if not np.isnan(_se) else "N/A",
+                        "t-stat":           round(_t,  2)  if not np.isnan(_t)  else "N/A",
                         "Sig.":             _sig,
                     })
                 st.dataframe(
@@ -10605,42 +10532,41 @@ with _tab_prod:
                     result[int(_yr)] = float(_grp["_v"].iloc[0])
                 return result
 
-            # Fetch the full year range present in _agg_df — three calls by
-            # statisticcat_desc keeps each result set small and avoids API limits.
+            # Fetch the full year range present in _agg_df.
             _agg_years   = sorted(_agg_df["year"].dropna().astype(int).unique())
             _yr_min      = min(_agg_years) if _agg_years else sel_usda_yr
             _yr_max      = max(_agg_years) if _agg_years else sel_usda_yr
-            _nat_frames: list = []
-            for _scat in ["PRODUCTION", "AREA HARVESTED", "AREA PLANTED", "YIELD"]:
-                _r = _nass_get({
-                    "key":               API_KEY,
-                    "source_desc":       "SURVEY",
-                    "sector_desc":       "CROPS",
-                    "group_desc":        "FIELD CROPS",
-                    "commodity_desc":    "WHEAT",
-                    "statisticcat_desc": _scat,
-                    "state_name":        "US TOTAL",
-                    "freq_desc":         "ANNUAL",
-                    "year__GE":          str(_yr_min),
-                    "year__LE":          str(_yr_max),
-                    "format":            "JSON",
-                })
-                if "data" in _r and _r["data"]:
-                    _nat_frames.append(pd.DataFrame(_r["data"]))
-            _nat_df = pd.concat(_nat_frames, ignore_index=True) if _nat_frames else pd.DataFrame()
 
-            # Post-filter by exact short_desc and build _nat_patch (class-specific rows)
+            # class_desc values as cached by usda-nass-etl (COMMODITY_CLASS_PAIRS) —
+            # one broad NATIONAL cache read per (class, statisticcat) combo, since
+            # that's the only shape available (no combined all-classes national
+            # pull is cached under commodity_desc=WHEAT alone).
+            _CK_CLASS_DESC = {"HRW": "HARD RED WINTER", "SRW": "SOFT RED WINTER", "White": "SOFT WHITE"}
+            # {cls_key: {statisticcat_desc: (short_desc, field_name)}}, built from _SD_MAP
+            _STAT_INFO: dict = {_ck: {} for _ck in _CK_CLASS_DESC}
+            _FIELD_TO_STAT = {"production_bu": "PRODUCTION", "planted_ac": "AREA PLANTED",
+                              "harvested_ac": "AREA HARVESTED", "yield_bu_ac": "YIELD"}
             for _sd_str, (_field, _ck) in _SD_MAP.items():
-                if _ck in ("HRW", "SRW", "White") and _panel_class_states is not None:
-                    _active_ck = (
-                        "HRW"   if _panel_class_states == set(WHEAT_CLASSES.get("HRW — Hard Red Winter") or []) else
-                        "SRW"   if _panel_class_states == set(WHEAT_CLASSES.get("SRW — Soft Red Winter") or []) else
-                        "White" if _panel_class_states == set(WHEAT_CLASSES.get("White Winter") or []) else None
-                    )
-                    if _ck != _active_ck:
+                _STAT_INFO[_ck][_FIELD_TO_STAT[_field]] = (_sd_str, _field)
+
+            _active_ck = None
+            if _panel_class_states is not None:
+                _active_ck = (
+                    "HRW"   if _panel_class_states == set(WHEAT_CLASSES.get("HRW — Hard Red Winter") or []) else
+                    "SRW"   if _panel_class_states == set(WHEAT_CLASSES.get("SRW — Soft Red Winter") or []) else
+                    "White" if _panel_class_states == set(WHEAT_CLASSES.get("White Winter") or []) else None
+                )
+            _needed_cks = [_active_ck] if _active_ck else (list(_CK_CLASS_DESC) if _panel_class_states is None else [])
+
+            for _ck in _needed_cks:
+                _cls_desc = _CK_CLASS_DESC[_ck]
+                for _scat, (_sd_str, _field) in _STAT_INFO[_ck].items():
+                    _sub = _fetch_annual_broad("WHEAT", _cls_desc, _scat, "NATIONAL")
+                    if _sub.empty:
                         continue
-                if not _nat_df.empty and "short_desc" in _nat_df.columns:
-                    _sub     = _nat_df[_nat_df["short_desc"] == _sd_str]
+                    _sub = _sub[(_sub["year"] >= _yr_min) & (_sub["year"] <= _yr_max)]
+                    if "short_desc" in _sub.columns:
+                        _sub = _sub[_sub["short_desc"] == _sd_str]
                     _yr_vals = _nat_parse_by_year(_sub, _REF_PRI_NAT)
                     for _yr, _v in _yr_vals.items():
                         _nat_patch.setdefault(_ck, {}).setdefault(_yr, {})[_field] = _v
@@ -10649,20 +10575,21 @@ with _tab_prod:
             # NASS uses a different short_desc format for the all-class "WHEAT, WINTER"
             # rollup (e.g. "WHEAT, WINTER - ACRES HARVESTED") vs class-specific entries
             # (e.g. "WHEAT, WINTER, RED, HARD - AREA HARVESTED, MEASURED IN ACRES").
-            # Rather than guessing the exact string, identify all-winter rows by the
-            # pattern "WHEAT, WINTER -" (space+dash, not comma) and map via statisticcat_desc.
-            if _panel_class_states is None and not _nat_df.empty and "short_desc" in _nat_df.columns:
+            if _panel_class_states is None:
                 # Use exact short_desc matches (confirmed from NASS QuickStats screenshot).
                 # The loose startswith filter was picking up wrong-unit production rows.
                 _us_sd_map = {
-                    "WHEAT, WINTER - PRODUCTION, MEASURED IN BU":  "production_bu",
-                    "WHEAT, WINTER - ACRES HARVESTED":              "harvested_ac",
-                    "WHEAT, WINTER - ACRES PLANTED":                "planted_ac",
-                    "WHEAT, WINTER - YIELD, MEASURED IN BU / ACRE": "yield_bu_ac",
+                    "WHEAT, WINTER - PRODUCTION, MEASURED IN BU":  ("PRODUCTION", "production_bu"),
+                    "WHEAT, WINTER - ACRES HARVESTED":              ("AREA HARVESTED", "harvested_ac"),
+                    "WHEAT, WINTER - ACRES PLANTED":                ("AREA PLANTED", "planted_ac"),
+                    "WHEAT, WINTER - YIELD, MEASURED IN BU / ACRE": ("YIELD", "yield_bu_ac"),
                 }
-                for _sd_str, _field_k in _us_sd_map.items():
-                    if not _nat_df.empty and "short_desc" in _nat_df.columns:
-                        _sub = _nat_df[_nat_df["short_desc"] == _sd_str]
+                for _sd_str, (_scat, _field_k) in _us_sd_map.items():
+                    _sub = _fetch_annual_broad("WHEAT", "WINTER", _scat, "NATIONAL")
+                    if not _sub.empty:
+                        _sub = _sub[(_sub["year"] >= _yr_min) & (_sub["year"] <= _yr_max)]
+                    if not _sub.empty and "short_desc" in _sub.columns:
+                        _sub = _sub[_sub["short_desc"] == _sd_str]
                         _yr_vals = _nat_parse_by_year(_sub, _REF_PRI_NAT)
                         for _yr, _v in _yr_vals.items():
                             _nat_patch.setdefault("US", {}).setdefault(_yr, {})[_field_k] = _v
