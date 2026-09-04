@@ -239,3 +239,5 @@ pg = st.navigation(
     position="top",
 )
 pg.run()
+
+# deploy check: confirming Streamlit still pulls after the JSA-Dashboards transfer (2026-09-04)
