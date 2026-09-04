@@ -40,7 +40,8 @@ _ENV_SECRET_KEYS = (
     "FOB_VESSEL_SERVICE_NAME",
     "APP_PASSWORD",
     "VIEW_ONLY",
-    "MASSIVE_API_KEY",           # cost_of_carry's Massive futures feed
+    "MASSIVE_API_KEY",           # cost_of_carry's + grain_seasonal's Massive futures feed
+    "ANTHROPIC_API_KEY",         # grain_seasonal's Ask AI tab
     # crop_conditions reads NASS_API_KEY straight from st.secrets (with a
     # working hardcoded fallback) — no os.environ bridge needed for it.
 )
@@ -73,6 +74,9 @@ LIVE_DASHBOARDS = [
     {"title": "Cost of Carry & Seasonal Spreads", "category": "Futures, Options & Spreads",
      "desc": "CBOT/MGEX grain spreads priced against full carry, with seasonal spread analysis.",
      "page": "apps/cost_of_carry/app.py", "url_path": "cost-of-carry"},
+    {"title": "Grain Seasonal Futures & Spreads", "category": "Futures, Options & Spreads",
+     "desc": "CBOT corn/soybean/wheat seasonal charts, multi-leg & cross-commodity spreads, WASDE/NASS markers, AI chat.",
+     "page": "apps/grain_seasonal/app.py", "url_path": "grain-seasonal-spreads"},
 
     {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",
