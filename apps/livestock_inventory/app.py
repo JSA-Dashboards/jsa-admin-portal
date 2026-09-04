@@ -7,16 +7,21 @@ Data source: USDA NASS QuickStats API (https://quickstats.nass.usda.gov)
 """
 
 import io
-import os
 import json
+import sys
 import urllib.request
-import urllib.parse
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+# st.Page runs this file via exec(), not as a standalone script, so its own
+# directory is never added to sys.path automatically -- without this, the
+# local nass_cache_client import below raises ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).parent))
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 DM_BG       = "#f6f8f7"
@@ -41,15 +46,11 @@ SEQ_SCALE = [
     [1.00, "#a7f3c7"],
 ]
 
-# NASS API key comes from Streamlit secrets (Cloud) or an env var / local
-# .streamlit/secrets.toml (dev). No key is committed to the repo.
-try:
-    API_KEY = st.secrets.get("NASS_API_KEY", "")
-except Exception:
-    API_KEY = ""
-API_KEY = API_KEY or os.environ.get("NASS_API_KEY", "")
+# This dashboard reads NASS data from a shared, scheduled-pull cache (see
+# usda-nass-etl) instead of calling the API live -- it no longer needs a
+# NASS API key at all.
+from nass_cache_client import fetch_cached
 
-BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
 COUNTY_GEOJSON_URL = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
 
 # ── Series catalog ────────────────────────────────────────────────────────────
@@ -170,29 +171,16 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-if not API_KEY:
-    st.error(
-        "**NASS_API_KEY is not set.** Add it under *Settings → Secrets* on "
-        "Streamlit Cloud, or create a local `.streamlit/secrets.toml` with "
-        "`NASS_API_KEY = \"your-key\"`. Get a free key at "
-        "https://quickstats.nass.usda.gov/api."
-    )
-    st.stop()
-
-
 # ── Data layer ────────────────────────────────────────────────────────────────
 
 def _nass_request(params: dict) -> dict:
-    params = {**params, "key": API_KEY, "format": "JSON"}
-    url = BASE_URL + "?" + urllib.parse.urlencode(params)
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, timeout=60) as r:
-                return json.load(r)
-        except Exception:
-            if attempt == 2:
-                return {}
-    return {}
+    # Reads the shared NASS cache (see usda-nass-etl) instead of calling
+    # NASS live.
+    try:
+        return fetch_cached(params)
+    except Exception as e:
+        st.error(f"NASS cache error: {e}")
+        return {}
 
 
 def _clean(df: pd.DataFrame, unit: str = "HEAD") -> pd.DataFrame:
@@ -225,27 +213,35 @@ def fetch_national(short_desc: str, unit: str = "HEAD") -> pd.DataFrame:
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _fetch_state_all(short_desc: str, unit: str = "HEAD") -> pd.DataFrame:
+    """All states, all years -- the ETL caches this one broad, unfiltered
+    STATE-level pull per series (see usda-nass-etl/jobs/livestock_inventory.py);
+    fetch_state_year/fetch_state_series filter it locally rather than each
+    querying NASS with their own year/state_alpha filter, since only the
+    broad shape is ever cached."""
+    payload = _nass_request({"short_desc": short_desc, "agg_level_desc": "STATE"})
+    return _clean(pd.DataFrame(payload.get("data", [])), unit)
+
+
 def fetch_state_year(short_desc: str, year: int, unit: str = "HEAD") -> pd.DataFrame:
     """All states for a single year (for the US choropleth + rankings)."""
-    payload = _nass_request({
-        "short_desc": short_desc, "agg_level_desc": "STATE", "year": year,
-    })
-    df = _clean(pd.DataFrame(payload.get("data", [])), unit)
+    df = _fetch_state_all(short_desc, unit)
+    if df.empty:
+        return df
+    df = df[df["year"] == year]
     if df.empty:
         return df
     keep = ["year", "state_alpha", "state_name", "Value",
             "reference_period_desc", "source_desc"]
-    df = df[[c for c in keep if c in df.columns]]
-    return df
+    return df[[c for c in keep if c in df.columns]]
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
 def fetch_state_series(short_desc: str, state_alpha: str, unit: str = "HEAD") -> pd.DataFrame:
     """Full time series for one state."""
-    payload = _nass_request({
-        "short_desc": short_desc, "agg_level_desc": "STATE", "state_alpha": state_alpha,
-    })
-    df = _clean(pd.DataFrame(payload.get("data", [])), unit)
+    df = _fetch_state_all(short_desc, unit)
+    if df.empty or "state_alpha" not in df.columns:
+        return pd.DataFrame()
+    df = df[df["state_alpha"] == state_alpha]
     if df.empty:
         return df
     keep = ["year", "state_alpha", "Value", "reference_period_desc", "source_desc"]
@@ -306,15 +302,11 @@ def load_county_geojson() -> dict:
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def available_years(short_desc: str, agg_level: str, freq: str = "") -> list:
-    params = {"key": API_KEY, "param": "year",
-              "short_desc": short_desc, "agg_level_desc": agg_level}
+    params = {"param": "year", "short_desc": short_desc, "agg_level_desc": agg_level}
     if freq:  # e.g. ANNUAL — for flow (production) series, exclude partial years
         params["freq_desc"] = freq
-    url = ("https://quickstats.nass.usda.gov/api/get_param_values/?"
-           + urllib.parse.urlencode(params))
     try:
-        with urllib.request.urlopen(url, timeout=45) as r:
-            yrs = json.load(r).get("year", [])
+        yrs = fetch_cached(params, endpoint="get_param_values").get("year", [])
         return sorted({int(y) for y in yrs}, reverse=True)
     except Exception:
         return []

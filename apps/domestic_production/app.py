@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -8,9 +11,17 @@ import pathlib
 from datetime import date
 from io import BytesIO
 
+# st.Page runs this file via exec(), not as a standalone script, so its own
+# directory is never added to sys.path automatically -- without this, the
+# local nass_cache_client import below raises ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).parent))
+
 # ── Constants ────────────────────────────────────────────────────────────────
-API_KEY   = st.secrets["NASS_API_KEY"]
-BASE_URL  = "https://quickstats.nass.usda.gov/api/api_GET/"
+# This dashboard reads NASS data from a shared, scheduled-pull cache (see
+# usda-nass-etl) instead of calling the API live -- it no longer needs a
+# NASS API key at all.
+from nass_cache_client import fetch_cached
+
 THIS_YEAR = date.today().year
 
 # ── FAS PSD (WASDE) ───────────────────────────────────────────────────────────
@@ -516,21 +527,19 @@ st.markdown(f"""
 # ── API helpers ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch(params: dict) -> pd.DataFrame:
-    p = {**params, "key": API_KEY, "format": "JSON"}
-    for attempt in range(2):
-        try:
-            r = requests.get(BASE_URL, params=p, timeout=60)
-            d = r.json()
-            return pd.DataFrame(d.get("data", []))
-        except requests.exceptions.Timeout:
-            if attempt == 0:
-                continue   # one automatic retry
-            st.warning("NASS API timed out after two attempts. Try refreshing in a moment.")
-            return pd.DataFrame()
-        except Exception as e:
-            st.error(f"NASS API error: {e}")
-            return pd.DataFrame()
-    return pd.DataFrame()
+    # Reads the shared NASS cache (see usda-nass-etl) instead of calling
+    # NASS live -- this dashboard no longer holds a NASS API key. The ETL
+    # only caches ONE broad, unfiltered-by-year/-period row per
+    # (commodity, metric, agg_level) -- callers that used to pass a narrow
+    # year/reference_period_desc filter must instead call this with the
+    # broad shape and filter the returned DataFrame themselves (see
+    # load_national/load_state_history/load_state_snapshot etc. below).
+    try:
+        d = fetch_cached(params)
+        return pd.DataFrame(d.get("data", []))
+    except Exception as e:
+        st.error(f"NASS cache error: {e}")
+        return pd.DataFrame()
 
 def _clean(val) -> float | None:
     try:
