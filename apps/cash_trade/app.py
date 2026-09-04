@@ -621,17 +621,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Debug Expander ──────────────────────────────────────────────────────────
-
-with st.expander("🔧  Raw API debug"):
-    st.write("**Price endpoint:**", f"{LMR_BASE}/{CT150_ID}/History")
-    st.write("**Volume endpoint:**", f"{LMR_BASE}/{CT154_ID}")
-    st.write("**Price rows:**", len(price_df), "| **Volume rows:**", len(vol_df))
-    if not price_df.empty:
-        st.dataframe(price_df.tail(12))
-    if not vol_df.empty:
-        st.dataframe(vol_df.tail(6))
-
 # ── Auto-refresh ─────────────────────────────────────────────────────────────
 
 if auto_refresh:

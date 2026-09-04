@@ -640,20 +640,6 @@ with st.expander("📋  Data Table"):
     st.dataframe(display.style.format(num_cols, na_rep="—"),
                  use_container_width=True, height=320)
 
-
-# ── Debug Expander ────────────────────────────────────────────────────────────
-
-with st.expander("🔧  Raw API Debug"):
-    st.write("**API endpoint:**", f"{LMR_BASE}/{REPORT_ID}/?lastReports={history_n}&allSections=true")
-    st.write("**Sections returned:**", list(sections.keys()))
-    st.write("**History rows:**", len(hist))
-    for sec_name, sec_df in sections.items():
-        if not sec_df.empty:
-            st.write(f"**{sec_name}** — {len(sec_df)} rows, columns: {list(sec_df.columns)}")
-    if not hist.empty:
-        st.dataframe(hist.tail(10))
-
-
 # ── Legal Disclaimer Footer ───────────────────────────────────────────────────
 
 _disclaimer_year = datetime.now().year
