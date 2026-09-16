@@ -47,6 +47,8 @@ def watermark_uri(path: str) -> str:
 COMMODITIES = [
     {"key": "corn", "label": "Corn", "sublabel": "CBOT · ZC", "product_code": "ZC", "unit": "¢/bu"},
     {"key": "soybeans", "label": "Soybeans", "sublabel": "CBOT · ZS", "product_code": "ZS", "unit": "¢/bu"},
+    {"key": "soymeal", "label": "Soybean meal", "sublabel": "CBOT · ZM", "product_code": "ZM", "unit": "$/ton"},
+    {"key": "soyoil", "label": "Soybean oil", "sublabel": "CBOT · ZL", "product_code": "ZL", "unit": "¢/lb"},
     {"key": "chi_wheat", "label": "Chicago wheat (SRW)", "sublabel": "CBOT · ZW", "product_code": "ZW", "unit": "¢/bu"},
     {"key": "kc_wheat", "label": "KC wheat (HRW)", "sublabel": "CBOT · KE", "product_code": "KE", "unit": "¢/bu"},
 ]
@@ -64,8 +66,8 @@ MAX_YEARS_BACK = 18  # legacy corn/soybean history (see legacy_history.py) reach
 DATA_START_NOTE = (
     "Massive's daily settlement history starts 2021-09-02. Corn and soybeans get a deeper "
     "backfill from a bundled reference file reaching to 2008 (settlement price only, no "
-    "OHLC — Chicago/KC wheat aren't covered by that file, so those still cap out around "
-    "4 years); years past whatever's available are skipped, not wrong."
+    "OHLC — soybean meal/oil and Chicago/KC wheat aren't covered by that file, so those "
+    "still cap out around 4 years); years past whatever's available are skipped, not wrong."
 )
 FND_NOTE = (
     "FND marks the CME grain rule's First Notice Day — the last business day of the "

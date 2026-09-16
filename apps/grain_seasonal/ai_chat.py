@@ -20,8 +20,9 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZW", "KE"],
-                                 "description": "ZC=corn, ZS=soybeans, ZW=Chicago/SRW wheat, KE=KC/HRW wheat"},
+                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZM", "ZL", "ZW", "KE"],
+                                 "description": "ZC=corn, ZS=soybeans, ZM=soybean meal, ZL=soybean oil, "
+                                                 "ZW=Chicago/SRW wheat, KE=KC/HRW wheat"},
                 "n_contracts": {"type": "integer", "description": "how many months out to return, default 8"},
             },
             "required": ["product_code"],
@@ -34,7 +35,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZW", "KE"]},
+                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZM", "ZL", "ZW", "KE"]},
                 "ticker": {"type": "string", "description": "e.g. ZCZ6 for Dec 2026 corn"},
             },
             "required": ["product_code", "ticker"],
@@ -47,7 +48,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZW", "KE"]},
+                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZM", "ZL", "ZW", "KE"]},
                 "ticker": {"type": "string"},
             },
             "required": ["product_code", "ticker"],
@@ -59,7 +60,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZW", "KE"]},
+                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZM", "ZL", "ZW", "KE"]},
                 "ticker": {"type": "string"},
                 "target_date": {"type": "string", "description": "YYYY-MM-DD"},
             },
@@ -80,12 +81,13 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZW", "KE"]},
+                "product_code": {"type": "string", "enum": ["ZC", "ZS", "ZM", "ZL", "ZW", "KE"]},
                 "ticker": {"type": "string", "description": "the reference contract, e.g. ZCZ6"},
                 "years_back": {"type": "integer", "description": "prior contract years to include, default 4, "
                                                                   "max 18 for corn/soybeans (a bundled reference "
-                                                                  "file backfills those to 2008), max ~5 for wheat "
-                                                                  "(Massive's live data only)"},
+                                                                  "file backfills those to 2008), max ~5 for "
+                                                                  "soybean meal/oil and wheat (Massive's live "
+                                                                  "data only)"},
             },
             "required": ["product_code", "ticker"],
         },
