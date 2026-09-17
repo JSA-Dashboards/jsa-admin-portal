@@ -167,7 +167,15 @@ def friendly_contract(ticker: str, product_code: str) -> str:
 
 @st.cache_data(ttl="5m", show_spinner=False)
 def load_curve(product_code: str, api_key: str, as_of: str, n_contracts: int) -> pd.DataFrame:
-    return get_futures_curve(product_code, api_key, date.fromisoformat(as_of), n_contracts=n_contracts)
+    """An empty curve is a feed hiccup, not a real state — every market here always has
+    live months. Retry once, then raise: st.cache_data doesn't cache exceptions, so the
+    next rerun tries again instead of serving "no live contracts" for five minutes."""
+    for _ in range(2):
+        curve = get_futures_curve(product_code, api_key, date.fromisoformat(as_of), n_contracts=n_contracts)
+        if not curve.empty:
+            return curve
+    raise MassiveApiError(f"Massive returned no priced {product_code} contracts — "
+                          "usually a brief feed hiccup, reload in a minute.")
 
 
 @st.cache_data(ttl="6h", show_spinner="Loading spread history…")
