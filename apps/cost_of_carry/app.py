@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import coc_interest_rates as interest_rates
 import coc_seasonal_pattern as seasonal_pattern
+import coc_snapshot_copy as snapshot_copy
 import coc_storage_rates as storage_rates
 import coc_vsr_tracker as vsr_tracker
 
@@ -315,20 +316,21 @@ def figure_png(fig_json: str) -> bytes | None:
         return None
 
 
-def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
-    """Copy-to-clipboard + CSV, plus PNG when a figure is supplied.
+def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, styler=None):
+    """Copy (a PNG snapshot to the clipboard) + CSV, plus PNG download for charts.
 
-    PNG bytes are only rendered once the user asks, because to_image() costs about a
-    second per chart and this app draws a lot of charts."""
+    Copy snapshots the styled table when `styler` is given, otherwise the chart, otherwise
+    the plain table. Server-side PNG bytes are only rendered once the user asks, because
+    to_image() costs about a second per chart and this app draws a lot of charts."""
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
-        # st.code carries a native copy-to-clipboard control. A hand-rolled
-        # <button onclick=...> cannot work here: contract labels contain apostrophes
-        # ("Sep '26") which close the attribute, and Streamlit strips inline handlers.
-        tsv = frame.to_csv(sep="	", index=False)
-        with st.popover("Copy", width=90):
-            st.caption("Tab-separated — use the copy icon, then paste into Excel.")
-            st.code(tsv, language=None, height=260)
+        if styler is not None or fig is None:
+            wm = watermark_path()
+            snapshot_copy.copy_table_button(
+                styler if styler is not None else frame.style, filename, key,
+                watermark_uri=watermark_uri(wm) if wm else None)
+        else:
+            snapshot_copy.copy_chart_button(fig, filename, key)
         st.download_button("CSV", frame.to_csv(index=False).encode(), f"{filename}.csv",
                            "text/csv", key=f"csv_{key}", width=90)
         if fig is not None:
@@ -499,7 +501,7 @@ def render_commodity(commodity: dict, api_key: str, as_of: date, default_rate_pc
         with st.container(key=f"tablewrap_{key}"):
             st.dataframe(styler, hide_index=True, width="stretch",
                          height=min(38 * (len(display) + 1) + 3, 620))
-        export_row(display, f"carry_table_{key}", key=f"tbl_{key}")
+        export_row(display, f"carry_table_{key}", key=f"tbl_{key}", styler=styler)
         traded = table["Sessions"].dropna()
         depth = (
             f" Ranges are built from {int(traded.min()):,}–{int(traded.max()):,} sessions per spread"
@@ -1114,7 +1116,8 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
         with st.container(key=f"tablewrap_sum_{commodity['key']}"):
             st.dataframe(styler, hide_index=True, width="stretch",
                          height=min(35 * (len(display) + 1) + 3, 900))
-    export_row(display, f"cost_of_carry_{commodity['key']}", key=f"sum_{commodity['key']}")
+    export_row(display, f"cost_of_carry_{commodity['key']}", key=f"sum_{commodity['key']}",
+               styler=styler)
 
 
 def render_summary(api_key: str, as_of: date, default_rate_pct: float):
@@ -1338,7 +1341,7 @@ def render_crush(api_key: str, as_of: date):
     with st.container(key="tablewrap_crush"):
         st.dataframe(styler, hide_index=True, width="stretch",
                      height=min(38 * (len(display) + 1) + 3, 480))
-    export_row(display, "soybean_crush_curve", key="crush_curve")
+    export_row(display, "soybean_crush_curve", key="crush_curve", styler=styler)
 
     # ── history & seasonality for one crush month ────────────────────────────
     pick = st.selectbox("Crush month", list(curve["ticker"]),
@@ -1662,7 +1665,7 @@ def render_vsr_tracker(api_key: str, as_of: date):
         with st.container(key=f"tablewrap_{slug}"):
             st.dataframe(styler, hide_index=True, width="stretch",
                          height=min(36 * (len(display) + 1) + 3, 520))
-        export_row(display, slug, key=slug, fig=fig)
+        export_row(display, slug, key=slug, fig=fig, styler=styler)
 
     with st.expander("How the tracker calculates, and how close it gets to CME"):
         st.markdown(
@@ -1699,7 +1702,8 @@ result      = simple average of the daily % across the window
     with st.container(key=f"tablewrap_vsr_history_{product}"):
         st.dataframe(hist_styler, hide_index=True, width="stretch",
                      height=min(36 * (len(history) + 1) + 3, 520))
-    export_row(history, f"vsr_history_{product}", key=f"vsr_history_{product}")
+    export_row(history, f"vsr_history_{product}", key=f"vsr_history_{product}",
+               styler=hist_styler)
     st.caption("Rates in 1/100¢ per bushel per day. Windows CME's notice index doesn't surface "
                "(SRW/HRW Mar 2021 – Apr 2022, HRS before Sep 2025) are omitted.")
 
@@ -1777,7 +1781,7 @@ def render_matrix(api_key: str, as_of: date, default_rate_pct: float):
     with st.container(key="tablewrap_matrix"):
         st.dataframe(styler, hide_index=True, width="stretch",
                      height=min(35 * (len(display) + 1) + 3, 900))
-    export_row(display, f"spread_matrix_{commodity['key']}", key="matrix")
+    export_row(display, f"spread_matrix_{commodity['key']}", key="matrix", styler=styler)
 
 
 MIN_BUILDER_LEGS = 2
@@ -1877,7 +1881,7 @@ def render_combo_history(legs: list[dict], unit_label: str, as_of: date, api_key
     st.plotly_chart(fig, width="stretch", key="builder_combo_hist",
                     config=plotly_config("combo_spread_history"))
     export_row(shown.rename("value").reset_index().rename(columns={"index": "date"}),
-               "combo_spread_history", key="builder_combo")
+               "combo_spread_history", key="builder_combo", fig=fig)
     st.caption(f"{len(shown):,} sessions · {shown.index.min():%b %d, %Y} → {shown.index.max():%b %d, %Y}")
 
 
