@@ -115,7 +115,9 @@ def get_futures_curve(product_code: str, api_key: str, as_of: date, n_contracts:
                 "price": price,
             }
         )
-    return pd.DataFrame(rows)
+    # Explicit columns: when no contract prices, callers still get "ticker"/"price" to
+    # index on rather than a column-less frame.
+    return pd.DataFrame(rows, columns=["ticker", "expiration", "price"])
 
 
 def get_settlement_history(ticker: str, api_key: str) -> pd.Series:
