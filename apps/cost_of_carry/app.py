@@ -1018,8 +1018,8 @@ BUILDER_COLORS = ["#1f1f1f", "#0693e3", "#4a7c59", "#e8833a", "#8e44ad",
 
 
 SUMMARY_CONTRACTS = 6
-SUMMARY_COLUMNS = ["Spreads", "Far", "Current", "Monthly Interest", "Full Storage",
-                   "% Full Storage", "Full Interest", "Full Carry", "% Full Carry"]
+SUMMARY_COLUMNS = ["Spreads", "Far", "Current", "12M Low", "Low Date", "12M High", "High Date",
+                   "Full Storage", "% Full Storage", "Full Interest", "Full Carry", "% Full Carry"]
 SECTION_BAR = ("background:#A9D08E;color:#1f3d1f;font-weight:700;text-align:center;"
                "padding:3px 0;border-radius:3px;letter-spacing:.04em;font-size:0.95rem;")
 
@@ -1052,7 +1052,11 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
         st.warning(f"{commodity['label']}: no live contracts.")
         return
 
-    table = compute_carry_table(curve, storage_rate, annual_rate, commodity["multiplier"])
+    # 12-month spread range, same window and source as the per-market tabs.
+    history = load_history(tuple(curve["ticker"]), api_key, as_of.isoformat())
+    table = compute_carry_table(curve, storage_rate, annual_rate, commodity["multiplier"],
+                                history=history,
+                                history_start=as_of - timedelta(days=HISTORY_LOOKBACK_DAYS))
     if table.empty:
         st.warning(f"{commodity['label']}: not enough contract months.")
         return
@@ -1074,7 +1078,10 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
         "Spreads": [sheet_ticker(t, code, expiries[t]) for t in table["Near"]],
         "Far": [sheet_ticker(t, code, expiries[t]) for t in table["Far"]],
         "Current": table["Current"],
-        "Monthly Interest": table["Monthly interest"],
+        "12M Low": table["Low"],
+        "Low Date": table["Low date"],
+        "12M High": table["High"],
+        "High Date": table["High date"],
         "Full Storage": table["Full storage"],
         "% Full Storage": table["% full storage"],
         "Full Interest": table["Full interest"],
@@ -1083,9 +1090,8 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
     })
     is_group_start = display["near_idx"] != display["near_idx"].shift(1)
     display.loc[~is_group_start, "Spreads"] = ""
-    display["Monthly Interest"] = [
-        f"{v:.2f}" if start else "" for v, start in zip(display["Monthly Interest"], is_group_start)
-    ]
+    for col in ("Low Date", "High Date"):
+        display[col] = [d.strftime("%m/%d/%y") if pd.notna(d) else "—" for d in display[col]]
     display = display.drop(columns=["near_idx"])
 
     def zebra(row: pd.Series):
@@ -1096,7 +1102,8 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
         display.style.apply(zebra, axis=1)
         .apply(lambda col: [BUCKET_STYLE[carry_bucket(v)] for v in col], subset=["% Full Carry"])
         .format({
-            "Current": "{:+.2f}", "Full Storage": "{:.2f}", "% Full Storage": "{:.0%}",
+            "Current": "{:+.2f}", "12M Low": "{:+.2f}", "12M High": "{:+.2f}",
+            "Full Storage": "{:.2f}", "% Full Storage": "{:.0%}",
             "Full Interest": "{:.2f}", "Full Carry": "{:.2f}", "% Full Carry": "{:.0%}",
         }, na_rep="—")
     )
