@@ -41,6 +41,15 @@ COL_GOLD = "#c4b456"
 COL_PURP = "#9b89c4"
 COL_RED  = "#e07070"
 
+# ── Seasonal-chart lookback-average toggle ────────────────────────────────────
+LOOKBACK_CHOICES = (5, 10, 15)
+LOOKBACK_DEFAULT = (10,)
+_LOOKBACK_STYLE = {
+    5:  dict(color=COL_RED,  dash="dash"),
+    10: dict(color=COL_PURP, dash="dashdot"),
+    15: dict(color=COL_LOW,  dash="dot"),
+}
+
 # ── Session-state key prefix (avoids collisions with grain dashboard keys) ────
 _P = "hl_"   # e.g. hl_cz_jan1
 
@@ -478,6 +487,7 @@ def _make_seasonal_overlay(
     jan1_price=None,
     show_individual_years=True,
     height=500,
+    lookbacks=LOOKBACK_DEFAULT,
 ):
     """
     MRCI-style seasonal chart. jan1_price in ¢/bu; ind_high/low_price in $/bu.
@@ -538,26 +548,20 @@ def _make_seasonal_overlay(
         hovertemplate="Full avg: $%{y:.2f}/bu<extra></extra>",
     ))
 
-    # 5-yr avg
-    hist5 = hist[hist["year"] >= current_year - 5]
-    if hist5["year"].nunique() >= 2:
-        avg5 = _avg_price(hist5)
+    # Toggleable lookback averages (5/10/15-yr, per the caller's selection)
+    for n in lookbacks or ():
+        style = _LOOKBACK_STYLE.get(n)
+        if style is None:
+            continue
+        hist_n = hist[hist["year"] >= current_year - n]
+        if hist_n["year"].nunique() < 2:
+            continue
+        avg_n = _avg_price(hist_n)
         fig.add_trace(go.Scatter(
-            x=avg5.index.tolist(), y=avg5.values, mode="lines",
-            line=dict(width=lw, color=COL_RED, dash="dash"),
-            name=f"5-Yr Avg ({hist5['year'].nunique()} yr)",
-            hovertemplate="5-yr avg: $%{y:.2f}/bu<extra></extra>",
-        ))
-
-    # 15-yr avg
-    hist15 = hist[hist["year"] >= current_year - 15]
-    if hist15["year"].nunique() >= 3:
-        avg15 = _avg_price(hist15)
-        fig.add_trace(go.Scatter(
-            x=avg15.index.tolist(), y=avg15.values, mode="lines",
-            line=dict(width=lw, color=COL_LOW, dash="dot"),
-            name=f"15-Yr Avg ({hist15['year'].nunique()} yr)",
-            hovertemplate="15-yr avg: $%{y:.2f}/bu<extra></extra>",
+            x=avg_n.index.tolist(), y=avg_n.values, mode="lines",
+            line=dict(width=lw, color=style["color"], dash=style["dash"]),
+            name=f"{n}-Yr Avg ({hist_n['year'].nunique()} yr)",
+            hovertemplate=f"{n}-yr avg: $%{{y:.2f}}/bu<extra></extra>",
         ))
 
     # Current year — actual prices
@@ -1022,12 +1026,18 @@ def render_hl_tab(api_key: str, legacy_df) -> None:
                 f'<div class="hl-sec-div">KEY AVERAGES — {cfg["title"].split("—")[0].strip()}</div>',
                 unsafe_allow_html=True,
             )
+            selected_lookbacks = st.pills(
+                "Lookback averages", LOOKBACK_CHOICES, selection_mode="multi",
+                default=list(LOOKBACK_DEFAULT), format_func=lambda n: f"{n} yr",
+                key=f"hl_lookbacks_{seas_contract}",
+            )
             st.plotly_chart(
                 _make_seasonal_overlay(
                     seas_df, cfg["current_year"], cfg["title"] + "  ·  Averages & Current Year",
                     end_month=cfg["end_month"],
                     ind_high_price=cfg["ind_high_price"], ind_low_price=cfg["ind_low_price"],
                     jan1_price=cfg["jan1_price"], show_individual_years=False, height=540,
+                    lookbacks=selected_lookbacks,
                 ),
                 use_container_width=True, key=f"hl_seas_clean_{seas_contract}",
             )
@@ -1043,6 +1053,7 @@ def render_hl_tab(api_key: str, legacy_df) -> None:
                     end_month=cfg["end_month"],
                     ind_high_price=cfg["ind_high_price"], ind_low_price=cfg["ind_low_price"],
                     jan1_price=cfg["jan1_price"], show_individual_years=True, height=500,
+                    lookbacks=selected_lookbacks,
                 ),
                 use_container_width=True, key=f"hl_seas_full_{seas_contract}",
             )
