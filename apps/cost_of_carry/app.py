@@ -4,6 +4,7 @@ import dataclasses
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -21,6 +22,10 @@ from coc_massive_api import (MassiveApiError, get_fed_funds_rate, get_futures_cu
                          get_settlement_histories)
 
 HERE = Path(__file__).parent
+
+# CBOT runs on Central time; Streamlit Cloud's clock is UTC, which would put "today" a
+# day ahead of the exchange every evening after 7pm Central.
+EXCHANGE_TZ = ZoneInfo("America/Chicago")
 
 # Local dev reads credentials from .env; on Streamlit Cloud there is no .env and the
 # secrets bridge below supplies the same keys.
@@ -2142,7 +2147,7 @@ def main():
         "Live CBOT & MGEX grain futures curves priced against full financial cost of carry "
         "(storage + interest), every near month against every deferred month. "
         "Spreads are calculated arithmetically and may deviate from board quotes. "
-        f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
+        f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · quotes delayed per Massive API."
     )
 
     api_key = get_api_key()
@@ -2157,7 +2162,7 @@ def main():
     if css:
         st.markdown(css, unsafe_allow_html=True)
 
-    as_of = date.today()
+    as_of = datetime.now(EXCHANGE_TZ).date()
 
     try:
         ff = load_fed_funds(api_key, as_of.isoformat())
