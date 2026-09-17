@@ -36,11 +36,17 @@ previous report's outcome without a break:
     SER-9809  Aug 24 2026  both unchanged at 16.5; minimum rises to 26.5 following
                            expiration of the December 2026 contracts
 
+MGEX spring wheat (HRS) — Variable Storage Rate with a 26.5/100 floor:
+    SER-9605  Aug 2025     HRS 26.5 -> 36.5 on Sep 19 2025  (90.30%); 26.5 was the
+                           rate in force through that Jul-Aug 2025 observation window
+    SER-9809  Aug 24 2026  HRS 36.5 -> 26.5 on Sep 19 2026  (21.90%)
+
 Known gaps — stated rather than papered over
 --------------------------------------------
 * Wheat, Mar 2021 -> Apr 2022: CME's notice index does not surface the five
   determinations in between. Both ends sit at the 16.5 floor, so the rate could only
   have differed through a rise and a fall inside that year; treated as 16.5.
+* HRS before its Jul 2025 anchor is not on record here.
 * Dates before a product's first entry return None, and callers fall back to the rate
   entered in the app.
 
@@ -77,6 +83,11 @@ SCHEDULE: dict[str, list[tuple[date, float]]] = {
         (date(2026, 7, 19), 0.00165),   # SER-9973
         (date(2026, 12, 19), 0.00265),  # SER-9809, minimum raised after Dec 2026 expiry
     ],
+    "HRS": [
+        (date(2025, 7, 21), 0.00265),   # starting rate of the SER-9605 window, VSR floor
+        (date(2025, 9, 19), 0.00365),   # SER-9605
+        (date(2026, 9, 19), 0.00265),   # SER-9809
+    ],
 }
 
 _DATES = {code: [d for d, _ in steps] for code, steps in SCHEDULE.items()}
@@ -97,7 +108,7 @@ def rate_on(product_code: str, on: date) -> float | None:
 
 # Markets whose storage rate moves under the Variable Storage Rate mechanism. Corn and
 # soybeans have fixed maximums, so they have no VSR level.
-VSR_PRODUCTS = ("ZW", "KE")
+VSR_PRODUCTS = ("ZW", "KE", "HRS")
 VSR_FLOOR = 0.00165   # VSR 1: 16.5/100 of a cent per bushel per day, ~5 cents/month
 VSR_STEP = 0.00100    # each level adds 10/100 of a cent per day, ~3 cents/month
 
@@ -105,7 +116,10 @@ VSR_STEP = 0.00100    # each level adds 10/100 of a cent per day, ~3 cents/month
 # SER-9809 fixed the Sep 19 2026 rate and forced Dec 19 2026 to 26.5, so the next open
 # question is the Mar-May 2027 observation, adjusting Mar 19 2027. Advance this date as
 # each VSR results notice is added to SCHEDULE.
-KNOWN_UNTIL: dict[str, date] = {"ZW": date(2027, 3, 19), "KE": date(2027, 3, 19)}
+# HRS has no forced change in December, so its next open determination is the Dec '26
+# window, adjusting Dec 19 2026.
+KNOWN_UNTIL: dict[str, date] = {"ZW": date(2027, 3, 19), "KE": date(2027, 3, 19),
+                                "HRS": date(2026, 12, 19)}
 
 # CME storage changes take effect on the 19th of the delivery month, following the
 # delivery period — both the VSR adjustments and the 2019 corn/soybean increase.
@@ -169,6 +183,8 @@ def vsr_profile(product_code: str, near_expiry: date, far_expiry: date) -> dict 
     if product_code not in VSR_PRODUCTS:
         return None
     start, end = carry_window(near_expiry, far_expiry)
+    if rate_on(product_code, start) is None:
+        return None  # no rate on record (e.g. HRS before Jul 2025) — don't guess a level
     days_by_level: dict[int, int] = {}
     sequence: list[int] = []
     for a, b, rate in _segments(product_code, start, end, fallback=VSR_FLOOR):

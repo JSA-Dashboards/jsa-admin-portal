@@ -54,10 +54,6 @@ MARKETS = {
     "HRS": {"label": "MGEX HRS", "exchange": "MGEX"},
 }
 
-# HRS is not in storage_rates.SCHEDULE (it has no chart history before 2025). Known steps:
-# 26.5 -> 36.5 on Sep 19 2025 (SER-9605, 90.30%), back to 26.5 on Sep 19 2026 (SER-9809,
-# 21.90%). Earlier dates are taken as the 26.5 floor.
-HRS_SCHEDULE = [(date(2025, 9, 19), 0.00365), (date(2026, 9, 19), 0.00265)]
 MIN_RAISE_DATE = date(2026, 12, 19)
 
 # CME's published results, for the history table and for validating this module.
@@ -157,12 +153,7 @@ def floor_rate(product: str, on: date) -> float:
 
 
 def rate_on(product: str, on: date) -> float:
-    if product == "HRS":
-        rate = 0.00265
-        for effective, r in HRS_SCHEDULE:
-            if on >= effective:
-                rate = r
-        return rate
+    """storage_rates' schedule, or the minimum for dates before it starts."""
     rate = storage_rates.rate_on(product, on)
     return floor_rate(product, on) if rate is None else rate
 
