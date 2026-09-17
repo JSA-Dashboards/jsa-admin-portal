@@ -8,12 +8,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # st.Page scripts don't get their own directory on sys.path.
 sys.path.insert(0, str(Path(__file__).parent))
 
 import coc_interest_rates as interest_rates
+import coc_seasonal_pattern as seasonal_pattern
 import coc_storage_rates as storage_rates
 import coc_vsr_tracker as vsr_tracker
 
@@ -1919,18 +1921,23 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
     curve = load_curve(code, api_key, as_of.isoformat(), BUILDER_CURVE_MONTHS)
     expiries = dict(zip(curve["ticker"], curve["expiration"]))
     near_letter, far_letter = month_letter_of(near, code), month_letter_of(far, code)
+    # The seasonal pattern wants up to 15 prior years even when fewer are overlaid.
+    pattern_years = min(max(OUTLOOK_PATTERNS), max_years)
+    load_years = max(years_back, pattern_years)
     hist, deep_expiries = load_deep_seasonal_histories(
-        near, far, code, api_key, years_back, expiries[near], expiries[far]
+        near, far, code, api_key, load_years, expiries[near], expiries[far]
     )
     anchor_expiry = expiries[near]
 
     fig = go.Figure()
     by_dte: dict[str, pd.Series] = {}
+    prior_years: dict[int, pd.Series] = {}  # near contract year -> spread by days to expiry
+    current_dte: pd.Series | None = None
     storage_full = interest_full = None
     skipped: list[str] = []
     vsr_shades: dict[int, int] = {}
 
-    for back in range(years_back + 1):
+    for back in range(load_years + 1):
         n = deep_year_key(code, near_letter, expiries[near].year - back)
         f = deep_year_key(code, far_letter, expiries[far].year - back)
         series, near_exp, _far_exp, s_full, i_full = build_pair_series(
@@ -1940,7 +1947,8 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
         display = (f"{MONTH_LETTERS[near_letter]} {expiries[near].year - back} / "
                   f"{MONTH_LETTERS[far_letter]} {expiries[far].year - back}")
         if series is None or not len(series):
-            skipped.append(display)
+            if back <= years_back:
+                skipped.append(display)
             continue
         if back == 0:
             storage_full, interest_full = s_full, i_full
@@ -1948,8 +1956,17 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
         dte = [-(near_exp - d).days for d in series.index]
         keep = [i for i, d in enumerate(dte) if d >= -window_days]
         if not keep:
-            skipped.append(display)
+            if back <= years_back:
+                skipped.append(display)
             continue
+        year_dte = pd.Series([series.values[i] for i in keep],
+                             index=pd.Index([dte[i] for i in keep], name="dte"))
+        if back == 0:
+            current_dte = year_dte
+        else:
+            prior_years[expiries[near].year - back] = year_dte
+        if back > years_back:
+            continue  # pattern-only year: feeds the outlook below, not drawn here
 
         # shift every year onto the current contract's calendar so months line up
         xs = [anchor_expiry + timedelta(days=dte[i]) for i in keep]
@@ -2039,6 +2056,126 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
         note += f" Pre-2022 years served from {src.get(archive_source(), archive_source())}."
     note += vsr_legend_caption(code)
     st.caption(note)
+
+    render_seasonal_outlook(commodity, near, far, pair_label, prior_years, current_dte,
+                            anchor_expiry, window_days, mode, y_title, fmt, as_of)
+
+
+OUTLOOK_PATTERNS = (15, 5)
+OUTLOOK_STYLE = {15: dict(color="#1f3a93", dash="dash"), 5: dict(color="#8b1a1a", dash="dash")}
+
+
+def render_seasonal_outlook(commodity: dict, near: str, far: str, pair_label: str,
+                            prior_years: dict[int, pd.Series], current_dte: pd.Series | None,
+                            anchor_expiry: date, window_days: int, mode: str, y_title: str,
+                            fmt: str, as_of: date):
+    """Moore Research-style seasonal outlook: the live spread against its 15-year pattern
+    projected to expiration, with the 15- and 5-year patterns as 0-100 indexes below."""
+    code = commodity["product_code"]
+    st.markdown("##### Seasonal outlook")
+
+    patterns: dict[int, tuple[pd.Series, list[int]]] = {}
+    for n in OUTLOOK_PATTERNS:
+        years = sorted(y for y in prior_years if y >= anchor_expiry.year - n)
+        if len(years) < 2:
+            continue
+        # A shorter history can make the 15- and 5-year sets identical; keep one.
+        if any(used == years for _, used in patterns.values()):
+            continue
+        curve = seasonal_pattern.pattern({y: prior_years[y] for y in years}, window_days)
+        if len(curve):
+            patterns[n] = (curve, years)
+    if not patterns:
+        st.info("Not enough prior years with history in this window to build a seasonal pattern.")
+        return
+
+    chosen = st.pills("Patterns", list(patterns), selection_mode="multi", default=list(patterns),
+                      key=f"b_outlook_{code}", format_func=lambda n: f"{len(patterns[n][1])}-yr") \
+        or list(patterns)
+    primary = max(chosen)
+    primary_curve, primary_years = patterns[primary]
+
+    def to_x(index):
+        return [anchor_expiry + timedelta(days=int(d)) for d in index]
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3],
+                        vertical_spacing=0.04)
+    scaled, how = seasonal_pattern.scale_to_market(primary_curve, current_dte)
+    primary_name = (f"{len(primary_years)}-yr pattern "
+                    f"({seasonal_pattern.year_span_label(primary_years)})")
+    if len(scaled):
+        fig.add_trace(go.Scatter(
+            x=to_x(scaled.index), y=list(scaled.values), mode="lines", name=primary_name,
+            line=dict(width=2, **OUTLOOK_STYLE[primary]),
+            hovertemplate=f"{len(primary_years)}-yr pattern<br>%{{y:{fmt}}}<extra></extra>"),
+            row=1, col=1)
+    if current_dte is not None and len(current_dte):
+        fig.add_trace(go.Scatter(
+            x=to_x(current_dte.index), y=list(current_dte.values), mode="lines",
+            name=f"{pair_label} (current market)", line=dict(color="#111111", width=2.4),
+            hovertemplate=f"Current<br>%{{y:{fmt}}}<extra></extra>"), row=1, col=1)
+    for n in sorted(chosen, reverse=True):
+        curve, years = patterns[n]
+        fig.add_trace(go.Scatter(
+            x=to_x(curve.index), y=list(curve.values), mode="lines",
+            name=f"{len(years)}-yr index ({seasonal_pattern.year_span_label(years)})",
+            line=dict(width=2, color=OUTLOOK_STYLE[n]["color"],
+                      dash="solid" if n == primary else "dash"),
+            hovertemplate=f"{len(years)}-yr index<br>%{{y:.0f}}<extra></extra>"), row=2, col=1)
+
+    start = anchor_expiry - timedelta(days=window_days)
+    if start <= as_of <= anchor_expiry:
+        today = pd.Timestamp(as_of)
+        fig.add_shape(type="line", xref="x", yref="paper", x0=today, x1=today, y0=0, y1=1,
+                      line=dict(color="#546e7a", dash="dot", width=1.2))
+    wm = watermark_path()
+    if wm:
+        fig.add_layout_image(dict(
+            source=watermark_uri(wm), xref="paper", yref="paper", x=0.5, y=0.62,
+            sizex=0.4, sizey=0.4, xanchor="center", yanchor="middle",
+            sizing="contain", opacity=WATERMARK_OPACITY, layer="below"))
+    fig.update_layout(
+        height=640, margin=dict(l=10, r=20, t=60, b=10),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
+        title=dict(text=f"{commodity['label']} — {pair_label} with {primary_name}",
+                   x=0.5, xanchor="center", y=0.99, yanchor="top", font=dict(size=16)),
+    )
+    fig.update_yaxes(title_text=y_title, tickformat=fmt, gridcolor="#eceff1", row=1, col=1)
+    fig.update_yaxes(title_text="Pattern (0–100)", range=[-5, 105], dtick=20,
+                     gridcolor="#eceff1", row=2, col=1)
+    fig.update_xaxes(gridcolor="#eceff1", tickformat="%b", dtick="M1",
+                     range=[pd.Timestamp(start), pd.Timestamp(anchor_expiry)])
+    st.plotly_chart(fig, width="stretch", key="builder_outlook",
+                    config=plotly_config(f"{code}_{near}_{far}_seasonal_outlook"))
+
+    export = pd.DataFrame({"days_to_expiry": primary_curve.index,
+                           "date": [f"{d:%m/%d/%Y}" for d in to_x(primary_curve.index)]})
+    for n in chosen:
+        export[f"{len(patterns[n][1])}yr_index"] = patterns[n][0].reindex(primary_curve.index).round(1).values
+    if len(scaled):
+        export[f"{len(primary_years)}yr_pattern_scaled"] = scaled.reindex(primary_curve.index).round(4).values
+    if current_dte is not None:
+        clean = current_dte[~current_dte.index.duplicated(keep="last")]
+        export["current_market"] = clean.reindex(primary_curve.index).values
+    export_row(export, f"{code}_{near}_{far}_seasonal_outlook", key="builder_outlook", fig=fig)
+
+    measure = "spread" if mode == "nominal" else "% of full carry"
+    scaling = {
+        "fit": "fitted to the current market's own path so far (least squares), then carried "
+               "forward to expiration",
+        "range": "stretched across the current market's low–high range (the market isn't "
+                 "tracking the pattern closely enough for a fit)",
+        "none": "not drawn — no current-year prices in this window",
+    }[how]
+    st.caption(
+        f"Each prior year's {measure} is rescaled to 0–100 within the season (its own low = 0, "
+        f"high = 100) so wide and narrow years count equally, then the years are averaged and "
+        f"rescaled — the lower panel. 100 marks where the spread has typically been strongest "
+        f"in its range, 0 weakest. The current year is excluded. In the top panel the "
+        f"{len(primary_years)}-yr pattern is {scaling}; it shows timing and direction, not a "
+        f"price target. Years are the near leg's contract year."
+    )
 
 
 def render_builder(api_key: str, as_of: date, default_rate_pct: float):
