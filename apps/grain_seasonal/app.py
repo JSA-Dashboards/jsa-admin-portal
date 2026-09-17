@@ -13,6 +13,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
 
 from ai_chat import run_chat
+from hl_model import render_hl_tab
 from legacy_history import get_legacy_series, load_legacy_history
 from massive_api import MassiveApiError, get_daily_bars_many, get_futures_curve
 from report_dates import NASS_2021_FALLBACK, ReportDatesError, get_nass_dates, get_wasde_dates
@@ -1398,18 +1399,22 @@ def main():
     )
     anthropic_key = get_anthropic_key()
 
-    tab_labels = [c["label"] for c in COMMODITIES] + ["Cross-commodity spread", "Report calendar", "Ask AI"]
+    tab_labels = [c["label"] for c in COMMODITIES] + [
+        "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
+    ]
     tabs = st.tabs(tab_labels)
     for tab, commodity in zip(tabs, COMMODITIES):
         with tab:
             st.caption(commodity["sublabel"])
             render_commodity(commodity, api_key, as_of, report_dates_visible)
-    with tabs[-3]:
+    with tabs[-4]:
         render_cross_commodity_spread(api_key, as_of, report_dates_visible)
-    with tabs[-2]:
+    with tabs[-3]:
         render_report_calendar(wasde_dates, nass_dates, as_of)
-    with tabs[-1]:
+    with tabs[-2]:
         render_ask_ai(api_key, anthropic_key, as_of, wasde_dates, nass_dates)
+    with tabs[-1]:
+        render_hl_tab(api_key, load_legacy_history_cached())
 
 
 if __name__ == "__main__":
