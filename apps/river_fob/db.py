@@ -5,8 +5,9 @@ Only the independent inputs are stored — CIF basis and barge freight — keyed
 as-of date. Everything else (FOB, cash vs delivery, carry) is recomputed from
 these on read, so history stays small and always reflects the current formulas.
 
-Backend: SQLite by default (a local file), or Postgres when DATABASE_URL is set
-(e.g. postgresql://user:pass@host/db). Same SQL either way.
+Backend: Snowflake when USE_SNOWFLAKE is set — the archive lives in its own
+RIVER_FOB.PUBLIC database (see _sf_connect); otherwise Postgres when
+RIVERFOB_DATABASE_URL is set, else a local SQLite file. Same SQL either way.
 """
 import os
 import sqlite3
@@ -35,9 +36,76 @@ def _pg_dsn():
     return url
 
 
+def _use_snowflake():
+    return os.environ.get("USE_SNOWFLAKE", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _backend():
+    """Active backend: 'snowflake' | 'postgres' | 'sqlite'. Snowflake wins when
+    USE_SNOWFLAKE is set (even with RIVERFOB_DATABASE_URL still present), so the
+    cutover is a single flag; otherwise Postgres if the URL is set, else SQLite."""
+    if _use_snowflake():
+        return "snowflake"
+    return "postgres" if _is_postgres() else "sqlite"
+
+
+class _SFConn:
+    """Adapts a Snowflake connection to the (conn, placeholder) contract the rest
+    of db.py uses. The default cursor returns tuples — exactly what every read
+    here expects (positional unpacking) — so no dict/lowercase shim is needed."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
+
+def _sf_connect():
+    """Fresh Snowflake connection for the River FOB archive.
+
+    The archive lives in its OWN database, RIVER_FOB.PUBLIC — deliberately not a
+    schema inside JSA. The admin-portal shell (Home.py) sets SNOWFLAKE_DATABASE=JSA
+    and no schema globally for its ~20 bundled apps, so this connection must NOT
+    inherit that: pin database/schema to RIVER_FOB/PUBLIC or the unqualified table
+    names below (cif_history, freight_history …) would resolve to JSA and silently
+    find nothing — empty tabs, no error. Forces %s-style binding so the shared SQL
+    works unchanged."""
+    import snowflake.connector as sc
+    kw = dict(
+        account=os.environ["SNOWFLAKE_ACCOUNT"],
+        user=os.environ["SNOWFLAKE_USER"],
+        password=os.environ.get("SNOWFLAKE_PASSWORD") or None,
+        role=os.environ.get("SNOWFLAKE_ROLE") or None,
+        warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE") or None,
+        database="RIVER_FOB",
+        schema="PUBLIC",
+        login_timeout=30,
+    )
+    conn = sc.connect(**{k: v for k, v in kw.items() if v is not None})
+    try:
+        conn._paramstyle = "pyformat"
+    except Exception:
+        pass
+    return conn
+
+
 def _connect():
     """Return (connection, paramstyle_placeholder)."""
-    if _is_postgres():
+    b = _backend()
+    if b == "snowflake":
+        return _SFConn(_sf_connect()), "%s"
+    if b == "postgres":
         import psycopg2
         return psycopg2.connect(_pg_dsn()), "%s"
     conn = sqlite3.connect(LOCAL_SQLITE)
@@ -45,10 +113,19 @@ def _connect():
 
 
 def backend_name():
-    return "Postgres" if _is_postgres() else f"SQLite ({os.path.basename(LOCAL_SQLITE)})"
+    b = _backend()
+    if b == "snowflake":
+        return "Snowflake"
+    if b == "postgres":
+        return "Postgres"
+    return f"SQLite ({os.path.basename(LOCAL_SQLITE)})"
 
 
 def init_db():
+    # On Snowflake the schema (and data) come from the migration, and CREATE
+    # TABLE IF NOT EXISTS / DDL isn't needed at app start.
+    if _backend() == "snowflake":
+        return
     conn, _ = _connect()
     try:
         cur = conn.cursor()

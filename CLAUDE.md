@@ -28,12 +28,19 @@ Two dashboards sharing one process would otherwise clobber each other's
 startup:
 
 - `BASISTRACKER_DATABASE_URL` — basis_tracker's own DB
-- `RIVER_DATABASE_URL` — basis_tracker's cross-read of river data
+- `RIVER_DATABASE_URL` — rail_fob's cross-read of river (CIF) data
 - `RIVERFOB_DATABASE_URL` — river_fob's own DB
-- `BASIS_DATABASE_URL` — river_fob's cross-read of basis data
+- `BASIS_DATABASE_URL` — river_fob + rail_fob cross-read of basis data
 
 If you copy a dashboard in from its standalone repo, rename its `DATABASE_URL`
 the same way or it will fight whichever app loads first.
+
+**These are now Postgres-rollback only.** As of 2026-09-18 all four consumers
+read Snowflake when `USE_SNOWFLAKE` is truthy (see **Data backends**), so every
+URL above is ignored in normal operation. `BASISTRACKER_DATABASE_URL` is fully
+dead (basis_tracker is a redirect stub). Keep the other three only as a
+rollback (clear `USE_SNOWFLAKE` → back on Supabase); delete all four once
+Supabase is decommissioned.
 
 ## Pushing to GitHub does not deploy
 
@@ -60,7 +67,25 @@ Check both before removing anything.
 
 ## Data backends
 
-Snowflake (`JSA`) is the live warehouse. Postgres/Supabase `DATABASE_URL`
-values still present in secrets are stale fallbacks — Snowflake wins whenever
-`USE_SNOWFLAKE` is truthy. Do not "fix" a stale number by pointing an app back
-at Postgres.
+Snowflake is the live warehouse. Every bundled app reads Snowflake when
+`USE_SNOWFLAKE` is truthy; the Postgres/Supabase `*_DATABASE_URL` values still in
+secrets are stale rollback fallbacks only. Do not "fix" a stale number by
+pointing an app back at Postgres.
+
+Two data homes, because River FOB owns its own database:
+
+| App / tab | Snowflake location | pinned in |
+|---|---|---|
+| basis_tracker (retired stub) | — redirects to the Streamlit-in-Snowflake app, touches no DB | `apps/basis_tracker/app.py` |
+| river_fob own archive | `RIVER_FOB.PUBLIC` | `apps/river_fob/db.py::_sf_connect` |
+| river_fob bids cross-read | `JSA.BASIS_TRACKER` | `apps/river_fob/bids_data.py` (`USE SCHEMA`) |
+| rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
+| rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
+
+**The `SNOWFLAKE_DATABASE=JSA` collision:** the shell sets `SNOWFLAKE_DATABASE=JSA`
+(no schema) globally, but the River FOB archive lives in a **separate**
+`RIVER_FOB.PUBLIC` database. Every module that reads it therefore pins
+`database="RIVER_FOB", schema="PUBLIC"` at connect time (see the `_sf_connect`
+helpers), ignoring the ambient `JSA`. Miss that and the tab reads `JSA`, finds
+nothing, and shows empty with no error. Migrated 2026-09-18; before that these
+two tabs still read Supabase and served stale data.
