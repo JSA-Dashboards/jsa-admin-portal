@@ -14,6 +14,7 @@ import streamlit as st
 # st.Page scripts don't get their own directory on sys.path.
 sys.path.insert(0, str(Path(__file__).parent))
 
+import coc_ethanol_grind as ethanol_grind
 import coc_interest_rates as interest_rates
 import coc_seasonal_pattern as seasonal_pattern
 import coc_snapshot_copy as snapshot_copy
@@ -1708,6 +1709,269 @@ result      = simple average of the daily % across the window
                "(SRW/HRW Mar 2021 – Apr 2022, HRS before Sep 2025) are omitted.")
 
 
+# ── Ethanol grind ────────────────────────────────────────────────────────────
+ETHANOL_CODE = "CU"          # CME Chicago Ethanol (Platts), NYMEX-listed
+ETHANOL_MONTHS = "FGHJKMNQUVXZ"
+GRIND_COLORS = {"ethanol": "#0693e3", "ddg": "#e8833a", "oil": "#f1c40f",
+                "corn": "#5aa469", "gas": "#b05fb0", "margin": "#1f1f1f"}
+
+
+@st.cache_data(ttl="6h", show_spinner="Loading USDA ethanol prices…")
+def load_ams_weekly(as_of: str) -> pd.DataFrame:
+    return ethanol_grind.load_weekly()
+
+
+@st.cache_data(ttl="6h", show_spinner=False)
+def load_ams_plant_corn(as_of: str) -> pd.DataFrame:
+    return ethanol_grind.load_plant_corn()
+
+
+@st.cache_data(ttl="12h", show_spinner=False)
+def load_henry_hub() -> pd.Series:
+    """Henry Hub spot from EIA, cached — it publishes once a day."""
+    return ethanol_grind.henry_hub()
+
+
+@st.cache_data(ttl="5m", show_spinner=False)
+def load_ethanol_curve(api_key: str, as_of: str, n_contracts: int) -> pd.DataFrame:
+    """CU months with a live price. Thin market: most months never print."""
+    try:
+        return get_futures_curve(ETHANOL_CODE, api_key, date.fromisoformat(as_of),
+                                 n_contracts=n_contracts)
+    except MassiveApiError:
+        return pd.DataFrame(columns=["ticker", "expiration", "price"])
+
+
+def corn_futures_series(api_key: str, as_of: date) -> tuple[pd.Series, str]:
+    """Front-month corn settlements in $/bu, for pricing the grind off the board."""
+    try:
+        curve = load_curve("ZC", api_key, as_of.isoformat(), 1)
+    except MassiveApiError:
+        return pd.Series(dtype=float), ""
+    if curve.empty:
+        return pd.Series(dtype=float), ""
+    ticker = curve.iloc[0]["ticker"]
+    hist = load_history((ticker,), api_key, as_of.isoformat()).get(ticker)
+    if hist is None or not len(hist):
+        return pd.Series(dtype=float), ticker
+    return hist / 100.0, ticker
+
+
+def render_ethanol(api_key: str, as_of: date):
+    st.markdown("##### Ethanol grind")
+    st.caption(
+        "Dry-mill grind margin per bushel: **ethanol + distillers grain + corn oil − corn − operating "
+        "costs**. Cash prices are USDA AMS Market News — the *National Weekly Ethanol Report* for "
+        "ethanol, distillers grain and corn oil, and the *National Daily Ethanol Report* for corn bids "
+        "at plants. CME's ethanol future (CU) trades too thinly to price a forward grind; it appears "
+        "at the bottom with its last trade date, as a check rather than a curve."
+    )
+
+    weekly = load_ams_weekly(as_of.isoformat())
+    if not len(weekly):
+        st.warning("No USDA ethanol prices available — the AMS API didn't answer and no snapshot is "
+                   "committed. Run `python ethanol_grind.py` to build one.")
+        return
+
+    plant_corn = load_ams_plant_corn(as_of.isoformat())
+    state_options = ["All states"] + ethanol_grind.states(weekly)
+
+    controls = st.container(horizontal=True, vertical_alignment="bottom")
+    with controls:
+        state = st.selectbox("State", state_options, index=min(1, len(state_options) - 1),
+                             key="eth_state", width=170)
+        ddg_variety = st.segmented_control("Distillers grain", ethanol_grind.DDG_VARIETIES,
+                                           default=ethanol_grind.DDG_VARIETIES[0], key="eth_ddg") \
+            or ethanol_grind.DDG_VARIETIES[0]
+        # Plant bids are the truer cost but depend on AMS answering; fall back to the
+        # board so the tab still prices a margin when the daily report is unavailable.
+        has_bids = len(plant_corn) > 0
+        corn_source = st.segmented_control(
+            "Corn cost", ["Plant bids", "CBOT futures"],
+            default="Plant bids" if has_bids else "CBOT futures", key="eth_corn_src")             or ("Plant bids" if has_bids else "CBOT futures")
+        range_label = st.segmented_control("Range", list(RANGE_CHOICES), default="2Y", key="eth_range")
+
+    yields = st.container(horizontal=True, vertical_alignment="bottom")
+    with yields:
+        gal = st.number_input("Ethanol (gal/bu)", min_value=0.0, max_value=4.0, step=0.01,
+                              value=ethanol_grind.DEFAULT_GAL_PER_BU, key="eth_gal", width=170)
+        ddg_lb = st.number_input("Distillers grain (lb/bu)", min_value=0.0, max_value=20.0, step=0.5,
+                                 value=ethanol_grind.DEFAULT_DDG_LB_PER_BU, key="eth_ddg_lb", width=210)
+        oil_lb = st.number_input("Corn oil (lb/bu)", min_value=0.0, max_value=3.0, step=0.05,
+                                 value=ethanol_grind.DEFAULT_OIL_LB_PER_BU, key="eth_oil_lb", width=170)
+        opex = st.number_input("Other costs ($/bu)", min_value=0.0, max_value=3.0, step=0.05,
+                               value=ethanol_grind.DEFAULT_OPEX_PER_BU, key="eth_opex", width=180,
+                               help="Power, enzymes, labour, denaturant, depreciation — everything "
+                                    "except corn and natural gas. Left at zero the margin covers "
+                                    "only corn and gas.")
+
+    gas_row = st.container(horizontal=True, vertical_alignment="bottom")
+    with gas_row:
+        gas_use = st.number_input("Natural gas (MMBtu/gal)", min_value=0.0, max_value=0.2, step=0.001,
+                                  value=ethanol_grind.DEFAULT_GAS_MMBTU_PER_GAL, format="%.3f",
+                                  key="eth_gas_use", width=215,
+                                  help="Thermal energy per gallon of ethanol. A dry mill runs about "
+                                       "23,000–25,000 BTU, so 0.023–0.025 MMBtu.")
+        hh = load_henry_hub()
+        gas_source = st.segmented_control("Gas price", ["Henry Hub", "Fixed"],
+                                          default="Henry Hub", key="eth_gas_src") or "Henry Hub"
+        hh_latest = float(hh.iloc[-1]) if len(hh) else 3.00
+        if gas_source == "Henry Hub" and len(hh):
+            gas_price = hh
+            gas_label = f"EIA Henry Hub spot (${hh_latest:.2f} on {hh.index[-1]:%b %d})"
+        else:
+            gas_price = st.number_input("$/MMBtu", min_value=0.0, max_value=25.0, step=0.05,
+                                        value=round(hh_latest, 2), key="eth_gas_px", width=150)
+            gas_label = f"fixed ${gas_price:.2f}/MMBtu"
+            if gas_source == "Henry Hub":
+                gas_label += " (EIA unavailable)"
+
+    if corn_source == "Plant bids" and has_bids:
+        corn = ethanol_grind.series(plant_corn, "Corn", state)
+        corn_label = f"AMS plant bids ({state.lower() if state != 'All states' else 'all states'})"
+    else:
+        corn, corn_ticker = corn_futures_series(api_key, as_of)
+        corn_label = f"CBOT {friendly_contract(corn_ticker, 'ZC')} futures" if corn_ticker else "CBOT corn"
+
+    frame = ethanol_grind.margin_frame(weekly, corn, state, ddg_variety, gal, ddg_lb, oil_lb,
+                                       opex, gas_price=gas_price, gas_mmbtu_per_gal=gas_use)
+    if not len(frame) and corn_source == "Plant bids":
+        # AMS plant bids can be a short live window that doesn't reach the weekly report
+        # dates; the board always covers them.
+        corn, corn_ticker = corn_futures_series(api_key, as_of)
+        corn_label = (f"CBOT {friendly_contract(corn_ticker, 'ZC')} futures — plant bids don't "
+                      f"cover these weeks" if corn_ticker else "CBOT corn")
+        frame = ethanol_grind.margin_frame(weekly, corn, state, ddg_variety, gal, ddg_lb, oil_lb,
+                                           opex, gas_price=gas_price, gas_mmbtu_per_gal=gas_use)
+    if not len(frame):
+        st.warning("No weeks have both a cash ethanol quote and a corn price for this selection.")
+        return
+
+    window_days = RANGE_CHOICES.get(range_label or "2Y", 730)
+    if window_days:
+        frame = frame[[d >= as_of - timedelta(days=window_days) for d in frame.index]]
+    if not len(frame):
+        st.info("No weeks inside this range.")
+        return
+
+    latest = frame.iloc[-1]
+    with st.container(horizontal=True):
+        st.metric("Grind margin", f"${latest['margin']:+.2f}/bu",
+                  f"${latest['margin_per_gal']:+.3f}/gal", delta_color="off", border=True)
+        st.metric("Ethanol", f"${latest['ethanol']:.3f}/gal",
+                  f"${latest['ethanol_rev']:.2f}/bu", delta_color="off", border=True)
+        st.metric("Distillers grain", f"${latest['ddg']:.0f}/ton",
+                  f"${latest['ddg_rev']:.2f}/bu", delta_color="off", border=True)
+        st.metric("Corn oil", f"{latest['oil']:.1f}¢/lb",
+                  f"${latest['oil_rev']:.2f}/bu", delta_color="off", border=True)
+        st.metric("Corn", f"${latest['corn']:.2f}/bu", corn_label,
+                  delta_color="off", border=True)
+        st.metric("Natural gas", f"${latest['gas']:.2f}/MMBtu",
+                  f"−${latest['gas_cost']:.2f}/bu", delta_color="off", border=True)
+    st.caption(f"Week of {frame.index[-1]:%b %d, %Y} · co-product revenue "
+               f"${latest['ddg_rev'] + latest['oil_rev']:.2f}/bu of the "
+               f"${latest['revenue']:.2f}/bu total.")
+
+    fig = go.Figure()
+    xs = [pd.Timestamp(d) for d in frame.index]
+    fig.add_trace(go.Bar(x=xs, y=list(frame["ethanol_rev"]), name="Ethanol",
+                         marker_color=GRIND_COLORS["ethanol"],
+                         hovertemplate="Ethanol $%{y:.2f}/bu<extra></extra>"))
+    fig.add_trace(go.Bar(x=xs, y=list(frame["ddg_rev"]), name="Distillers grain",
+                         marker_color=GRIND_COLORS["ddg"],
+                         hovertemplate="DDG $%{y:.2f}/bu<extra></extra>"))
+    fig.add_trace(go.Bar(x=xs, y=list(frame["oil_rev"]), name="Corn oil",
+                         marker_color=GRIND_COLORS["oil"],
+                         hovertemplate="Corn oil $%{y:.2f}/bu<extra></extra>"))
+    fig.add_trace(go.Bar(x=xs, y=list(-(frame["corn"] + frame["opex"])), name="Corn + other costs",
+                         marker_color=GRIND_COLORS["corn"],
+                         hovertemplate="Corn + other $%{y:.2f}/bu<extra></extra>"))
+    fig.add_trace(go.Bar(x=xs, y=list(-frame["gas_cost"].fillna(0)), name="Natural gas",
+                         marker_color=GRIND_COLORS["gas"],
+                         hovertemplate="Natural gas $%{y:.2f}/bu<extra></extra>"))
+    fig.add_trace(go.Scatter(x=xs, y=list(frame["margin"]), name="Margin", mode="lines",
+                             line=dict(color=GRIND_COLORS["margin"], width=2.5),
+                             hovertemplate="Margin $%{y:+.2f}/bu<extra></extra>"))
+    _style_axes(fig, "$ per bushel", None, ".2f")
+    fig.update_layout(barmode="relative", height=420)
+    st.plotly_chart(fig, width="stretch", key="eth_margin_chart",
+                    config=plotly_config("ethanol_grind_margin"))
+
+    display = pd.DataFrame({
+        "Week": [f"{d:%m/%d/%Y}" for d in frame.index],
+        "Ethanol $/gal": frame["ethanol"].round(3).values,
+        "DDG $/ton": frame["ddg"].round(2).values,
+        "Corn oil ¢/lb": frame["oil"].round(2).values,
+        "Corn $/bu": frame["corn"].round(3).values,
+        "Gas $/MMBtu": frame["gas"].round(3).values,
+        "Gas $/bu": frame["gas_cost"].round(3).values,
+        "Revenue $/bu": frame["revenue"].round(3).values,
+        "Costs $/bu": (frame["corn"] + frame["gas_cost"].fillna(0) + frame["opex"]).round(3).values,
+        "Margin $/bu": frame["margin"].round(3).values,
+        "Margin $/gal": frame["margin_per_gal"].round(4).values,
+    })[::-1]
+    styler = display.style.format({
+        "Ethanol $/gal": "{:.3f}", "DDG $/ton": "{:.2f}", "Corn oil ¢/lb": "{:.2f}",
+        "Corn $/bu": "{:.3f}", "Gas $/MMBtu": "{:.2f}", "Gas $/bu": "{:.3f}",
+        "Revenue $/bu": "{:.3f}", "Costs $/bu": "{:.3f}",
+        "Margin $/bu": "{:+.3f}", "Margin $/gal": "{:+.4f}",
+    }).map(lambda v: "color:#7a1d1d;" if isinstance(v, float) and v < 0 else "",
+           subset=["Margin $/bu", "Margin $/gal"])
+    with st.container(key="tablewrap_ethanol"):
+        st.dataframe(styler, hide_index=True, width="stretch",
+                     height=min(36 * (len(display) + 1) + 3, 460))
+    export_row(display, "ethanol_grind", key="ethanol", styler=styler)
+
+    src = {"snapshot+ams": "the committed snapshot plus this week's live AMS rows",
+           "snapshot": "the committed snapshot (AMS didn't answer in time)",
+           "ams": "live AMS rows", "none": "no source"}
+    st.caption(
+        f"{len(frame)} weeks · prices from {src.get(ethanol_grind.source(), 'AMS')} · "
+        f"yields {gal:.2f} gal, {ddg_lb:.1f} lb distillers grain and {oil_lb:.2f} lb corn oil "
+        f"per bushel · natural gas {gas_use:.3f} MMBtu/gal priced off {gas_label}. Distillers grain "
+        f"and corn oil are quoted weekly and carried forward between reports. Sources: USDA AMS "
+        f"Market News and EIA, both public domain."
+    )
+
+    with st.expander("Forward check — CME ethanol futures (CU)"):
+        board = load_ethanol_curve(api_key, as_of.isoformat(), 8)
+        if board.empty:
+            st.info("No CU months carry a price right now.")
+            return
+        hist = load_history(tuple(board["ticker"]), api_key, as_of.isoformat())
+        try:
+            corn_curve = load_curve("ZC", api_key, as_of.isoformat(), 8)
+        except MassiveApiError:
+            corn_curve = pd.DataFrame(columns=["ticker", "expiration", "price"])
+        rows = []
+        for leg in board.itertuples(index=False):
+            later = corn_curve[corn_curve["expiration"] >= leg.expiration]
+            corn_leg = later.iloc[0] if len(later) else None
+            series = hist.get(leg.ticker)
+            last_trade = series.index.max() if series is not None and len(series) else None
+            corn_price = float(corn_leg["price"]) / 100 if corn_leg is not None else float("nan")
+            revenue = leg.price * gal + latest["ddg_rev"] + latest["oil_rev"]
+            costs = corn_price + latest["gas_cost"] + opex
+            rows.append({
+                "Ethanol": friendly_contract(leg.ticker, ETHANOL_CODE),
+                "$/gal": leg.price,
+                "Last trade": f"{last_trade:%m/%d/%Y}" if last_trade else "—",
+                "Corn": friendly_contract(corn_leg["ticker"], "ZC") if corn_leg is not None else "—",
+                "Corn $/bu": corn_price,
+                "Margin $/bu": revenue - costs,
+            })
+        board_display = pd.DataFrame(rows)
+        st.dataframe(
+            board_display.style.format({"$/gal": "{:.3f}", "Corn $/bu": "{:.3f}",
+                                        "Margin $/bu": "{:+.3f}"}, na_rep="—"),
+            hide_index=True, width="stretch")
+        st.caption(
+            "Ethanol at the board against the matching corn month, with distillers grain, corn "
+            "oil and natural gas held at their latest values — CME lists no co-product futures. CU is thin: a "
+            "month with an old last-trade date is a stale print, not a live market."
+        )
+
+
 def render_matrix(api_key: str, as_of: date, default_rate_pct: float):
     st.markdown("##### Spread matrix")
     st.caption(
@@ -2378,7 +2642,7 @@ hence the sign flip in the denominator.
 """
         )
 
-    tabs = st.tabs(["Summary", "Spread Builder", "Spread Matrix", "Crush", "VSR Tracker"]
+    tabs = st.tabs(["Summary", "Spread Builder", "Spread Matrix", "Crush", "Ethanol", "VSR Tracker"]
                    + [c["label"] for c in COMMODITIES])
     with tabs[0]:
         render_summary(api_key, as_of, default_rate_pct)
@@ -2389,8 +2653,10 @@ hence the sign flip in the denominator.
     with tabs[3]:
         render_crush(api_key, as_of)
     with tabs[4]:
+        render_ethanol(api_key, as_of)
+    with tabs[5]:
         render_vsr_tracker(api_key, as_of)
-    for tab, commodity in zip(tabs[5:], COMMODITIES):
+    for tab, commodity in zip(tabs[6:], COMMODITIES):
         with tab:
             render_commodity(commodity, api_key, as_of, default_rate_pct)
 
