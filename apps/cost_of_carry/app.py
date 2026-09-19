@@ -1716,20 +1716,68 @@ GRIND_COLORS = {"ethanol": "#0693e3", "ddg": "#e8833a", "oil": "#f1c40f",
                 "corn": "#5aa469", "gas": "#b05fb0", "margin": "#1f1f1f"}
 
 
+# A good load is cached for hours; a fallback (Snowflake or EIA unreachable, secrets not
+# yet set) only for minutes, so the tab recovers on its own instead of serving stale
+# fallback data until the cache expires. Each loader returns its source with the data,
+# because a cached call doesn't re-run ethanol_grind and so can't update its source().
+FALLBACK_TTL = "10m"
+
+
 @st.cache_data(ttl="6h", show_spinner="Loading USDA ethanol prices…")
-def load_ams_weekly(as_of: str) -> pd.DataFrame:
-    return ethanol_grind.load_weekly()
+def _ams_weekly_good(as_of: str) -> tuple[pd.DataFrame, str]:
+    frame = ethanol_grind.load_weekly()
+    if not ethanol_grind.source().startswith("snowflake"):
+        raise LookupError("weekly prices not from Snowflake")  # exceptions aren't cached
+    return frame, ethanol_grind.source()
+
+
+@st.cache_data(ttl=FALLBACK_TTL, show_spinner="Loading USDA ethanol prices…")
+def _ams_weekly_fallback(as_of: str) -> tuple[pd.DataFrame, str]:
+    frame = ethanol_grind.load_weekly()
+    return frame, ethanol_grind.source()
+
+
+def load_ams_weekly(as_of: str) -> tuple[pd.DataFrame, str]:
+    try:
+        return _ams_weekly_good(as_of)
+    except LookupError:
+        return _ams_weekly_fallback(as_of)
 
 
 @st.cache_data(ttl="6h", show_spinner=False)
-def load_ams_plant_corn(as_of: str) -> pd.DataFrame:
+def _ams_plant_corn_good(as_of: str) -> pd.DataFrame:
+    frame, stored_in = ethanol_grind._read_stored("daily", ethanol_grind.DAILY_PATH)
+    if stored_in != "snowflake":
+        raise LookupError("plant bids not from Snowflake")
+    return frame
+
+
+@st.cache_data(ttl=FALLBACK_TTL, show_spinner=False)
+def _ams_plant_corn_fallback(as_of: str) -> pd.DataFrame:
     return ethanol_grind.load_plant_corn()
 
 
+def load_ams_plant_corn(as_of: str) -> pd.DataFrame:
+    try:
+        return _ams_plant_corn_good(as_of)
+    except LookupError:
+        return _ams_plant_corn_fallback(as_of)
+
+
 @st.cache_data(ttl="12h", show_spinner=False)
+def _henry_hub_good() -> pd.Series:
+    series = ethanol_grind.henry_hub()
+    if not len(series):
+        raise LookupError("EIA unavailable")
+    return series
+
+
 def load_henry_hub() -> pd.Series:
-    """Henry Hub spot from EIA, cached — it publishes once a day."""
-    return ethanol_grind.henry_hub()
+    """Henry Hub spot from EIA — cached when it loads, retried when it doesn't."""
+    try:
+        return _henry_hub_good()
+    except LookupError:
+        return pd.Series(dtype=float)
 
 
 @st.cache_data(ttl="5m", show_spinner=False)
@@ -1767,7 +1815,7 @@ def render_ethanol(api_key: str, as_of: date):
         "at the bottom with its last trade date, as a check rather than a curve."
     )
 
-    weekly = load_ams_weekly(as_of.isoformat())
+    weekly, weekly_source = load_ams_weekly(as_of.isoformat())
     if not len(weekly):
         st.warning("No USDA ethanol prices available — the AMS API didn't answer and no snapshot is "
                    "committed. Run `python ethanol_grind.py` to build one.")
@@ -1927,7 +1975,7 @@ def render_ethanol(api_key: str, as_of: date):
            "snapshot": "the committed snapshot (Snowflake and AMS unavailable)",
            "ams": "live AMS rows", "none": "no source"}
     st.caption(
-        f"{len(frame)} weeks · prices from {src.get(ethanol_grind.source(), 'AMS')} · "
+        f"{len(frame)} weeks · prices from {src.get(weekly_source, 'AMS')} · "
         f"yields {gal:.2f} gal, {ddg_lb:.1f} lb distillers grain and {oil_lb:.2f} lb corn oil "
         f"per bushel · natural gas {gas_use:.3f} MMBtu/gal priced off {gas_label}. Distillers grain "
         f"and corn oil are quoted weekly and carried forward between reports. Sources: USDA AMS "
