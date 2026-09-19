@@ -1922,8 +1922,9 @@ def render_ethanol(api_key: str, as_of: date):
                      height=min(36 * (len(display) + 1) + 3, 460))
     export_row(display, "ethanol_grind", key="ethanol", styler=styler)
 
-    src = {"snapshot+ams": "the committed snapshot plus this week's live AMS rows",
-           "snapshot": "the committed snapshot (AMS didn't answer in time)",
+    src = {"snowflake": "Snowflake (refreshed each weekday from USDA AMS)",
+           "snapshot+ams": "the committed snapshot plus this week's live AMS rows",
+           "snapshot": "the committed snapshot (Snowflake and AMS unavailable)",
            "ams": "live AMS rows", "none": "no source"}
     st.caption(
         f"{len(frame)} weeks · prices from {src.get(ethanol_grind.source(), 'AMS')} · "

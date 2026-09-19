@@ -21,9 +21,12 @@ price a forward grind — most months have no settlements at all — so the boar
 offered only as a sanity check with its last trade date shown, not as the main number.
 
 The API is slow and rate-limited: a single multi-year request can hang for the better
-part of an hour. Requests are therefore chunked, and everything is cached in committed
-snapshots (data/ams_ethanol_weekly.csv, data/ams_plant_corn.csv). Refresh with
-`python ethanol_grind.py`, which extends the snapshots with whatever is missing.
+part of an hour, and the daily report only answers windows of about ten days. So the app
+never walks history live. Prices live in Snowflake (JSA.COST_OF_CARRY.AMS_ETHANOL_WEEKLY
+and AMS_PLANT_CORN), kept current by a scheduled GitHub Action
+(.github/workflows/refresh-ams.yml -> scripts/refresh_ams.py) that fetches only the days
+since the last load. The committed CSVs in data/ are a fallback for when Snowflake is off
+or unreachable; they are not refreshed.
 """
 from __future__ import annotations
 
@@ -46,6 +49,11 @@ def _key(name: str) -> str:
     except Exception:
         value = ""
     return value or os.environ.get(name, "")
+
+
+def _mars_key() -> str:
+    # .env files from earlier projects name it MARS_API_KEY; accept either.
+    return _key("USDA_MARS_API_KEY") or _key("MARS_API_KEY")
 
 
 BASE_URL = "https://marsapi.ams.usda.gov/services/v1.2/reports"
@@ -75,14 +83,15 @@ _LAST_SOURCE = "none"
 
 
 def source() -> str:
-    """'ams', 'snapshot', 'snapshot+ams' or 'none' — what served the last load."""
+    """'snowflake', 'snapshot', 'snapshot+ams', 'ams' or 'none' — what served the
+    last weekly load."""
     return _LAST_SOURCE
 
 
 def _get(slug: int, begin: date, end: date, timeout: float) -> list[dict]:
     resp = requests.get(
         f"{BASE_URL}/{slug}/Report%20Detail",
-        auth=(_key("USDA_MARS_API_KEY"), ""),
+        auth=(_mars_key(), ""),
         params={"q": f"report_begin_date={begin:%m/%d/%Y}:{end:%m/%d/%Y}"},
         timeout=timeout,
     )
@@ -130,6 +139,21 @@ def fetch(slug: int, begin: date, end: date, chunk_days: int = 120,
     return pd.concat(frames, ignore_index=True).drop_duplicates()
 
 
+def _read_stored(kind: str, path: Path) -> tuple[pd.DataFrame, str]:
+    """Snowflake when enabled and reachable, else the committed CSV."""
+    try:
+        import coc_snowflake_db as snowflake_db
+
+        if snowflake_db.use_snowflake():
+            frame = snowflake_db.read_ams(kind)
+            if len(frame):
+                return frame, "snowflake"
+    except Exception:
+        pass  # fall back to the CSV
+    frame = _read_snapshot(path)
+    return frame, ("snapshot" if len(frame) else "none")
+
+
 def _read_snapshot(path: Path) -> pd.DataFrame:
     if not path.exists():
         return _rows_to_frame([])
@@ -140,11 +164,13 @@ def _read_snapshot(path: Path) -> pd.DataFrame:
 
 
 def load_weekly(live_days: int = 45, timeout: float = 45.0) -> pd.DataFrame:
-    """Weekly ethanol / distillers grain / corn oil prices: the committed snapshot,
-    topped up with the most recent weeks from AMS when it answers in time."""
+    """Weekly ethanol / distillers grain / corn oil prices. Snowflake is kept current by
+    the scheduled refresh, so it's returned as is; only the static CSV fallback is topped
+    up with a live AMS call."""
     global _LAST_SOURCE
-    snapshot = _read_snapshot(WEEKLY_PATH)
-    _LAST_SOURCE = "snapshot" if len(snapshot) else "none"
+    snapshot, _LAST_SOURCE = _read_stored("weekly", WEEKLY_PATH)
+    if _LAST_SOURCE == "snowflake":
+        return snapshot
     try:
         recent = fetch(WEEKLY_SLUG, date.today() - timedelta(days=live_days), date.today(),
                        chunk_days=live_days, timeout=timeout, attempts=1)
@@ -152,7 +178,7 @@ def load_weekly(live_days: int = 45, timeout: float = 45.0) -> pd.DataFrame:
         recent = _rows_to_frame([])
     if not len(recent):
         return snapshot
-    _LAST_SOURCE = "snapshot+ams" if len(snapshot) else "ams"
+    _LAST_SOURCE = f"{_LAST_SOURCE}+ams" if len(snapshot) else "ams"
     merged = pd.concat([snapshot, recent], ignore_index=True)
     return merged.drop_duplicates(
         subset=["date", "commodity", "state", "variety", "trans_mode"], keep="last"
@@ -160,8 +186,10 @@ def load_weekly(live_days: int = 45, timeout: float = 45.0) -> pd.DataFrame:
 
 
 def load_plant_corn(live_days: int = 10, timeout: float = 45.0) -> pd.DataFrame:
-    """Daily corn bids at ethanol plants, snapshot plus the last few sessions."""
-    snapshot = _read_snapshot(DAILY_PATH)
+    """Daily corn bids at ethanol plants, stored history plus the last few sessions."""
+    snapshot, stored_in = _read_stored("daily", DAILY_PATH)
+    if stored_in == "snowflake":
+        return snapshot
     try:
         recent = fetch(DAILY_SLUG, date.today() - timedelta(days=live_days), date.today(),
                        chunk_days=live_days, timeout=timeout, attempts=1)
@@ -268,6 +296,26 @@ def refresh_snapshots(start: date = date(2022, 1, 1)) -> tuple[int, int]:
         merged.to_csv(path, index=False)
         out.append(len(merged))
     return tuple(out)
+
+
+REFRESH_OVERLAP_DAYS = 10   # re-pull the tail: AMS revises and backfills late rows
+WEEKLY_CHUNK_DAYS = 60
+DAILY_CHUNK_DAYS = 9          # the daily report times out on windows much past ten days
+
+
+def refresh_snowflake(start: date = date(2025, 7, 1)) -> dict[str, int]:
+    """Load everything AMS has published since the last load into Snowflake. Used by
+    the scheduled GitHub Action; safe to re-run (rows are MERGEd on their natural key)."""
+    import coc_snowflake_db as snowflake_db
+
+    sent = {}
+    for kind, slug, chunk in (("weekly", WEEKLY_SLUG, WEEKLY_CHUNK_DAYS),
+                              ("daily", DAILY_SLUG, DAILY_CHUNK_DAYS)):
+        last = snowflake_db.max_ams_date(kind)
+        begin = (last - timedelta(days=REFRESH_OVERLAP_DAYS)) if last else start
+        fresh = fetch(slug, begin, date.today(), chunk_days=chunk, timeout=90, attempts=3)
+        sent[kind] = snowflake_db.merge_ams(kind, fresh)
+    return sent
 
 
 if __name__ == "__main__":
