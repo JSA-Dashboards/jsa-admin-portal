@@ -8,13 +8,19 @@ Data source: USDA NASS QuickStats API (https://quickstats.nass.usda.gov)
 """
 
 import io
-import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
+
+# st.Page runs this file via exec(), not as a standalone script, so its own
+# directory is never added to sys.path automatically -- without this, the
+# local nass_cache_client import below raises ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).parent))
+from nass_cache_client import fetch_cached
 
 # ── JSA brand ────────────────────────────────────────────────────────────────
 JSA_GREEN    = "#5e7164"
@@ -34,18 +40,9 @@ HEIFER_COLOR = "#6fa8c4"
 JSA_LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
-# NASS key comes from Streamlit secrets (Cloud) or the environment (dev); no
-# key is committed to the repo. This dashboard's Cattle on Feed series are not
-# in the shared NASS cache yet (usda-nass-etl only caches the INVENTORY series,
-# not PLACEMENTS/SALES/DISAPPEARANCE or the heifer/steer splits), so it still
-# calls NASS live -- see the note in that repo's jobs/livestock_inventory.py.
-try:
-    API_KEY = st.secrets.get("NASS_API_KEY", "")
-except Exception:
-    API_KEY = ""
-API_KEY = API_KEY or os.environ.get("NASS_API_KEY", "")
-
-BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+# This dashboard reads NASS data from the shared, scheduled-pull cache (see
+# usda-nass-etl's jobs/cattle_on_feed.py) instead of calling the API live --
+# it no longer needs a NASS API key at all.
 
 # The 13 states NASS publishes individually in the Cattle on Feed report
 # (1,000+ head feedlots); "OT" is NASS's "Other States" catch-all.
@@ -130,19 +127,6 @@ st.markdown(f"""
 
 # ── Data fetching ──────────────────────────────────────────────────────────────
 
-def _nass_get(params: dict) -> dict:
-    for attempt in range(3):
-        try:
-            r = requests.get(BASE_URL, params=params, timeout=60)
-            return r.json()
-        except requests.exceptions.Timeout:
-            if attempt < 2:
-                continue
-        except Exception:
-            pass
-    return {}
-
-
 def _month_num(reference_period_desc: str):
     if not reference_period_desc:
         return None
@@ -152,20 +136,24 @@ def _month_num(reference_period_desc: str):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_series(short_desc: str, years: tuple, domaincat_filter: str = None) -> pd.DataFrame:
-    # Single ranged request (year__GE/year__LE) instead of one call per year —
-    # NASS API supports range suffixes and this stays well under its 50k-row cap.
+    # Reads the shared NASS cache (see usda-nass-etl's jobs/cattle_on_feed.py)
+    # instead of calling NASS live. The ETL caches ONE broad, unfiltered pull
+    # per series -- no year bounds, no domaincat_desc -- because a cache key
+    # built from year__GE/year__LE (which shift every January) would go stale
+    # annually and silently miss. Year range and the 1,000+-head domaincat
+    # filter are therefore applied locally below instead of server-side.
     params = {
-        "key":               API_KEY,
         "source_desc":       "SURVEY",
         "sector_desc":       "ANIMALS & PRODUCTS",
         "group_desc":        "LIVESTOCK",
         "commodity_desc":    "CATTLE",
         "short_desc":        short_desc,
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
     }
-    payload = _nass_get(params)
+    try:
+        payload = fetch_cached(params)
+    except Exception as e:
+        st.error(f"NASS cache error: {e}")
+        return pd.DataFrame(columns=["year", "month", "date", "agg_level_desc", "state_alpha", "Value"])
     data = payload.get("data") if isinstance(payload, dict) else None
     if not data:
         return pd.DataFrame(columns=["year", "month", "date", "agg_level_desc", "state_alpha", "Value"])
@@ -179,6 +167,7 @@ def fetch_series(short_desc: str, years: tuple, domaincat_filter: str = None) ->
     df = df.dropna(subset=["Value", "month"]).copy()
     df["month"] = df["month"].astype(int)
     df["year"] = df["year"].astype(int)
+    df = df[(df["year"] >= min(years)) & (df["year"] <= max(years))]
     df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=1))
     df["state_alpha"] = df["state_alpha"].where(df["agg_level_desc"] != "NATIONAL", "US")
     keep = ["year", "month", "date", "agg_level_desc", "state_alpha", "Value"]
