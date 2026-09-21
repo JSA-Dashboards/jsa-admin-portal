@@ -371,6 +371,7 @@ def render_commodity(commodity: dict, api_key: str, as_of: date, default_rate_pc
         with header:
             st.subheader(commodity["label"])
             st.caption(commodity["sublabel"])
+        st.caption(DELAYED_QUOTES_NOTE)
 
         controls = st.container(horizontal=True, vertical_alignment="bottom")
         with controls:
@@ -574,6 +575,32 @@ def vsr_legend_caption(product_code: str) -> str:
             "spanning a change shows both levels; 'pending' means CME hasn't yet published "
             "the determination for part of the window.")
 RANGE_CHOICES = {"1Y": 365, "2Y": 730, "All": None}
+
+DELAYED_QUOTES_NOTE = "Massive futures prices are delayed ~10 minutes — not a real-time or executable quote."
+
+DISCLAIMER_FOOTER_HTML = (
+    '<hr style="border-color:#3a3a3a;margin-top:32px;margin-bottom:16px">'
+    '<div style="color:#888;font-size:0.68rem;line-height:1.6;text-align:center;padding:0 24px 24px;">'
+    'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative '
+    'products involves substantial risk of loss and may not be suitable for all investors. '
+    'This communication is provided for informational purposes only and does not constitute investment '
+    'advice, a recommendation, or an offer or solicitation to buy or sell any futures, options, cash '
+    'commodities, or derivative products. John Stewart &amp; Associates, Inc. does not accept orders to '
+    'buy or sell any financial instruments via email. The information contained herein has been obtained '
+    'from sources believed to be reliable; however, its accuracy and completeness are not guaranteed. '
+    'Any opinions expressed are solely those of the author, are subject to change without notice, and '
+    'should not be relied upon as a basis for investment decisions. Past performance is not indicative of '
+    'future results. This message may contain confidential or proprietary information intended solely for '
+    'the use of the designated recipient. &copy; John Stewart &amp; Associates, Inc. {year}</div>'
+)
+
+
+def render_disclaimer_footer():
+    """The standard JSA legal footer used across the dashboard family (verbatim, see
+    e.g. beef-cutout-dashboard/app.py)."""
+    st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
+
+
 REF_STORAGE_COLOR = "#8d6e63"
 REF_INTEREST_COLOR = "#7986cb"
 REF_CARRY_COLOR = "#5aa469"
@@ -1139,6 +1166,7 @@ def render_summary(api_key: str, as_of: date, default_rate_pct: float):
             unsafe_allow_html=True,
         )
     st.caption("Spreads are calculated arithmetically and could deviate from board quotes.")
+    st.caption(DELAYED_QUOTES_NOTE)
     render_legend()
 
     rate_pct = st.number_input(
@@ -2616,7 +2644,7 @@ def main():
         "Live CBOT & MGEX grain futures curves priced against full financial cost of carry "
         "(storage + interest), every near month against every deferred month. "
         "Spreads are calculated arithmetically and may deviate from board quotes. "
-        f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · quotes delayed per Massive API."
+        f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · {DELAYED_QUOTES_NOTE}"
     )
 
     api_key = get_api_key()
@@ -2716,6 +2744,8 @@ hence the sign flip in the denominator.
     for tab, commodity in zip(tabs[6:], COMMODITIES):
         with tab:
             render_commodity(commodity, api_key, as_of, default_rate_pct)
+
+    render_disclaimer_footer()
 
 
 if __name__ == "__main__":
