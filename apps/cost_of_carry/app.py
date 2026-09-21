@@ -596,7 +596,7 @@ DELAYED_QUOTES_NOTE = "Massive futures prices are delayed ~10 minutes — not a 
 
 DISCLAIMER_FOOTER_HTML = (
     '<hr style="border-color:#3a3a3a;margin-top:32px;margin-bottom:16px">'
-    '<div style="color:#888;font-size:0.68rem;line-height:1.6;text-align:center;padding:0 24px 24px;">'
+    '<div style="font-family:inherit;color:#888;font-size:0.68rem;line-height:1.6;text-align:center;padding:0 24px 24px;">'
     'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative '
     'products involves substantial risk of loss and may not be suitable for all investors. '
     'This communication is provided for informational purposes only and does not constitute investment '

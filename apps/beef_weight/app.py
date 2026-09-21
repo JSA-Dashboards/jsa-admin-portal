@@ -1917,7 +1917,7 @@ with _page_prod:
 # ── Disclaimer Footer ──────────────────────────────────────────────────────────
 _yr = datetime.now().year
 st.markdown(
-    f'<div style="margin-top:48px;padding:16px 20px;border-top:1px solid {DM_BORDER};'
+    f'<div style="font-family:inherit;margin-top:48px;padding:16px 20px;border-top:1px solid {DM_BORDER};'
     f'color:{DM_MUTED};font-size:0.72rem;line-height:1.6;">'
     f'Trading commodity futures, options on futures, cash commodities, and over-the-counter '
     f'derivative products involves substantial risk of loss and may not be suitable for all investors. '

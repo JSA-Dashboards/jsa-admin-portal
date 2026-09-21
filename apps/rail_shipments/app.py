@@ -633,7 +633,7 @@ with tab_summary:
     st.plotly_chart(fig_yoy, use_container_width=True)
 
 st.markdown(
-    f'<div style="margin-top:40px;padding:14px 20px;border-top:1px solid #d7e2dc;'
+    f'<div style="font-family:inherit;margin-top:40px;padding:14px 20px;border-top:1px solid #d7e2dc;'
     f'color:#6b7280;font-size:0.70rem;line-height:1.6;">'
     f'Trading commodity futures, options on futures, cash commodities, and over-the-counter '
     f'derivative products involves substantial risk of loss and may not be suitable for all investors. '
