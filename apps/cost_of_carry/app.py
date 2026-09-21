@@ -812,6 +812,8 @@ def _reference_levels(mode, storage_full, interest_full):
 
     In a carry market the spread is negative, so nominally these sit below zero; as a
     share of full carry they are the storage and interest slices of 100%."""
+    if storage_full is None or interest_full is None:
+        return []
     full_carry = storage_full + interest_full
     if not full_carry:
         return []
@@ -945,6 +947,12 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             )
             if s is None or not len(s):
                 continue
+            if back == 0:
+                # The outer build_pair_series call (used for the history chart) can come
+                # back blank even when this deeper seasonal history has data for the
+                # current year — reference lines should reflect whichever call actually
+                # has numbers, not silently stay None.
+                storage_full, interest_full = s_full, i_full
             days_out = [-(n_exp - d).days for d in s.index]
             keep = [i for i, d in enumerate(days_out) if window_days is None or d >= -window_days]
             if not keep:
