@@ -88,6 +88,16 @@ def _require_password():
 # This bundled copy read Postgres (now dead). The live tracker is the standalone
 # Cloud deployment (Snowflake-backed, ordinary app password — no Snowflake login).
 # Redirect anyone here. Set ALLOW_POSTGRES_UI=1 to restore this page for a rollback.
+#
+# A true zero-click auto-redirect was tried and isn't reliably achievable here:
+# st.markdown(unsafe_allow_html=True) inserts via innerHTML, which never runs
+# <script>/<meta refresh> tags (confirmed — browsers only act on those during
+# the initial document parse). st.components.v1.html DOES run its own script,
+# but Streamlit sandboxes that iframe without allow-top-navigation, so
+# window.top.location.href throws a SecurityError (confirmed live). A
+# same-load window.open() is silently eaten by the browser's popup blocker,
+# since it has no user gesture behind it (confirmed — no tab opens). Keeping
+# the single click below rather than shipping a script that does nothing.
 if not os.getenv("ALLOW_POSTGRES_UI"):
     _APP_URL = "https://jsa-basis-tracker.streamlit.app/"
     st.markdown(
