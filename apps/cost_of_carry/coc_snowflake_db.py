@@ -24,21 +24,44 @@ def use_snowflake() -> bool:
     return os.environ.get("USE_SNOWFLAKE", "").strip().lower() in _TRUE
 
 
+def _load_private_key():
+    """RSA private key for Snowflake key-pair auth (the account enforces MFA on
+    password sign-ins), as DER bytes; None if not configured (falls back to password).
+    Source: SNOWFLAKE_PRIVATE_KEY_PATH (.p8 file) or SNOWFLAKE_PRIVATE_KEY (PEM text)."""
+    path = (os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH") or "").strip()
+    pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY") or ""
+    if not path and not pem.strip():
+        return None
+    from cryptography.hazmat.primitives import serialization
+    data = open(path, "rb").read() if path else pem.replace("\\n", "\n").encode()
+    pwd = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PWD") or None
+    key = serialization.load_pem_private_key(data, password=pwd.encode() if pwd else None)
+    return key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption())
+
+
 def connect():
     """Explicit-credentials connection. No Snowpark/active-session path — this app is
     hosted on Streamlit Community Cloud, never Streamlit-in-Snowflake."""
     import snowflake.connector
 
-    return snowflake.connector.connect(
+    kw = dict(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=os.environ["SNOWFLAKE_USER"],
-        password=os.environ["SNOWFLAKE_PASSWORD"],
         # `or` rather than a .get default: an unset GitHub secret arrives as "" not absent.
         role=os.environ.get("SNOWFLAKE_ROLE") or "ACCOUNTADMIN",
         warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE") or "COMPUTE_WH",
         database=os.environ.get("SNOWFLAKE_DATABASE") or "JSA",
         schema=os.environ.get("SNOWFLAKE_SCHEMA") or SCHEMA,
     )
+    pkey = _load_private_key()
+    if pkey is not None:
+        kw["private_key"] = pkey
+    else:
+        kw["password"] = os.environ["SNOWFLAKE_PASSWORD"]
+    return snowflake.connector.connect(**kw)
 
 
 def read_archive() -> pd.DataFrame:

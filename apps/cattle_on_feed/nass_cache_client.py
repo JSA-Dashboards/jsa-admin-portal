@@ -68,18 +68,41 @@ def _pg_dsn(url: str) -> str:
     return url
 
 
+def _load_private_key():
+    """RSA private key (DER bytes) for key-pair auth; None if not configured (then
+    password is used). The account enforces MFA on password sign-ins, so Streamlit
+    Cloud must use the key — PEM text in the SNOWFLAKE_PRIVATE_KEY secret."""
+    pem = _secret("SNOWFLAKE_PRIVATE_KEY")
+    path = _secret("SNOWFLAKE_PRIVATE_KEY_PATH")
+    if not pem and not path:
+        return None
+    from cryptography.hazmat.primitives import serialization
+    data = open(path, "rb").read() if path else pem.replace("\\n", "\n").encode()
+    pwd = _secret("SNOWFLAKE_PRIVATE_KEY_PWD") or None
+    key = serialization.load_pem_private_key(data, password=pwd.encode() if pwd else None)
+    return key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption())
+
+
 def _sf_connect():
     import snowflake.connector
-    return snowflake.connector.connect(
+    kw = dict(
         account=_secret("SNOWFLAKE_ACCOUNT"),
         user=_secret("SNOWFLAKE_USER"),
-        password=_secret("SNOWFLAKE_PASSWORD"),
         role=_secret("SNOWFLAKE_ROLE") or None,
         warehouse=_secret("SNOWFLAKE_WAREHOUSE") or None,
         database=_secret("SNOWFLAKE_DATABASE") or "JSA",
         schema=_secret("SNOWFLAKE_SCHEMA") or "NASS_CACHE",
         login_timeout=30,
     )
+    pkey = _load_private_key()
+    if pkey is not None:
+        kw["private_key"] = pkey
+    else:
+        kw["password"] = _secret("SNOWFLAKE_PASSWORD")
+    return snowflake.connector.connect(**kw)
 
 
 def fetch_cached(params: dict, endpoint: str = "api_GET") -> dict:

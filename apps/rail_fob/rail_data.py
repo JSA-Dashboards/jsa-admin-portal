@@ -55,18 +55,40 @@ _SF_DATABASE = "JSA"
 _SF_SCHEMA = "BASIS_TRACKER"
 
 
+def _load_private_key():
+    """RSA private key for Snowflake key-pair auth (the account enforces MFA on
+    password sign-ins), as DER bytes; None if not configured (falls back to password).
+    Source: SNOWFLAKE_PRIVATE_KEY_PATH (.p8 file) or SNOWFLAKE_PRIVATE_KEY (PEM text)."""
+    path = (os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH") or "").strip()
+    pem = os.environ.get("SNOWFLAKE_PRIVATE_KEY") or ""
+    if not path and not pem.strip():
+        return None
+    from cryptography.hazmat.primitives import serialization
+    data = open(path, "rb").read() if path else pem.replace("\\n", "\n").encode()
+    pwd = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PWD") or None
+    key = serialization.load_pem_private_key(data, password=pwd.encode() if pwd else None)
+    return key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption())
+
+
 def _sf_connect():
     import snowflake.connector as sc
     kw = dict(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=os.environ["SNOWFLAKE_USER"],
-        password=os.environ.get("SNOWFLAKE_PASSWORD") or None,
         role=os.environ.get("SNOWFLAKE_ROLE") or None,
         warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE") or None,
         database=_SF_DATABASE,
         schema=_SF_SCHEMA,
         login_timeout=30,
     )
+    pkey = _load_private_key()
+    if pkey is not None:
+        kw["private_key"] = pkey
+    else:
+        kw["password"] = os.environ.get("SNOWFLAKE_PASSWORD") or None
     conn = sc.connect(**{k: v for k, v in kw.items() if v is not None})
     try:
         conn._paramstyle = "pyformat"
