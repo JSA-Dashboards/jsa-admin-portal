@@ -18,6 +18,7 @@ import coc_ethanol_grind as ethanol_grind
 import coc_interest_rates as interest_rates
 import coc_seasonal_pattern as seasonal_pattern
 import coc_snapshot_copy as snapshot_copy
+import coc_stocks_use as stocks_use
 import coc_storage_rates as storage_rates
 import coc_vsr_tracker as vsr_tracker
 
@@ -199,6 +200,13 @@ def load_fed_funds(api_key: str, as_of: str) -> dict:
     return get_fed_funds_rate(api_key, date.fromisoformat(as_of))
 
 
+@st.cache_data(ttl="24h", show_spinner="Loading USDA stocks/use…")
+def load_stocks_to_use(product_code: str, current_year: int, years_back: int) -> dict[int, float]:
+    """US stocks/use ratio by marketing year, from USDA's WASDE CSV export. Long TTL —
+    this only moves once a month, on WASDE release day."""
+    return stocks_use.fetch_stocks_to_use(product_code, current_year, years_back)
+
+
 def carry_bucket(pct: float) -> str:
     if pct >= 0.75:
         return "high"
@@ -364,6 +372,7 @@ def render_legend():
     )
 
 
+@st.fragment
 def render_commodity(commodity: dict, api_key: str, as_of: date, default_rate_pct: float):
     key = commodity["key"]
     with st.container(border=True):
@@ -576,6 +585,13 @@ def vsr_legend_caption(product_code: str) -> str:
             "the determination for part of the window.")
 RANGE_CHOICES = {"1Y": 365, "2Y": 730, "All": None}
 
+# Y-axis "central %" zoom, same quantile-clip + 8%-pad approach as the canonical version
+# in basis-tracker-streamlit/app.py, just with the tail cuts the user asked for here.
+Y_SCALE_CHOICES = ["Full", "90%", "80%", "70%"]
+Y_SCALE_TAILS = {"90%": 0.05, "80%": 0.10, "70%": 0.15}
+Y_SCALE_PAD_FRAC = 0.08
+MIN_YFIT_POINTS = 8
+
 DELAYED_QUOTES_NOTE = "Massive futures prices are delayed ~10 minutes — not a real-time or executable quote."
 
 DISCLAIMER_FOOTER_HTML = (
@@ -601,6 +617,21 @@ def render_disclaimer_footer():
     st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
 
 
+def yfit_range(values, level: str) -> list[float] | None:
+    """[lo, hi] to clip a Y-axis to the central `level` (e.g. "90%") of `values`, padded
+    8% each side. None for "Full" or too few points — caller leaves the axis on auto."""
+    tail = Y_SCALE_TAILS.get(level)
+    if tail is None:
+        return None
+    vals = [v for v in values if v is not None and pd.notna(v)]
+    if len(vals) < MIN_YFIT_POINTS:
+        return None
+    s = pd.Series(vals, dtype=float)
+    lo, hi = float(s.quantile(tail)), float(s.quantile(1 - tail))
+    if hi <= lo:
+        return None
+    pad = (hi - lo) * Y_SCALE_PAD_FRAC
+    return [lo - pad, hi + pad]
 REF_STORAGE_COLOR = "#8d6e63"
 REF_INTEREST_COLOR = "#7986cb"
 REF_CARRY_COLOR = "#5aa469"
@@ -903,6 +934,43 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
         st.info("Pick a far leg that expires after the near leg.")
         return
 
+    candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
+    highlight_row = st.container(horizontal=True, vertical_alignment="bottom")
+    with highlight_row:
+        highlight_years = st.multiselect(
+            "Highlight years", candidate_years, key=f"hl_{key}_{near}_{far}",
+            help="Bold specific prior years to stand out against the rest — pick the ones "
+            "you want to compare directly against the current spread.",
+        )
+        y_scale_label = st.segmented_control(
+            "Y-axis", Y_SCALE_CHOICES, default="Full", key=f"yscale_{key}",
+            help="Clip the Y-axis to the middle 90/80/70% of values so one outlier year "
+            "doesn't flatten the rest of the chart.",
+        )
+        if code in stocks_use.WASDE_COMMODITY_NAMES:
+            similar_on = st.toggle(
+                "Similar S/U years", value=False, key=f"simsu_{key}",
+                help="Auto-highlight prior years whose US stocks/use ratio was within the "
+                "tolerance below of the current marketing year's (from USDA's WASDE report). "
+                "Only as far back as USDA's machine-readable WASDE export goes — August 2021.",
+            )
+            if similar_on:
+                similar_tol = st.number_input(
+                    "± pts", min_value=0.5, max_value=10.0, value=2.0, step=0.5,
+                    key=f"simtol_{key}", width=90,
+                )
+                stu = load_stocks_to_use(code, expiries[near].year, years_back)
+                similar = stocks_use.similar_years(stu, expiries[near].year, similar_tol)
+                if not stu:
+                    st.caption("Stocks/use data unavailable right now.")
+                elif not similar:
+                    st.caption(f"No prior year within ±{similar_tol:g} pts of "
+                              f"{stu.get(expiries[near].year, 'this year')}%.")
+                else:
+                    st.caption(f"Current {stu.get(expiries[near].year):.1f}% S/U · similar: "
+                              + ", ".join(f"{y} ({stu[y]:.1f}%)" for y in sorted(similar)))
+                highlight_years = list(set(highlight_years) | set(similar))
+
     mode = "nominal" if (mode_label or "Nominal") == "Nominal" else "carry"
     window_days = RANGE_CHOICES.get(range_label or "1Y", 365)
     unit = commodity["storage_unit"].split("/")[0]
@@ -914,7 +982,8 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
         history, near, far, mode, storage_rate, annual_rate, commodity["multiplier"], expiries,
         **pair_rate_kwargs(historical_rates, mode, code),
     )
-    left, right = st.columns(2)
+    left = st.container()
+    right = st.container()
 
     # ---------------------------------------------------------------- history
     with left:
@@ -945,6 +1014,9 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
                         _add_vline(fig, fnd, f"{leg} FND", FND_COLOR)
                 _style_axes(fig, y_title, None, fmt)
                 fig.update_layout(showlegend=False)
+                yr = yfit_range(list(shown.values), y_scale_label or "Full")
+                if yr:
+                    fig.update_yaxes(range=yr)
                 st.plotly_chart(fig, width="stretch", key=f"hist_{key}",
                                 config=plotly_config(f"{key}_spread_history"))
                 export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
@@ -984,7 +1056,8 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             keep = [i for i, d in enumerate(days_out) if window_days is None or d >= -window_days]
             if not keep:
                 continue
-            name = (f"{MONTH_LETTERS[near_letter]} {expiries[near].year - back} / "
+            this_year = expiries[near].year - back
+            name = (f"{MONTH_LETTERS[near_letter]} {this_year} / "
                     f"{MONTH_LETTERS[far_letter]} {expiries[far].year - back}"
                     + (" (current)" if back == 0 else ""))
             color = SEASONAL_COLORS[back % len(SEASONAL_COLORS)]
@@ -992,10 +1065,13 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             if vsr:
                 color, suffix = vsr
                 name += suffix
+            is_current = back == 0
+            is_highlighted = this_year in highlight_years
+            emphasize = is_current or is_highlighted
             fig.add_trace(go.Scatter(
                 x=[days_out[i] for i in keep], y=[s.values[i] for i in keep], mode="lines", name=name,
-                line=dict(color=color, width=3 if back == 0 else 1.5),
-                opacity=1.0 if back == 0 else 0.7,
+                line=dict(color=color, width=3 if is_current else (2.5 if is_highlighted else 1.5)),
+                opacity=1.0 if emphasize else (0.3 if highlight_years else 0.7),
                 hovertemplate=f"{name}<br>%{{x}}d to expiry<br>%{{y:{fmt}}}<extra></extra>",
             ))
             by_dte[name] = pd.Series([s.values[i] for i in keep],
@@ -1034,6 +1110,9 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             if window_days is None or fnd_x >= -window_days:
                 _add_vline(fig, fnd_x, "FND", FND_COLOR)
             _style_axes(fig, y_title, "Calendar days to near-leg expiration", fmt)
+            yr = yfit_range([v for s in by_dte.values() for v in s.values], y_scale_label or "Full")
+            if yr:
+                fig.update_yaxes(range=yr)
             st.plotly_chart(fig, width="stretch", key=f"seas_{key}",
                             config=plotly_config(f"{key}_seasonal"))
             st.caption(
@@ -1156,6 +1235,7 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
                styler=styler)
 
 
+@st.fragment
 def render_summary(api_key: str, as_of: date, default_rate_pct: float):
     head = st.container(horizontal=True, vertical_alignment="center")
     with head:
@@ -1326,6 +1406,7 @@ def load_crush_history(bean_tickers: tuple[str, ...], api_key: str, as_of: str) 
     return out
 
 
+@st.fragment
 def render_crush(api_key: str, as_of: date):
     st.markdown("##### Soybean crush")
     st.caption(
@@ -1609,6 +1690,7 @@ def vsr_history_frame(product: str, as_of: date) -> pd.DataFrame:
     return pd.DataFrame(rows[::-1])
 
 
+@st.fragment
 def render_vsr_tracker(api_key: str, as_of: date):
     st.markdown("##### Variable Storage Rate tracker")
     st.caption(
@@ -1841,6 +1923,7 @@ def corn_futures_series(api_key: str, as_of: date) -> tuple[pd.Series, str]:
     return hist / 100.0, ticker
 
 
+@st.fragment
 def render_ethanol(api_key: str, as_of: date):
     st.markdown("##### Ethanol grind")
     st.caption(
@@ -2057,6 +2140,7 @@ def render_ethanol(api_key: str, as_of: date):
         )
 
 
+@st.fragment
 def render_matrix(api_key: str, as_of: date, default_rate_pct: float):
     st.markdown("##### Spread matrix")
     st.caption(
@@ -2531,6 +2615,7 @@ def render_seasonal_outlook(commodity: dict, near: str, far: str, pair_label: st
     )
 
 
+@st.fragment
 def render_builder(api_key: str, as_of: date, default_rate_pct: float):
     """Spread builder: 2+ legs, each its own market and contract month.
 
