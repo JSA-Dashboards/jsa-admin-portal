@@ -5426,7 +5426,7 @@ with st.spinner("Fetching USDA crop condition data…"):
         )
     except RuntimeError as _fetch_err:
         st.error(
-            f"USDA API returned an error for **{selected_commodity}** conditions data. "
+            f"USDA API returned an error for **{commodity_label}** conditions data. "
             f"This is usually a temporary outage — try refreshing in a few minutes.\n\n"
             f"**Details:** {_fetch_err}"
         )
@@ -5434,7 +5434,7 @@ with st.spinner("Fetching USDA crop condition data…"):
 
 if raw_df.empty:
     st.error(
-        f"No condition data found for **{selected_commodity}**. "
+        f"No condition data found for **{commodity_label}**. "
         "The USDA API may be temporarily unavailable, or data for this commodity "
         "has not yet been published. Try refreshing in a few minutes."
     )
