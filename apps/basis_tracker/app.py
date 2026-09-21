@@ -84,27 +84,26 @@ def _require_password():
 # _require_password() no longer invoked here — the JSA Home Page shell
 # (Home.py) handles the one shared login for all merged dashboards.
 
-# ── Retired: superseded by the Streamlit-in-Snowflake app ────────────────────
-# After the Snowflake cutover the basis tracker lives in Streamlit-in-Snowflake;
-# this hub page reads Postgres, which no longer updates. Redirect anyone here.
-# Set ALLOW_POSTGRES_UI=1 to restore this page for a rollback.
+# ── Retired here: the basis tracker runs as its own Streamlit Cloud app ───────
+# This bundled copy read Postgres (now dead). The live tracker is the standalone
+# Cloud deployment (Snowflake-backed, ordinary app password — no Snowflake login).
+# Redirect anyone here. Set ALLOW_POSTGRES_UI=1 to restore this page for a rollback.
 if not os.getenv("ALLOW_POSTGRES_UI"):
-    _SIS_URL = ("https://app.snowflake.com/eofnxsc/qtc58073/#/streamlit-apps/"
-                "JSA.BASIS_TRACKER.BASIS_TRACKER_APP")
+    _APP_URL = "https://jsa-basis-tracker.streamlit.app/"
     st.markdown(
         "<div style='max-width:640px;margin:64px auto;text-align:center;"
         "font-family:Georgia,serif'>"
         "<div style='font-size:26px;font-weight:700;color:#32373c'>"
-        "Basis Tracker has moved to Snowflake</div>"
+        "Basis Tracker has its own app</div>"
         "<div style='font-family:sans-serif;color:#64748b;font-size:14px;margin:12px 0 20px'>"
-        "This dashboard now runs inside Snowflake and reads live data there. "
-        "This version is retired and no longer updates.</div>"
-        f"<a href='{_SIS_URL}' target='_blank' style='font-family:sans-serif;"
+        "The Cash Grain Basis Tracker runs as its own live dashboard. "
+        "This bundled copy is retired.</div>"
+        f"<a href='{_APP_URL}' target='_blank' style='font-family:sans-serif;"
         "display:inline-block;background:#0693e3;color:#fff;padding:10px 18px;"
         "border-radius:6px;text-decoration:none;font-weight:600'>"
-        "Open the Snowflake app &rarr;</a>"
+        "Open the Basis Tracker &rarr;</a>"
         "<div style='font-family:sans-serif;color:#94a3b8;font-size:12px;margin-top:14px'>"
-        "(Sign in with your Snowflake account.)</div></div>",
+        "(Opens in a new tab &middot; enter the app password.)</div></div>",
         unsafe_allow_html=True)
     st.stop()
 
