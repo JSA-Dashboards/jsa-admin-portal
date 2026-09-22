@@ -545,18 +545,22 @@ def fetch_conditions(commodity_desc: str, class_desc: str, years: tuple, known_s
     ]
 
     # ── Fetch full history for each state — parallelised cache reads ─────────────
-    # year__GE is pinned to "1986" (MIN_CONDITION_YEAR in the ETL job) rather
-    # than the caller's own min_year -- the cache key must match exactly what
-    # was cached, and the ETL always caches the full 1986+ history regardless
-    # of which Marketing Year window a given dashboard session requested.
-    # The filter to the caller's actual `years` happens locally below
-    # ("Filter to requested year range"). year__LE is omitted for the same
-    # reason it was omitted when the ETL cached this (NASS ignores it for
-    # weekly condition records).
+    # Two cache keys per state/US-TOTAL:
+    #   year__GE="1986" — full history for the seasonal chart
+    #   year__GE=current_year — NASS indexes new weekly data here first; querying
+    #     this key picks up Monday's Crop Progress release hours before the full-
+    #     history query is refreshed on NASS's side. Both responses are merged
+    #     (see drop_duplicates below).
+    import datetime as _dt
+    _cur_yr = str(_dt.datetime.now().year)
+
     def _fetch_state(st):
-        params = {**_base, "agg_level_desc": "STATE",
-                  "state_alpha": st, "year__GE": "1986"}
-        return st, _nass_get(params)
+        p_hist = _nass_get({**_base, "agg_level_desc": "STATE",
+                            "state_alpha": st, "year__GE": "1986"})
+        p_cur = _nass_get({**_base, "agg_level_desc": "STATE",
+                           "state_alpha": st, "year__GE": _cur_yr})
+        merged = (p_hist.get("data") or []) + (p_cur.get("data") or [])
+        return st, {"data": merged}
 
     with ThreadPoolExecutor(max_workers=10) as _pool:
         _state_futures = {_pool.submit(_fetch_state, st): st for st in _reporting_states}
@@ -570,10 +574,11 @@ def fetch_conditions(commodity_desc: str, class_desc: str, years: tuple, known_s
             except Exception:
                 pass
 
-    # ── Step 3: US TOTAL — single bulk call ───────────────────────────────────────
-    # Same year__GE="1986" pinning as the per-state reads above, for the same reason.
-    _us_params = {**_base, "state_name": "US TOTAL", "year__GE": "1986"}
-    _us_payload = _nass_get(_us_params)
+    # ── Step 3: US TOTAL — merge full history + current-season cache ─────────────
+    _us_p_hist = _nass_get({**_base, "state_name": "US TOTAL", "year__GE": "1986"})
+    _us_p_cur = _nass_get({**_base, "state_name": "US TOTAL", "year__GE": _cur_yr})
+    _us_rows = (_us_p_hist.get("data") or []) + (_us_p_cur.get("data") or [])
+    _us_payload = {"data": _us_rows}
     if "_error" in _us_payload:
         errors.append(f"US TOTAL: {_us_payload['_error']}")
     elif "data" in _us_payload and _us_payload["data"]:
