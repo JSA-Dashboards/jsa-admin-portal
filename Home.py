@@ -32,8 +32,7 @@ st.set_page_config(
 # other's DATABASE_URL. Setting all of them once here, before navigation ever
 # runs, means nothing mutates os.environ again after startup.
 _ENV_SECRET_KEYS = (
-    "BASISTRACKER_DATABASE_URL",  # basis_tracker's own DB (was DATABASE_URL)
-    "RIVER_DATABASE_URL",         # basis_tracker's cross-read of river data
+    "RIVER_DATABASE_URL",         # river_fob cross-read (Postgres rollback)
     "RIVERFOB_DATABASE_URL",      # river_fob's own DB (was DATABASE_URL)
     "BASIS_DATABASE_URL",         # river_fob's cross-read of basis data
     "FOB_VESSEL_API_KEY",
@@ -60,7 +59,7 @@ require_admin_login()
 LIVE_DASHBOARDS = [
     {"title": "Basis Tracker", "category": "Cash Grain",
      "desc": "ADM + Mendota cash grain basis, rail FOB, river FOB, trends.",
-     "page": "apps/basis_tracker/app.py", "url_path": "basis-tracker"},
+     "page": "https://jsa-basis-tracker.streamlit.app/"},
     {"title": "River FOB Portal", "category": "Cash Grain",
      "desc": "CIF NOLA, barge freight, and location FOB values by river reach.",
      "page": "apps/river_fob/app.py", "url_path": "river-fob"},
@@ -231,10 +230,14 @@ def render_home():
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)
 
+# Basis Tracker's "page" is an external URL (its own live Cloud app, not a
+# bundled copy) -- st.page_link handles that fine on the home tile, but
+# st.Page/st.navigation only take local pages, so it's excluded here.
 pg = st.navigation(
     [home_page] + [
         st.Page(d["page"], title=d["title"], url_path=d["url_path"])
         for d in LIVE_DASHBOARDS
+        if not d["page"].startswith("http")
     ],
     position="top",
 )
