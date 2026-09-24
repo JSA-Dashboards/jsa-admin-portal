@@ -5017,7 +5017,7 @@ with tab_storage_vs_prod:
 _disclaimer_year = date.today().year
 st.markdown("<hr style='border-color:#e5e7eb;margin-top:32px;margin-bottom:16px'>", unsafe_allow_html=True)
 st.markdown(
-    f'<div style="font-family:inherit;color:#9ca3af;font-size:0.68rem;line-height:1.6;text-align:center;padding:0 24px 24px;">'
+    f'<div style="font-family:inherit;color:#9ca3af;font-size:inherit;line-height:1.6;text-align:center;padding:0 24px 24px;">'
     f'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative products involves substantial risk of loss and may not be suitable for all investors. '
     f'This communication is provided for informational purposes only and does not constitute investment advice, a recommendation, or an offer or solicitation to buy or sell any futures, options, cash commodities, or derivative products. '
     f'John Stewart &amp; Associates, Inc. does not accept orders to buy or sell any financial instruments via email. '

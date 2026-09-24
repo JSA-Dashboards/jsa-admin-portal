@@ -861,7 +861,7 @@ st.markdown(
     f'Survey &amp; Census · Cached 6h &nbsp;|&nbsp; John Stewart &amp; Associates</p>',
     unsafe_allow_html=True)
 st.markdown(
-    f'<div style="font-family:inherit;padding:10px 20px 20px;color:#6b7280;font-size:0.70rem;line-height:1.6;">'
+    f'<div style="font-family:inherit;padding:10px 20px 20px;color:#6b7280;font-size:inherit;line-height:1.6;">'
     f'Trading commodity futures, options on futures, cash commodities, and over-the-counter '
     f'derivative products involves substantial risk of loss and may not be suitable for all investors. '
     f'This communication is provided for informational purposes only and does not constitute investment '
