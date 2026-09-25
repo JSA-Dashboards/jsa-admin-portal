@@ -674,7 +674,12 @@ def click_to_highlight(chart_key: str, key: str, trace_years: list[int | None]) 
     points = selection.get("points") or []
     if not points:
         return
-    point = points[0]
+    # Under "x unified" hover a click can return one point per line; prefer a point that
+    # maps to a year, and ignore the rest.
+    point = next((pt for pt in points
+                  if isinstance(pt.get("curve_number"), int)
+                  and pt["curve_number"] < len(trace_years)
+                  and trace_years[pt["curve_number"]] is not None), points[0])
     fingerprint = str((point.get("curve_number"), point.get("point_index"),
                        point.get("point_number"), point.get("x")))
     seen = f"{chart_key}__lastclick"
@@ -1161,6 +1166,10 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             if window_days is None or fnd_x >= -window_days:
                 _add_vline(fig, fnd_x, "FND", FND_COLOR)
             _style_axes(fig, y_title, "Calendar days to near-leg expiration", fmt)
+            # Nearest-point hover, not "x unified": a click under unified hover selects a
+            # point on every line at that date, so there's no way to tell which line was
+            # meant. Closest gives exactly the one clicked, which click-to-bold needs.
+            fig.update_layout(hovermode="closest")
             yr = yfit_range([v for s in by_dte.values() for v in s.values], y_scale_label or "Full")
             if yr:
                 fig.update_yaxes(range=yr)
@@ -2546,6 +2555,7 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
         title=dict(text=f"{commodity['label']} — {pair_label} seasonal spread",
                    x=0.5, xanchor="center", font=dict(size=16)),
     )
+    fig.update_layout(hovermode="closest")  # see the note on the per-market chart
     fig.update_yaxes(tickformat=fmt, gridcolor="#eceff1", zeroline=True, zerolinecolor="#cfd8dc")
     fig.update_xaxes(gridcolor="#eceff1", tickformat="%b", dtick="M1")
     yr = yfit_range([v for s_dte in by_dte.values() for v in s_dte.values], y_scale_label or "Full")
