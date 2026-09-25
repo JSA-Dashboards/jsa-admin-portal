@@ -639,7 +639,7 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
         highlight_years = list(highlight_years or [])
         if code in stocks_use.WASDE_COMMODITY_NAMES:
             similar_on = st.toggle(
-                "Similar S/U years", value=False, key=f"simsu_{key}",
+                "Similar S/U years", value=True, key=f"simsu_{key}",
                 help="Auto-highlight prior years whose US stocks/use ratio was within the "
                 "tolerance below of the current marketing year's (from USDA's WASDE report). "
                 "Only as far back as USDA's machine-readable WASDE export goes — August 2021.",
@@ -2547,15 +2547,19 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
             sizing="contain", opacity=WATERMARK_OPACITY, layer="below",
         ))
     fig.update_layout(
-        height=560, margin=dict(l=10, r=80, t=30, b=10),
+        height=600, margin=dict(l=10, r=80, t=56, b=90),
         yaxis_title=y_title, xaxis_title=None,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
+        # See the note on the per-market chart: closest hover is what makes click-to-bold
+        # able to tell which line was clicked.
+        hovermode="closest",
+        # Legend under the plot: on top it wrapped over the title once a dozen-plus crop
+        # years were overlaid.
+        legend=dict(orientation="h", yanchor="top", y=-0.10, x=0, font=dict(size=10),
+                    itemsizing="constant"),
         title=dict(text=f"{commodity['label']} — {pair_label} seasonal spread",
-                   x=0.5, xanchor="center", font=dict(size=16)),
+                   x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=16)),
     )
-    fig.update_layout(hovermode="closest")  # see the note on the per-market chart
     fig.update_yaxes(tickformat=fmt, gridcolor="#eceff1", zeroline=True, zerolinecolor="#cfd8dc")
     fig.update_xaxes(gridcolor="#eceff1", tickformat="%b", dtick="M1")
     yr = yfit_range([v for s_dte in by_dte.values() for v in s_dte.values], y_scale_label or "Full")
