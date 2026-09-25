@@ -619,6 +619,83 @@ def render_disclaimer_footer():
     st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
 
 
+def highlight_controls(code: str, key: str, candidate_years: list[int],
+                       current_year: int, years_back: int) -> tuple[list[int], str]:
+    """The Highlight years / Y-axis / Similar S/U row shared by the per-market seasonal
+    charts and the Spread Builder. Returns the years to emphasise (the multiselect's
+    picks plus any auto-matched stocks/use years) and the Y-axis zoom level."""
+    row = st.container(horizontal=True, vertical_alignment="bottom")
+    with row:
+        highlight_years = st.multiselect(
+            "Highlight years", candidate_years, key=f"hl_{key}",
+            help="Bold specific prior years to stand out against the rest — or just click "
+            "a line on the chart to bold it, and click it again to drop it.",
+        )
+        y_scale_label = st.segmented_control(
+            "Y-axis", Y_SCALE_CHOICES, default="Full", key=f"yscale_{key}",
+            help="Clip the Y-axis to the middle 90/80/70% of values so one outlier year "
+            "doesn't flatten the rest of the chart.",
+        )
+        highlight_years = list(highlight_years or [])
+        if code in stocks_use.WASDE_COMMODITY_NAMES:
+            similar_on = st.toggle(
+                "Similar S/U years", value=False, key=f"simsu_{key}",
+                help="Auto-highlight prior years whose US stocks/use ratio was within the "
+                "tolerance below of the current marketing year's (from USDA's WASDE report). "
+                "Only as far back as USDA's machine-readable WASDE export goes — August 2021.",
+            )
+            if similar_on:
+                similar_tol = st.number_input(
+                    "± pts", min_value=0.5, max_value=10.0, value=2.0, step=0.5,
+                    key=f"simtol_{key}", width=90,
+                )
+                stu = load_stocks_to_use(code, current_year, years_back)
+                similar = stocks_use.similar_years(stu, current_year, similar_tol)
+                if not stu:
+                    st.caption("Stocks/use data unavailable right now.")
+                elif not similar:
+                    st.caption(f"No prior year within ±{similar_tol:g} pts of "
+                               f"{stu.get(current_year, 'this year')}%.")
+                else:
+                    st.caption(f"Current {stu.get(current_year):.1f}% S/U · similar: "
+                               + ", ".join(f"{y} ({stu[y]:.1f}%)" for y in sorted(similar)))
+                highlight_years = list(set(highlight_years) | set(similar))
+    return highlight_years, y_scale_label
+
+
+def click_to_highlight(chart_key: str, key: str, trace_years: list[int | None]) -> None:
+    """Click a line to bold it. Plotly hands back the clicked trace's index, which maps
+    to the year drawn at that position; that year is toggled in the Highlight years
+    multiselect so the two controls stay in step.
+
+    The selection survives the rerun, so it is fingerprinted and only acted on when it
+    changes — otherwise every rerun would re-toggle the same year."""
+    selection = (st.session_state.get(chart_key) or {}).get("selection") or {}
+    points = selection.get("points") or []
+    if not points:
+        return
+    point = points[0]
+    fingerprint = str((point.get("curve_number"), point.get("point_index"),
+                       point.get("point_number"), point.get("x")))
+    seen = f"{chart_key}__lastclick"
+    if st.session_state.get(seen) == fingerprint:
+        return
+    st.session_state[seen] = fingerprint
+
+    curve = point.get("curve_number")
+    year = trace_years[curve] if isinstance(curve, int) and curve < len(trace_years) else None
+    if year is None:
+        return  # an average, reference or pattern line — nothing to bold
+    picked = list(st.session_state.get(f"hl_{key}") or [])
+    st.session_state[f"hl_{key}"] = (
+        [y for y in picked if y != year] if year in picked else picked + [year]
+    )
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
 def yfit_range(values, level: str) -> list[float] | None:
     """[lo, hi] to clip a Y-axis to the central `level` (e.g. "90%") of `values`, padded
     8% each side. None for "Full" or too few points — caller leaves the axis on auto."""
@@ -937,41 +1014,8 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
         return
 
     candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
-    highlight_row = st.container(horizontal=True, vertical_alignment="bottom")
-    with highlight_row:
-        highlight_years = st.multiselect(
-            "Highlight years", candidate_years, key=f"hl_{key}_{near}_{far}",
-            help="Bold specific prior years to stand out against the rest — pick the ones "
-            "you want to compare directly against the current spread.",
-        )
-        y_scale_label = st.segmented_control(
-            "Y-axis", Y_SCALE_CHOICES, default="Full", key=f"yscale_{key}",
-            help="Clip the Y-axis to the middle 90/80/70% of values so one outlier year "
-            "doesn't flatten the rest of the chart.",
-        )
-        if code in stocks_use.WASDE_COMMODITY_NAMES:
-            similar_on = st.toggle(
-                "Similar S/U years", value=False, key=f"simsu_{key}",
-                help="Auto-highlight prior years whose US stocks/use ratio was within the "
-                "tolerance below of the current marketing year's (from USDA's WASDE report). "
-                "Only as far back as USDA's machine-readable WASDE export goes — August 2021.",
-            )
-            if similar_on:
-                similar_tol = st.number_input(
-                    "± pts", min_value=0.5, max_value=10.0, value=2.0, step=0.5,
-                    key=f"simtol_{key}", width=90,
-                )
-                stu = load_stocks_to_use(code, expiries[near].year, years_back)
-                similar = stocks_use.similar_years(stu, expiries[near].year, similar_tol)
-                if not stu:
-                    st.caption("Stocks/use data unavailable right now.")
-                elif not similar:
-                    st.caption(f"No prior year within ±{similar_tol:g} pts of "
-                              f"{stu.get(expiries[near].year, 'this year')}%.")
-                else:
-                    st.caption(f"Current {stu.get(expiries[near].year):.1f}% S/U · similar: "
-                              + ", ".join(f"{y} ({stu[y]:.1f}%)" for y in sorted(similar)))
-                highlight_years = list(set(highlight_years) | set(similar))
+    highlight_years, y_scale_label = highlight_controls(
+        code, f"{key}_{near}_{far}", candidate_years, expiries[near].year, years_back)
 
     mode = "nominal" if (mode_label or "Nominal") == "Nominal" else "carry"
     window_days = RANGE_CHOICES.get(range_label or "1Y", 365)
@@ -1039,6 +1083,7 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
         drawn = 0
         by_dte: dict[str, pd.Series] = {}
         vsr_shades: dict[int, int] = {}
+        trace_years: list[int | None] = []   # index -> year, for click-to-bold
         for back in range(years_back + 1):
             n = deep_year_key(code, near_letter, expiries[near].year - back)
             f = deep_year_key(code, far_letter, expiries[far].year - back)
@@ -1071,13 +1116,17 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             is_highlighted = this_year in highlight_years
             emphasize = is_current or is_highlighted
             fig.add_trace(go.Scatter(
-                x=[days_out[i] for i in keep], y=[s.values[i] for i in keep], mode="lines", name=name,
+                x=[days_out[i] for i in keep], y=[s.values[i] for i in keep],
+                mode="lines+markers", name=name,
                 line=dict(color=color, width=3 if is_current else (2.5 if is_highlighted else 1.5)),
+                # invisible but hit-testable, so a click anywhere along the line registers
+                marker=dict(size=7, opacity=0, color=color),
                 opacity=1.0 if emphasize else (0.3 if highlight_years else 0.7),
                 hovertemplate=f"{name}<br>%{{x}}d to expiry<br>%{{y:{fmt}}}<extra></extra>",
             ))
             by_dte[name] = pd.Series([s.values[i] for i in keep],
                                      index=pd.Index([days_out[i] for i in keep], name="dte"))
+            trace_years.append(this_year)
             drawn += 1
 
         if not drawn:
@@ -1116,7 +1165,9 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             if yr:
                 fig.update_yaxes(range=yr)
             st.plotly_chart(fig, width="stretch", key=f"seas_{key}",
-                            config=plotly_config(f"{key}_seasonal"))
+                            config=plotly_config(f"{key}_seasonal"),
+                            on_select="rerun", selection_mode="points")
+            click_to_highlight(f"seas_{key}", f"{key}_{near}_{far}", trace_years)
             st.caption(
                 f"{drawn} crop year{'s' if drawn != 1 else ''} overlaid · x = 0 is the near leg's "
                 "expiration, so each year lines up at the same point in its life."
@@ -2369,6 +2420,9 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
 
     curve = load_curve(code, api_key, as_of.isoformat(), BUILDER_CURVE_MONTHS)
     expiries = dict(zip(curve["ticker"], curve["expiration"]))
+    candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
+    highlight_years, y_scale_label = highlight_controls(
+        code, f"b_{code}_{near}_{far}", candidate_years, expiries[near].year, years_back)
     near_letter, far_letter = month_letter_of(near, code), month_letter_of(far, code)
     # The seasonal pattern wants up to 15 prior years even when fewer are overlaid.
     pattern_years = min(max(OUTLOOK_PATTERNS), max_years)
@@ -2380,6 +2434,7 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
 
     fig = go.Figure()
     by_dte: dict[str, pd.Series] = {}
+    trace_years: list[int | None] = []      # index -> year, for click-to-bold
     prior_years: dict[int, pd.Series] = {}  # near contract year -> spread by days to expiry
     current_dte: pd.Series | None = None
     storage_full = interest_full = None
@@ -2427,12 +2482,18 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
         if vsr:
             color, suffix = vsr
             legend += suffix
+        this_year = expiries[near].year - back
+        is_current = back == 0
+        is_highlighted = this_year in highlight_years
         fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="lines", name=legend,
-            line=dict(color=color, width=3.5 if back == 0 else 1.6),
-            opacity=1.0 if back == 0 else 0.8,
+            x=xs, y=ys, mode="lines+markers", name=legend,
+            line=dict(color=color, width=3.5 if is_current else (3.0 if is_highlighted else 1.6)),
+            # invisible but hit-testable, so a click anywhere along the line registers
+            marker=dict(size=7, opacity=0, color=color),
+            opacity=1.0 if (is_current or is_highlighted) else (0.3 if highlight_years else 0.8),
             hovertemplate=f"{name}<br>%{{y:{fmt}}}<extra></extra>",
         ))
+        trace_years.append(this_year)
         by_dte[name] = pd.Series([series.values[i] for i in keep],
                                  index=pd.Index([dte[i] for i in keep], name="dte"))
 
@@ -2487,8 +2548,13 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
     )
     fig.update_yaxes(tickformat=fmt, gridcolor="#eceff1", zeroline=True, zerolinecolor="#cfd8dc")
     fig.update_xaxes(gridcolor="#eceff1", tickformat="%b", dtick="M1")
+    yr = yfit_range([v for s_dte in by_dte.values() for v in s_dte.values], y_scale_label or "Full")
+    if yr:
+        fig.update_yaxes(range=yr)
     st.plotly_chart(fig, width="stretch", key="builder_chart",
-                    config=plotly_config(f"{code}_{near}_{far}_seasonal"))
+                    config=plotly_config(f"{code}_{near}_{far}_seasonal"),
+                    on_select="rerun", selection_mode="points")
+    click_to_highlight("builder_chart", f"b_{code}_{near}_{far}", trace_years)
     export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
                f"{code}_{near}_{far}_seasonal", key="builder", fig=fig)
 
