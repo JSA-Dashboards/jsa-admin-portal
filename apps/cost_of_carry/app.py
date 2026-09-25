@@ -201,10 +201,11 @@ def load_fed_funds(api_key: str, as_of: str) -> dict:
 
 
 @st.cache_data(ttl="24h", show_spinner="Loading USDA stocks/use…")
-def load_stocks_to_use(product_code: str, current_year: int, years_back: int) -> dict[int, float]:
-    """US stocks/use ratio by marketing year, from USDA's WASDE CSV export. Long TTL —
-    this only moves once a month, on WASDE release day."""
-    return stocks_use.fetch_stocks_to_use(product_code, current_year, years_back)
+def load_stocks_to_use(product_code: str) -> dict[int, float]:
+    """US stocks/use ratio by marketing year, from USDA FAS PSD (whole history in one
+    download) with the WASDE CSV as fallback. Long TTL — it only moves on WASDE release
+    day, and the key is the market alone so changing the years slider doesn't refetch."""
+    return stocks_use.fetch_stocks_to_use(product_code, date.today().year, 100)
 
 
 def carry_bucket(pct: float) -> str:
@@ -641,24 +642,31 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
             similar_on = st.toggle(
                 "Similar S/U years", value=True, key=f"simsu_{key}",
                 help="Auto-highlight prior years whose US stocks/use ratio was within the "
-                "tolerance below of the current marketing year's (from USDA's WASDE report). "
-                "Only as far back as USDA's machine-readable WASDE export goes — August 2021.",
+                "tolerance below of the current marketing year's. US balance sheets come "
+                "from USDA FAS PSD, which covers every year on these charts; if PSD is "
+                "unreachable it falls back to USDA's WASDE CSV, which only reaches 2019.",
             )
             if similar_on:
                 similar_tol = st.number_input(
                     "± pts", min_value=0.5, max_value=10.0, value=2.0, step=0.5,
                     key=f"simtol_{key}", width=90,
                 )
-                stu = load_stocks_to_use(code, current_year, years_back)
-                similar = stocks_use.similar_years(stu, current_year, similar_tol)
+                stu = load_stocks_to_use(code)
+                all_similar = stocks_use.similar_years(stu, current_year, similar_tol)
+                # PSD reaches back decades, but only years actually overlaid can be bolded.
+                similar = [y for y in all_similar if y in candidate_years]
+                beyond = len(all_similar) - len(similar)
                 if not stu:
                     st.caption("Stocks/use data unavailable right now.")
                 elif not similar:
-                    st.caption(f"No prior year within ±{similar_tol:g} pts of "
-                               f"{stu.get(current_year, 'this year')}%.")
+                    st.caption(f"No overlaid year within ±{similar_tol:g} pts of "
+                               f"{stu.get(current_year, 'this year')}%."
+                               + (f" {beyond} match further back — raise *Prior crop years*."
+                                  if beyond else ""))
                 else:
                     st.caption(f"Current {stu.get(current_year):.1f}% S/U · similar: "
-                               + ", ".join(f"{y} ({stu[y]:.1f}%)" for y in sorted(similar)))
+                               + ", ".join(f"{y} ({stu[y]:.1f}%)" for y in sorted(similar))
+                               + (f" · {beyond} more further back" if beyond else ""))
                 highlight_years = list(set(highlight_years) | set(similar))
     return highlight_years, y_scale_label
 

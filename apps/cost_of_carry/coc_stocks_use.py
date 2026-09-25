@@ -1,12 +1,17 @@
-"""US stocks-to-use ratio by marketing year, pulled straight from USDA's own WASDE
-report CSV export (the same one wasde-dashboard/app.py downloads) — used to flag
-"similar" prior seasonal years for the seasonal charts' highlight feature.
+"""US stocks-to-use ratio by marketing year — used to flag "similar" prior years on the
+seasonal charts' highlight feature.
 
-The FAS PSD REST API (apps.fas.usda.gov/psdonline/api and /opendata/api) 404s/500s
-under every auth variant tried, so this reads the same published numbers a different
-way: each monthly WASDE CSV carries a US balance-sheet table for 3 marketing years
-(prior-final, current-estimate, next-projected). Fetching every 3rd year's August
-report tiles that 3-year window across decades with no gaps and no overlap.
+Primary source is USDA FAS **PSD's bulk CSV download**, which carries the whole US
+balance sheet back to 1960 (corn, wheat) / 1964 (soybeans) and forward to the current
+projection, in one keyless request. PSD's REST endpoints are not usable — psdonline/api
+404s, opendata/api 500s or rejects the key — but the published download works.
+
+Fallback is USDA's monthly WASDE report CSV, which only reaches back to the August 2021
+report (earlier months 404), i.e. marketing year 2019/20. Each WASDE CSV carries three
+marketing years, so every 3rd August report tiles the window with no gaps.
+
+The two agree closely; PSD revises history, so older years can differ from what the
+WASDE of the day said.
 """
 
 from __future__ import annotations
@@ -37,6 +42,66 @@ WASDE_COMMODITY_NAMES = {
 }
 
 
+# One keyless zip per PSD group; the grains file carries corn and wheat, oilseeds soybeans.
+PSD_CSV_URLS = {
+    "grains": "https://apps.fas.usda.gov/psdonline/downloads/psd_grains_pulses_csv.zip",
+    "oilseeds": "https://apps.fas.usda.gov/psdonline/downloads/psd_oilseeds_csv.zip",
+}
+
+# product code -> (PSD group, PSD commodity description). Wheat classes share one
+# balance sheet, as in WASDE_COMMODITY_NAMES.
+PSD_COMMODITIES = {
+    "ZC": ("grains", "Corn"),
+    "ZW": ("grains", "Wheat"),
+    "KE": ("grains", "Wheat"),
+    "HRS": ("grains", "Wheat"),
+    "ZS": ("oilseeds", "Oilseed, Soybean"),
+}
+
+
+def _fetch_psd_group(group: str) -> pd.DataFrame:
+    import io
+    import zipfile
+
+    resp = requests.get(PSD_CSV_URLS[group], headers=_HEADERS, timeout=120)
+    resp.raise_for_status()
+    archive = zipfile.ZipFile(io.BytesIO(resp.content))
+    return pd.read_csv(archive.open(archive.namelist()[0]), low_memory=False)
+
+
+def fetch_psd_stocks_to_use(product_code: str) -> dict[int, float]:
+    """{marketing_year_start: ending stocks / total use * 100} for the US, full history.
+
+    Total use is PSD's Total Distribution less Ending Stocks — the same identity as
+    WASDE's "Use, Total" line. Empty on any failure, so the caller can fall back."""
+    entry = PSD_COMMODITIES.get(product_code)
+    if not entry:
+        return {}
+    group, commodity = entry
+    try:
+        frame = _fetch_psd_group(group)
+    except Exception:
+        return {}
+
+    rows = frame[
+        (frame["Country_Name"].astype(str).str.strip() == "United States")
+        & (frame["Commodity_Description"].astype(str).str.strip() == commodity)
+        & (frame["Attribute_Description"].isin(["Ending Stocks", "Total Distribution"]))
+    ]
+    if not len(rows):
+        return {}
+    # PSD republishes each marketing year monthly; the latest month is the current view.
+    latest = (rows.sort_values("Month")
+                  .groupby(["Market_Year", "Attribute_Description"], as_index=False)
+                  .last())
+    wide = latest.pivot(index="Market_Year", columns="Attribute_Description", values="Value")
+    if "Ending Stocks" not in wide or "Total Distribution" not in wide:
+        return {}
+    use = wide["Total Distribution"] - wide["Ending Stocks"]
+    ratio = (wide["Ending Stocks"] / use * 100).where(use > 0).dropna()
+    return {int(year): round(float(value), 2) for year, value in ratio.items()}
+
+
 def _fetch_wasde_report(year: int, month: int = 8) -> pd.DataFrame:
     url = WASDE_CSV_URL.format(year=year, month=month)
     r = requests.get(url, headers=_HEADERS, timeout=30)
@@ -58,9 +123,14 @@ def _report_years(current_year: int, years_back: int) -> list[int]:
 def fetch_stocks_to_use(product_code: str, current_year: int, years_back: int) -> dict[int, float]:
     """{marketing_year_start: ending_stocks / total_use * 100}, US only.
 
-    Empty on any failure — this is a convenience overlay for the highlight feature,
-    never worth failing a chart over.
+    PSD first (full history, one request); WASDE's CSV only if PSD is unreachable, in
+    which case the answer is limited to marketing year 2019/20 forward. Empty on any
+    failure — this is a convenience overlay for the highlight feature, never worth
+    failing a chart over.
     """
+    psd = fetch_psd_stocks_to_use(product_code)
+    if psd:
+        return psd
     commodity = WASDE_COMMODITY_NAMES.get(product_code)
     if not commodity:
         return {}
