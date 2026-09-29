@@ -621,10 +621,15 @@ def render_disclaimer_footer():
 
 
 def highlight_controls(code: str, key: str, candidate_years: list[int],
-                       current_year: int, years_back: int) -> tuple[list[int], str]:
+                       near_expiry: date, years_back: int) -> tuple[list[int], str]:
     """The Highlight years / Y-axis / Similar S/U row shared by the per-market seasonal
     charts and the Spread Builder. Returns the years to emphasise (the multiselect's
-    picks plus any auto-matched stocks/use years) and the Y-axis zoom level."""
+    picks plus any auto-matched stocks/use years) and the Y-axis zoom level.
+
+    Similarity is judged on the marketing year the spread trades against, which is not
+    the near leg's calendar year: Dec '25 through Sep '26 corn all trade against the
+    2025/26 carryout. `near_expiry` therefore drives the lookup, and matches are mapped
+    back to contract years so they line up with the overlaid lines."""
     row = st.container(horizontal=True, vertical_alignment="bottom")
     with row:
         highlight_years = st.multiselect(
@@ -652,21 +657,32 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
                     key=f"simtol_{key}", width=90,
                 )
                 stu = load_stocks_to_use(code)
-                all_similar = stocks_use.similar_years(stu, current_year, similar_tol)
+                this_my = stocks_use.marketing_year(code, near_expiry)
+                # Each overlaid year rolls the contract back a year, so its marketing
+                # year rolls back with it by the same offset.
+                offset = near_expiry.year - this_my
+                my_label = stocks_use.marketing_year_label(this_my)
+                all_similar = stocks_use.similar_years(stu, this_my, similar_tol)
                 # PSD reaches back decades, but only years actually overlaid can be bolded.
-                similar = [y for y in all_similar if y in candidate_years]
+                similar = [y + offset for y in all_similar if y + offset in candidate_years]
                 beyond = len(all_similar) - len(similar)
                 if not stu:
                     st.caption("Stocks/use data unavailable right now.")
+                elif this_my not in stu:
+                    st.caption(f"USDA hasn't published a {my_label} balance sheet yet, so "
+                               "there's nothing to match against.")
                 elif not similar:
-                    st.caption(f"No overlaid year within ±{similar_tol:g} pts of "
-                               f"{stu.get(current_year, 'this year')}%."
+                    st.caption(f"{my_label} is {stu[this_my]:.1f}% S/U · no overlaid year "
+                               f"within ±{similar_tol:g} pts."
                                + (f" {beyond} match further back — raise *Prior crop years*."
                                   if beyond else ""))
                 else:
-                    st.caption(f"Current {stu.get(current_year):.1f}% S/U · similar: "
-                               + ", ".join(f"{y} ({stu[y]:.1f}%)" for y in sorted(similar))
-                               + (f" · {beyond} more further back" if beyond else ""))
+                    st.caption(
+                        f"{my_label} is {stu[this_my]:.1f}% S/U · similar: "
+                        + ", ".join(
+                            f"{stocks_use.marketing_year_label(y - offset)} "
+                            f"({stu[y - offset]:.1f}%)" for y in sorted(similar))
+                        + (f" · {beyond} more further back" if beyond else ""))
                 highlight_years = list(set(highlight_years) | set(similar))
     return highlight_years, y_scale_label
 
@@ -1028,7 +1044,7 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
 
     candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
     highlight_years, y_scale_label = highlight_controls(
-        code, f"{key}_{near}_{far}", candidate_years, expiries[near].year, years_back)
+        code, f"{key}_{near}_{far}", candidate_years, expiries[near], years_back)
 
     mode = "nominal" if (mode_label or "Nominal") == "Nominal" else "carry"
     window_days = RANGE_CHOICES.get(range_label or "1Y", 365)
@@ -2439,7 +2455,7 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
     expiries = dict(zip(curve["ticker"], curve["expiration"]))
     candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
     highlight_years, y_scale_label = highlight_controls(
-        code, f"b_{code}_{near}_{far}", candidate_years, expiries[near].year, years_back)
+        code, f"b_{code}_{near}_{far}", candidate_years, expiries[near], years_back)
     near_letter, far_letter = month_letter_of(near, code), month_letter_of(far, code)
     # The seasonal pattern wants up to 15 prior years even when fewer are overlaid.
     pattern_years = min(max(OUTLOOK_PATTERNS), max_years)

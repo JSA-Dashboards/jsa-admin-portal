@@ -168,6 +168,34 @@ def fetch_stocks_to_use(product_code: str, current_year: int, years_back: int) -
     return {y: round(stocks[y] / use[y] * 100, 2) for y in stocks if use.get(y)}
 
 
+# ── Contract month -> marketing year ────────────────────────────────────────────────
+# A spread trades against the carryout of the marketing year its near leg sits in, not
+# against the near leg's calendar year: Mar '26 and Jul '26 corn are both 2025/26 crop.
+# The value below is the first calendar month whose contracts belong to the NEW marketing
+# year, so anything earlier in the year belongs to the one before.
+#
+#   Corn / soybeans — US marketing year runs Sep-Aug, and the market carries Sep (and
+#   soybean Nov's predecessor months) as old crop, so Dec is the first new-crop contract:
+#   Dec '25, Mar '26, May '26, Jul '26 and Sep '26 are all 2025/26.
+#   Wheat — marketing year runs Jul-Jun, so Jul '25 through May '26 are all 2025/26.
+MY_FIRST_MONTH = {"ZC": 10, "ZS": 10, "ZW": 7, "KE": 7, "HRS": 7}
+
+
+def marketing_year(product_code: str, contract_expiry) -> int | None:
+    """Marketing year (its start year) a contract belongs to. None for markets with no
+    US balance sheet here (meal, oil)."""
+    first_month = MY_FIRST_MONTH.get(product_code)
+    if first_month is None:
+        return None
+    return (contract_expiry.year if contract_expiry.month >= first_month
+            else contract_expiry.year - 1)
+
+
+def marketing_year_label(year: int) -> str:
+    """2025 -> '2025/26', the way USDA and the trade write it."""
+    return f"{year}/{(year + 1) % 100:02d}"
+
+
 def similar_years(stu: dict[int, float], current_year: int, tolerance_pts: float = 2.0) -> list[int]:
     """Years whose stocks/use ratio is within `tolerance_pts` percentage points of
     `current_year`'s. Empty if the current year itself has no ratio on record."""
