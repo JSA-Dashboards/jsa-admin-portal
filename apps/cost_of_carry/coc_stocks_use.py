@@ -56,7 +56,24 @@ PSD_COMMODITIES = {
     "KE": ("grains", "Wheat"),
     "HRS": ("grains", "Wheat"),
     "ZS": ("oilseeds", "Oilseed, Soybean"),
+    "ZM": ("oilseeds", "Meal, Soybean"),
+    "ZL": ("oilseeds", "Oil, Soybean"),
 }
+
+# Stocks/use sits in a different range in every market, so one tolerance can't serve all:
+# US soybean meal has run 0.67-0.83% for years, where +/- 2 points would match literally
+# every year on record. These are the defaults for the app's "+/- pts" box.
+DEFAULT_TOLERANCE_PTS = {"ZC": 2.0, "ZS": 2.0, "ZW": 2.0, "KE": 2.0, "HRS": 2.0,
+                         "ZM": 0.05, "ZL": 0.75}
+
+
+def has_stocks_use(product_code: str) -> bool:
+    """Whether a US stocks/use ratio can be had for this market."""
+    return product_code in PSD_COMMODITIES or product_code in WASDE_COMMODITY_NAMES
+
+
+def default_tolerance(product_code: str) -> float:
+    return DEFAULT_TOLERANCE_PTS.get(product_code, 2.0)
 
 
 def _fetch_psd_group(group: str) -> pd.DataFrame:
@@ -178,7 +195,9 @@ def fetch_stocks_to_use(product_code: str, current_year: int, years_back: int) -
 #   soybean Nov's predecessor months) as old crop, so Dec is the first new-crop contract:
 #   Dec '25, Mar '26, May '26, Jul '26 and Sep '26 are all 2025/26.
 #   Wheat — marketing year runs Jul-Jun, so Jul '25 through May '26 are all 2025/26.
-MY_FIRST_MONTH = {"ZC": 10, "ZS": 10, "ZW": 7, "KE": 7, "HRS": 7}
+#   Soybean meal and oil — their own marketing year runs Oct-Sep, so Oct is the first
+#   contract of the new one, which is the same threshold the beans use.
+MY_FIRST_MONTH = {"ZC": 10, "ZS": 10, "ZW": 7, "KE": 7, "HRS": 7, "ZM": 10, "ZL": 10}
 
 
 def marketing_year(product_code: str, contract_expiry) -> int | None:

@@ -80,6 +80,13 @@ def watermark_uri(path: str) -> str:
 # st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+st.markdown(
+    "<style>[class*='_profileContainer_']{display:none !important;}</style>",
+    unsafe_allow_html=True,
+)
+
 COMMODITIES = [
     {
         "key": "corn",
@@ -643,7 +650,7 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
             "doesn't flatten the rest of the chart.",
         )
         highlight_years = list(highlight_years or [])
-        if code in stocks_use.WASDE_COMMODITY_NAMES:
+        if stocks_use.has_stocks_use(code):
             similar_on = st.toggle(
                 "Similar S/U years", value=True, key=f"simsu_{key}",
                 help="Auto-highlight prior years whose US stocks/use ratio was within the "
@@ -652,10 +659,18 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
                 "unreachable it falls back to USDA's WASDE CSV, which only reaches 2019.",
             )
             if similar_on:
+                # Each market's ratio lives in its own range — meal spends years inside
+                # a fifth of a point — so the default and step follow the market.
+                tol_default = stocks_use.default_tolerance(code)
                 similar_tol = st.number_input(
-                    "± pts", min_value=0.5, max_value=10.0, value=2.0, step=0.5,
-                    key=f"simtol_{key}", width=90,
+                    "± pts", min_value=0.01, max_value=10.0, value=tol_default,
+                    step=max(round(tol_default / 4, 2), 0.01),
+                    format="%.2f" if tol_default < 0.5 else "%.1f",
+                    key=f"simtol_{key}", width=100,
                 )
+                # Meal lives inside a fifth of a point, so one decimal would print every
+                # year as "0.7%"; show as many as the tolerance can distinguish.
+                ratio_fmt = ".2f" if similar_tol < 0.5 else ".1f"
                 stu = load_stocks_to_use(code)
                 this_my = stocks_use.marketing_year(code, near_expiry)
                 # Each overlaid year rolls the contract back a year, so its marketing
@@ -672,16 +687,16 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
                     st.caption(f"USDA hasn't published a {my_label} balance sheet yet, so "
                                "there's nothing to match against.")
                 elif not similar:
-                    st.caption(f"{my_label} is {stu[this_my]:.1f}% S/U · no overlaid year "
-                               f"within ±{similar_tol:g} pts."
+                    st.caption(f"{my_label} is {stu[this_my]:{ratio_fmt}}% S/U · no overlaid "
+                               f"year within ±{similar_tol:g} pts."
                                + (f" {beyond} match further back — raise *Prior crop years*."
                                   if beyond else ""))
                 else:
                     st.caption(
-                        f"{my_label} is {stu[this_my]:.1f}% S/U · similar: "
+                        f"{my_label} is {stu[this_my]:{ratio_fmt}}% S/U · similar: "
                         + ", ".join(
                             f"{stocks_use.marketing_year_label(y - offset)} "
-                            f"({stu[y - offset]:.1f}%)" for y in sorted(similar))
+                            f"({stu[y - offset]:{ratio_fmt}}%)" for y in sorted(similar))
                         + (f" · {beyond} more further back" if beyond else ""))
                 highlight_years = list(set(highlight_years) | set(similar))
     return highlight_years, y_scale_label
