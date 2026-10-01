@@ -26,6 +26,13 @@ st.set_page_config(
     layout="wide",
 )
 
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+st.markdown(
+    "<style>[class*='_profileContainer_']{display:none !important;}</style>",
+    unsafe_allow_html=True,
+)
+
 # ── One-time env var setup for every merged dashboard ────────────────────────
 # Each dashboard's own DB env var was renamed (in its copy under apps/) to a
 # distinct name so two apps sharing this one process never clobber each
