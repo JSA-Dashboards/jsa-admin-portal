@@ -11290,9 +11290,22 @@ with _tab_prod:
                         _tsup_row["vs LY"] = f"{'+'if _tc>=0 else ''}{_tc:.1f}%"
                     else:
                         _tsup_row["vs LY"] = "—"
-                    _tsup_row[_jsa_col_hdr]       = "—"
-                    _tsup_row["vs LY ▸ JSA"]      = "—"
-                    _tsup_row["vs Olympic ▸ JSA"] = "—"
+                    # JSA Total Supply = JSA production estimate + Sep1 carry-in
+                    _jsa_prod_bu  = _jsa_est.get("production_bu")
+                    _jsa_carry_in = _stk_vals.get(sel_usda_yr)
+                    _jsa_tsup = None
+                    if _jsa_prod_bu is not None and _jsa_carry_in is not None:
+                        _jsa_tsup = _jsa_prod_bu + _jsa_carry_in
+                        _sfx = "*" if _sep1_has_estimate else ""
+                        _tsup_row[_jsa_col_hdr] = f"{_jsa_tsup/1_000_000:.1f}{_sfx}"
+                        if _ts_prev is not None and _ts_prev != 0:
+                            _c = (_jsa_tsup - _ts_prev) / abs(_ts_prev) * 100
+                            _tsup_row["vs LY ▸ JSA"] = f"{'+'if _c>=0 else ''}{_c:.1f}%"
+                        else:
+                            _tsup_row["vs LY ▸ JSA"] = "—"
+                    else:
+                        _tsup_row[_jsa_col_hdr]  = "—"
+                        _tsup_row["vs LY ▸ JSA"] = "—"
                     _ts_hist = []
                     for _hyr in sorted(_snap_df["year"].unique()):
                         if _hyr >= sel_usda_yr:
@@ -11308,6 +11321,19 @@ with _tab_prod:
                         _hsv = float(_hs_row["stocks_bu"].iloc[0]) if not _hs_row.empty else None
                         if _hpv is not None and _hsv is not None:
                             _ts_hist.append(_hpv + _hsv)
+                    # vs Olympic ▸ JSA for Total Supply
+                    if _jsa_tsup is not None and len(_ts_hist) >= 3:
+                        _ts6 = _ts_hist[-6:]
+                        _ts6s = sorted(_ts6)
+                        _ts_trimmed = _ts6s[1:-1] if len(_ts6s) >= 4 else _ts6s
+                        _ts_oly = float(np.mean(_ts_trimmed))
+                        if _ts_oly != 0:
+                            _co = (_jsa_tsup - _ts_oly) / abs(_ts_oly) * 100
+                            _tsup_row["vs Olympic ▸ JSA"] = f"{'+'if _co>=0 else ''}{_co:.1f}%"
+                        else:
+                            _tsup_row["vs Olympic ▸ JSA"] = "—"
+                    else:
+                        _tsup_row["vs Olympic ▸ JSA"] = "—"
                     _tsup_row["Min"] = f"{min(_ts_hist)/1_000_000:.1f}" if _ts_hist else "—"
                     _tsup_row["Max"] = f"{max(_ts_hist)/1_000_000:.1f}" if _ts_hist else "—"
                     _snap_rows.append(_tsup_row)
