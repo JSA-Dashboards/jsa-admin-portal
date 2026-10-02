@@ -205,13 +205,20 @@ div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"]:hover p {
     line-height: 1.45;
     margin-top: 9px;
 }
+.jsa-cat-hdr {
+    color: #32373c;
+    font-family: 'EB Garamond', Georgia, serif;
+    font-size: 22px;
+    font-weight: 600;
+    margin: 10px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #d7dde2;
+}
 div[class*="st-key-soon_"] {
     background: #e9edf0;
-    border-radius: 4px;
-    box-shadow: 0 6px 0 #ffffff;
-    height: 132px; margin-bottom: 28px;
-    display: flex; align-items: center; justify-content: center;
-    text-align: center; padding: 14px 18px;
+    border-radius: 6px;
+    min-height: 132px; margin-bottom: 22px;
+    padding: 16px 18px 18px;
 }
 div[class*="st-key-soon_"] p {
     color: #7c8791 !important;
@@ -251,25 +258,30 @@ def render_home():
         if d["category"] not in categories:
             categories.append(d["category"])
 
+    # Four tiles per row, like the Livestock Portal. Always ask for
+    # TILES_PER_ROW columns, even on a short last row, so every tile keeps the
+    # same width as the rows above it instead of stretching to fill.
+    TILES_PER_ROW = 4
     tile_i = 0
     for cat in categories:
-        st.markdown(f"### {cat}")
+        st.markdown(f"<div class='jsa-cat-hdr'>{html.escape(cat)}</div>", unsafe_allow_html=True)
         cat_dashboards = [d for d in LIVE_DASHBOARDS if d["category"] == cat]
-        cols = st.columns(3)
-        for i, d in enumerate(cat_dashboards):
-            with cols[i % 3]:
-                with st.container(key=f"tile_{tile_i}"):
-                    st.page_link(d["page"], label=d["title"])
-                    st.markdown(
-                        f"<div class='jsa-tile-desc'>{html.escape(d['desc'])}</div>",
-                        unsafe_allow_html=True,
-                    )
-            tile_i += 1
+        for start in range(0, len(cat_dashboards), TILES_PER_ROW):
+            cols = st.columns(TILES_PER_ROW)
+            for offset, d in enumerate(cat_dashboards[start:start + TILES_PER_ROW]):
+                with cols[offset]:
+                    with st.container(key=f"tile_{tile_i}"):
+                        st.page_link(d["page"], label=d["title"])
+                        st.markdown(
+                            f"<div class='jsa-tile-desc'>{html.escape(d['desc'])}</div>",
+                            unsafe_allow_html=True,
+                        )
+                tile_i += 1
 
     st.caption("Pilot migrated the first three dashboards into this shell — the rest follow the same pattern.")
-    soon_cols = st.columns(3)
+    soon_cols = st.columns(TILES_PER_ROW)
     for i, title in enumerate(COMING_SOON):
-        with soon_cols[i % 3]:
+        with soon_cols[i % TILES_PER_ROW]:
             with st.container(key=f"soon_{i}"):
                 st.markdown(
                     f"<div><span class='jsa-soon-tag'>Coming soon</span><p>{title}</p></div>",
