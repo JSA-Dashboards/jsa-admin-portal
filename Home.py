@@ -6,6 +6,7 @@ merged dashboard's env vars ONCE at process startup (never again — safe for
 concurrent sessions once this is deployed multi-user), runs the single shared
 login gate, then hands off to st.navigation (top nav, no sidebar).
 """
+import html
 import os
 from pathlib import Path
 
@@ -158,32 +159,51 @@ footer {visibility: hidden;}
 header {visibility: hidden;}
 @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&display=swap');
 
+/* The tile IS the dark box: padding lives on it and overflow is clipped to the
+   rounded corners, so the title link and its description both sit inside it.
+   Same look as the Livestock Portal's tiles. */
 div[class*="st-key-tile_"] {
     background: #32373c;
-    border-radius: 4px;
-    box-shadow: 0 6px 0 #ffffff, 0 6px 14px rgba(0,0,0,0.18);
+    border-radius: 6px;
+    overflow: hidden;
+    padding: 16px 18px 18px;
+    min-height: 132px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.16);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
-    margin-bottom: 28px;
+    margin-bottom: 22px;
 }
 div[class*="st-key-tile_"]:hover {
     transform: translateY(-3px);
-    box-shadow: 0 6px 0 #ffffff, 0 10px 20px rgba(0,0,0,0.25);
+    box-shadow: 0 8px 18px rgba(0,0,0,0.26);
 }
 div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"] {
-    display: flex; align-items: center; justify-content: center;
-    height: 132px; padding: 14px 18px; text-decoration: none !important;
-    text-align: center;
+    display: block;
+    padding: 0 !important;
+    margin: 0 !important;
+    text-align: left;
+    text-decoration: none !important;
+    background: transparent !important;
 }
 div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"] p {
     color: #ffffff !important;
     font-family: 'EB Garamond', Georgia, serif !important;
-    font-size: 21px !important;
+    font-size: 20px !important;
     font-weight: 600 !important;
-    line-height: 1.3 !important;
+    line-height: 1.22 !important;
+    letter-spacing: 0.1px !important;
     margin: 0 !important;
+    overflow-wrap: anywhere;
+    hyphens: none;
 }
 div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"]:hover p {
     color: #cfe8fb !important;
+}
+.jsa-tile-desc {
+    color: #a8b3ad;
+    font-family: 'Source Sans Pro', system-ui, -apple-system, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.45;
+    margin-top: 9px;
 }
 div[class*="st-key-soon_"] {
     background: #e9edf0;
@@ -240,6 +260,10 @@ def render_home():
             with cols[i % 3]:
                 with st.container(key=f"tile_{tile_i}"):
                     st.page_link(d["page"], label=d["title"])
+                    st.markdown(
+                        f"<div class='jsa-tile-desc'>{html.escape(d['desc'])}</div>",
+                        unsafe_allow_html=True,
+                    )
             tile_i += 1
 
     st.caption("Pilot migrated the first three dashboards into this shell — the rest follow the same pattern.")
