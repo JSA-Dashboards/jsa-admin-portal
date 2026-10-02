@@ -80,12 +80,23 @@ def watermark_uri(path: str) -> str:
 # st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
+st.markdown("""<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+</style>""", unsafe_allow_html=True)
+
 # Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
 # to the creator's other apps) for a clean, client-facing footer.
-st.markdown(
-    "<style>[class*='_profileContainer_']{display:none !important;}</style>",
-    unsafe_allow_html=True,
-)
+# The Streamlit Cloud badge (creator avatar + logo) is drawn by Cloud's outer page,
+# outside this iframe, so CSS here can't reach it; add the rule to the parent
+# document instead (same-origin). No-op when run locally.
+_BADGE_JS = """<script>(function(){try{var w=window;while(w.parent&&w.parent!==w){try{void w.parent.document;w=w.parent;}catch(e){break;}}var d=w.document;if(d.getElementById('jsa-hide-cloud-badge'))return;var s=d.createElement('style');s.id='jsa-hide-cloud-badge';s.textContent="[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";d.head.appendChild(s);}catch(e){}})();</script>"""
+try:
+    st.html(_BADGE_JS, unsafe_allow_javascript=True)
+except TypeError:  # older Streamlit without st.html JS support
+    import streamlit.components.v1 as _stc
+    _stc.html(_BADGE_JS, height=0)
 
 COMMODITIES = [
     {
@@ -921,6 +932,10 @@ def build_pair_series(hist: dict, near: str, far: str, mode: str,
     the reference lines."""
     blank = (None, None, None, None, None)
     near_h, far_h = hist.get(near), hist.get(far)
+    if near_h is not None and near_h.index.has_duplicates:
+        near_h = near_h[~near_h.index.duplicated(keep='last')]
+    if far_h is not None and far_h.index.has_duplicates:
+        far_h = far_h[~far_h.index.duplicated(keep='last')]
     if near_h is None or far_h is None or not len(near_h) or not len(far_h):
         return blank
     spread = (near_h - far_h).dropna()

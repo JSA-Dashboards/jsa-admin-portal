@@ -32,9 +32,13 @@ def archive_source() -> str:
 def _frame_to_series(df: pd.DataFrame) -> dict[tuple[str, str, int], pd.Series]:
     out: dict[tuple[str, str, int], pd.Series] = {}
     for (code, month, year), group in df.groupby(["product_code", "month", "year"]):
-        out[(code, month, int(year))] = pd.Series(
+        series = pd.Series(
             group["price"].to_numpy(), index=group["date"].dt.date
         ).sort_index()
+        # A contract can only settle once a day. A repeated date means the source was
+        # loaded twice (it happened on the Snowflake account move), and pandas refuses
+        # to align an index with duplicates — which crashed every seasonal chart.
+        out[(code, month, int(year))] = series[~series.index.duplicated(keep="last")]
     return out
 
 
