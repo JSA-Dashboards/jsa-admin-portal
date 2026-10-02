@@ -153,6 +153,9 @@ COMING_SOON = [
 
 _TILE_CSS = """
 <style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
 @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&display=swap');
 
 div[class*="st-key-tile_"] {
