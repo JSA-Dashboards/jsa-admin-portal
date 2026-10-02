@@ -81,7 +81,7 @@ require_admin_login()
 # home page, in the order each category is first seen.
 LIVE_DASHBOARDS = [
     {"title": "Basis Tracker", "category": "Cash Grain",
-     "desc": "ADM + Mendota cash grain basis, rail FOB, river FOB, trends.",
+     "desc": "Cash grain basis history for corn and soy: processing, river, rail, and milling trends.",
      "page": "https://jsa-basis-tracker.streamlit.app/"},
     {"title": "River FOB Portal", "category": "Cash Grain",
      "desc": "CIF NOLA, barge freight, and location FOB values by river reach.",
