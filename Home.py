@@ -26,11 +26,26 @@ st.set_page_config(
     layout="wide",
 )
 
-# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
-# to the creator's other apps) for a clean, client-facing footer.
-st.markdown(
-    "<style>[class*='_profileContainer_']{display:none !important;}</style>",
-    unsafe_allow_html=True,
+# Hide the Streamlit Community Cloud viewer badge (creator avatar + Streamlit
+# logo, bottom-right). It is rendered by Cloud's OUTER page, not inside this
+# app's iframe, so CSS in st.markdown never reaches it (verified live: still
+# display:flex). The app iframe is same-origin with that page, so a script can
+# add the rule to the parent document instead. Guarded by id; no-ops locally,
+# where there is no outer page.
+st.html(
+    """<script>
+    (function () {
+      try {
+        var doc = window.parent.document;
+        if (doc.getElementById('jsa-hide-cloud-badge')) return;
+        var s = doc.createElement('style');
+        s.id = 'jsa-hide-cloud-badge';
+        s.textContent = "[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";
+        doc.head.appendChild(s);
+      } catch (e) {}
+    })();
+    </script>""",
+    unsafe_allow_javascript=True,
 )
 
 # ── One-time env var setup for every merged dashboard ────────────────────────
