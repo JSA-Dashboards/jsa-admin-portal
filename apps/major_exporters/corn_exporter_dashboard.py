@@ -3762,8 +3762,10 @@ def _fetch_tdm_exports_cached(reporter: str, product_code: str, password: str) -
         f"&isoCountryCode=NONE&conv=1&separator=T&includeFlow=Y"
     )
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with urllib.request.urlopen(url, timeout=45) as r:
             raw = r.read()
+        if len(raw) < 500:
+            return {}
         data  = raw.decode("utf-16")
         lines = [l for l in data.strip().split("\n") if l.strip()]
         if len(lines) < 2:
@@ -3771,6 +3773,10 @@ def _fetch_tdm_exports_cached(reporter: str, product_code: str, password: str) -
         header = lines[0].split("\t")
         rows   = [l.split("\t") for l in lines[1:]]
         df = pd.DataFrame(rows, columns=header)
+        hup = [h.strip().upper() for h in df.columns]
+        df.columns = hup
+        if not {"YEAR", "MONTH", "QTY1"}.issubset(set(hup)):
+            return {}
         df["YEAR"]  = pd.to_numeric(df["YEAR"],  errors="coerce")
         df["MONTH"] = pd.to_numeric(df["MONTH"], errors="coerce")
         df["QTY1"]  = pd.to_numeric(df["QTY1"],  errors="coerce")
