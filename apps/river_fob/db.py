@@ -203,6 +203,32 @@ def init_db():
         conn.close()
 
 
+# One-row table that every Snowflake save UPDATEs first, inside its transaction.
+# Shared with river-fob-portal's db.py. See save_snapshot for why.
+SAVE_LOCK = "save_lock"
+
+
+def _begin_save(conn, cur):
+    """Open the save transaction and take the save lock (Snowflake only).
+
+    Creates the lock table and row on first use. CREATE TABLE is DDL, and DDL
+    commits any open transaction, so the create runs between transactions,
+    never inside one."""
+    cur.execute("BEGIN")
+    try:
+        cur.execute(f"UPDATE {SAVE_LOCK} SET n = n + 1 WHERE id = 1")
+        if cur.rowcount:
+            return
+    except Exception:
+        pass                                   # table missing: created below
+    conn.rollback()
+    cur.execute(f"CREATE TABLE IF NOT EXISTS {SAVE_LOCK} (id INTEGER, n INTEGER)")
+    cur.execute(f"INSERT INTO {SAVE_LOCK} SELECT 1, 0 WHERE NOT EXISTS "
+                f"(SELECT 1 FROM {SAVE_LOCK} WHERE id = 1)")
+    cur.execute("BEGIN")
+    cur.execute(f"UPDATE {SAVE_LOCK} SET n = n + 1 WHERE id = 1")
+
+
 def save_snapshot(as_of, cif_by_commodity, freight_by_region, calendar=None,
                   futures=None, spreads=None):
     """Upsert one day's inputs. as_of is an ISO date string.
@@ -212,10 +238,23 @@ def save_snapshot(as_of, cif_by_commodity, freight_by_region, calendar=None,
     futures (optional): {commodity: {month: flat_price}} — the CBOT curve.
     spreads (optional): {commodity: [(label, value), ...]} — inter-contract
         spreads in order.
+
+    Replaces the date's rows, so re-saving a day never duplicates it. This page
+    is one of three writers to RIVER_FOB.PUBLIC, along with the river-fob-portal
+    app and its Bid Sheet import, and all of them must take the same lock. The
+    Snowflake connector autocommits each statement and Snowflake doesn't enforce
+    the PRIMARY KEYs, so two saves of one date at once could run DELETE, DELETE,
+    INSERT, INSERT and double the day's rows. A transaction alone doesn't stop
+    that either, because a DELETE that matches 0 rows takes no lock (the normal
+    case on a brand-new day). So every Snowflake save is one transaction that
+    first UPDATEs the one-row save_lock table, and a second writer waits there.
+    Tested on scratch tables 2026-10-04; see river-fob-portal's db.py.
     """
     conn, ph = _connect()
     try:
         cur = conn.cursor()
+        if _backend() == "snowflake":
+            _begin_save(conn, cur)
         for t in ("cif_history", "freight_history", "calendar_history",
                   "futures_history", "spreads_history"):
             cur.execute(f"DELETE FROM {t} WHERE as_of = {ph}", (as_of,))
@@ -251,6 +290,12 @@ def save_snapshot(as_of, cif_by_commodity, freight_by_region, calendar=None,
                 f"INSERT INTO spreads_history VALUES ({ph},{ph},{ph},{ph},{ph})", spr_rows)
         conn.commit()
         return len(cif_rows), len(frt_rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
 

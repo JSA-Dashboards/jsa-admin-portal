@@ -72,6 +72,31 @@ Snowflake is the live warehouse. Every bundled app reads Snowflake when
 secrets are stale rollback fallbacks only. Do not "fix" a stale number by
 pointing an app back at Postgres.
 
+**Account: `JSA-ANALYTICS`, as the service user `ADMIN_PORTAL_SVC` (since
+2026-10-04).** The portal ran as Kolten's personal `ACCOUNTADMIN` key on the old
+`GNC89034` account until then. That account is abandoned and no longer receives
+data, so pointing anything back at it serves stale numbers. `ADMIN_PORTAL_ROLE`
+holds exactly what the bundled modules use:
+
+- **read:** `JSA.NASS_CACHE`, `JSA.CME_FEEDER_CATTLE`, `JSA.BASIS_TRACKER`,
+  `JSA.COST_OF_CARRY` (all + future tables)
+- **read/write:** `JSA.TEAMS_BROADCAST` (APP_DATA MERGE/DELETE)
+- **River FOB:** `RIVER_FOB_ROLE` is granted to it, which covers read/write on
+  `RIVER_FOB.PUBLIC`, CREATE TABLE, and the `save_lock` table
+
+The key is unencrypted, and the Secrets carry no `SNOWFLAKE_PRIVATE_KEY_PWD`.
+Every module's loader treats the passphrase as optional. **Adding a passphrase
+line breaks every module**: cryptography refuses a password for an unencrypted
+key. A new bundled app that reads another schema needs a grant on
+`ADMIN_PORTAL_ROLE`, or it fails with "does not exist or not authorized".
+
+**River FOB's "Save to archive" takes a lock.** This page is one of three writers
+to `RIVER_FOB.PUBLIC`, along with the river-fob-portal app and its Bid Sheet
+import. `apps/river_fob/db.py` `save_snapshot` runs one transaction that UPDATEs
+the one-row `save_lock` table first, because Snowflake autocommits and doesn't
+enforce PRIMARY KEYs. Without the lock, two simultaneous saves of a date
+duplicate its rows. Keep it in step with river-fob-portal's `db.py`.
+
 Two data homes, because River FOB owns its own database:
 
 | App / tab | Snowflake location | pinned in |
