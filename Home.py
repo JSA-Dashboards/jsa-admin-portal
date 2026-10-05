@@ -74,6 +74,26 @@ for _key in _ENV_SECRET_KEYS:
     except Exception:
         pass  # st.secrets not available (no secrets.toml) — fine locally
 
+# Snowflake settings are bridged HERE too, not left to Streamlit's own export of
+# root-level secrets. That export skips any value that isn't a str/int/float, so
+# `USE_SNOWFLAKE = true` (a TOML boolean) never reaches os.environ, and every
+# module silently falls back to its stale Postgres URL. River FOB showed
+# "Postgres" / Sept 3 on 2026-10-04. Without this, the backend also depended on
+# which page loaded first, because cost_of_carry and cme_feeder_cattle bridge
+# these lazily, only when opened. The flag is normalized to "1", which every
+# module's check accepts. SNOWFLAKE_SCHEMA is deliberately absent; see CLAUDE.md.
+_SNOWFLAKE_KEYS = ("SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_ROLE",
+                   "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_PRIVATE_KEY")
+try:
+    if "USE_SNOWFLAKE" in st.secrets:
+        _flag = str(st.secrets["USE_SNOWFLAKE"]).strip().lower()
+        os.environ["USE_SNOWFLAKE"] = "1" if _flag in ("1", "true", "yes", "on") else ""
+    for _key in _SNOWFLAKE_KEYS:
+        if _key in st.secrets and not os.environ.get(_key):
+            os.environ[_key] = str(st.secrets[_key])
+except Exception:
+    pass  # st.secrets not available (no secrets.toml) — fine locally
+
 require_admin_login()
 
 # ── Landing page ──────────────────────────────────────────────────────────────

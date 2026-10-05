@@ -84,6 +84,16 @@ holds exactly what the bundled modules use:
 - **River FOB:** `RIVER_FOB_ROLE` is granted to it, which covers read/write on
   `RIVER_FOB.PUBLIC`, CREATE TABLE, and the `save_lock` table
 
+**`Home.py` bridges `USE_SNOWFLAKE` and the `SNOWFLAKE_*` settings into
+`os.environ` itself, before navigation (since 2026-10-04).** Do not rely on
+Streamlit's automatic export of root-level secrets. It skips any value that
+isn't a str/int/float, so `USE_SNOWFLAKE = true` (a TOML boolean) never arrived.
+Every module then fell back to its stale Postgres URL with no error: River FOB
+showed "Postgres" / Sept 3. Cost of Carry and CME also bridge these lazily when
+opened, so the backend used to depend on which page loaded first. `Home.py`
+normalizes the flag to `"1"`. A setting under a `[section]` header is not
+root-level and still won't be seen.
+
 The key is unencrypted, and the Secrets carry no `SNOWFLAKE_PRIVATE_KEY_PWD`.
 Every module's loader treats the passphrase as optional. **Adding a passphrase
 line breaks every module**: cryptography refuses a password for an unencrypted
