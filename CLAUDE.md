@@ -35,12 +35,14 @@ startup:
 If you copy a dashboard in from its standalone repo, rename its `DATABASE_URL`
 the same way or it will fight whichever app loads first.
 
-**These are now Postgres-rollback only.** As of 2026-09-18 all four consumers
-read Snowflake when `USE_SNOWFLAKE` is truthy (see **Data backends**), so every
-URL above is ignored in normal operation. `BASISTRACKER_DATABASE_URL` is fully
-dead (basis_tracker is a redirect stub). Keep the other three only as a
-rollback (clear `USE_SNOWFLAKE` → back on Supabase); delete all four once
-Supabase is decommissioned.
+**These were removed from the deployed Secrets on 2026-10-04. Do not re-add
+them.** They pointed at the frozen Supabase copies (newest day Sept 3), and
+having them there is what made a missing `USE_SNOWFLAKE` fail *silently*:
+without the flag, River FOB, Rail FOB and the bids tab quietly served Sept-3
+data instead of erroring. The deployed Secrets turned out to have no
+`USE_SNOWFLAKE` at all, so the portal had been on Supabase (River FOB), the CSV
+fallback (Cost of Carry) and a "No NASS cache backend" error (every NASS page)
+for an unknown stretch. With the URLs gone, a missing flag now fails loudly.
 
 ## Pushing to GitHub does not deploy
 
@@ -73,7 +75,10 @@ secrets are stale rollback fallbacks only. Do not "fix" a stale number by
 pointing an app back at Postgres.
 
 **Account: `JSA-ANALYTICS`, as the service user `ADMIN_PORTAL_SVC` (since
-2026-10-04).** The portal ran as Kolten's personal `ACCOUNTADMIN` key on the old
+2026-10-04; verified that night from Snowflake's query log: River FOB, NASS
+cache, basis tracker, CME, Cost of Carry and Teams Broadcast all queried
+successfully as `ADMIN_PORTAL_SVC`, with zero errors and nothing on the old
+account).** The portal ran as Kolten's personal `ACCOUNTADMIN` key on the old
 `GNC89034` account until then. That account is abandoned and no longer receives
 data, so pointing anything back at it serves stale numbers. `ADMIN_PORTAL_ROLE`
 holds exactly what the bundled modules use:
