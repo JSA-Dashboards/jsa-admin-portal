@@ -84,7 +84,9 @@ data, so pointing anything back at it serves stale numbers. `ADMIN_PORTAL_ROLE`
 holds exactly what the bundled modules use:
 
 - **read:** `JSA.NASS_CACHE`, `JSA.CME_FEEDER_CATTLE`, `JSA.BASIS_TRACKER`,
-  `JSA.COST_OF_CARRY` (all + future tables)
+  `JSA.COST_OF_CARRY`, `YIELD_REPORTS.PUBLIC` (all + future tables; the future
+  grant matters for `YIELD_REPORTS`, whose loader drops and recreates
+  `ISA_STRIP_TRIALS` on every load)
 - **read/write:** `JSA.TEAMS_BROADCAST` (APP_DATA MERGE/DELETE)
 - **River FOB:** `RIVER_FOB_ROLE` is granted to it, which covers read/write on
   `RIVER_FOB.PUBLIC`, CREATE TABLE, and the `save_lock` table
@@ -121,6 +123,21 @@ Two data homes, because River FOB owns its own database:
 | river_fob bids cross-read | `JSA.BASIS_TRACKER` | `apps/river_fob/bids_data.py` (`USE SCHEMA`) |
 | rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
+| strip_trials (ISA Strip Trials) | `YIELD_REPORTS.PUBLIC.ISA_STRIP_TRIALS` + `JSA.NASS_CACHE` | fully qualified in `apps/strip_trials/isa_strip_data.py` |
+
+**ISA Strip Trials is the yield portal's Strip trials page, read-only.** The
+table is loaded by `JSA-Dashboards/yield-portal` (`load_isa.py`, run on the
+Droplet); `apps/strip_trials/` only reads it, beside Iowa's NASS county yields
+(the `yield_portal` job list in usda-nass-etl caches them from 2005). Its module
+is named `isa_strip_data`, not `db`, because every bundled app shares one
+`sys.modules`. A change to how the yield portal counts fields or compares them
+with NASS belongs in both. ISA states its copyright and no other terms, which is
+why it lives only behind passwords: here and the yield portal's internal pages.
+
+The local `.streamlit/secrets.toml` still holds the old `GNC89034` personal key,
+which Snowflake refuses ("JWT token is invalid"); the deployed Secrets are the
+`ADMIN_PORTAL_SVC` ones. To try a page locally, give it a working login another
+way (e.g. AppTest with `at.secrets`).
 
 **The `SNOWFLAKE_DATABASE=JSA` collision:** the shell sets `SNOWFLAKE_DATABASE=JSA`
 (no schema) globally, but the River FOB archive lives in a **separate**
