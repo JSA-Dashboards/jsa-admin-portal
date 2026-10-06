@@ -123,9 +123,9 @@ Two data homes, because River FOB owns its own database:
 | river_fob bids cross-read | `JSA.BASIS_TRACKER` | `apps/river_fob/bids_data.py` (`USE SCHEMA`) |
 | rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
-| strip_trials (ISA Strip Trials) | `YIELD_REPORTS.PUBLIC.ISA_STRIP_TRIALS` + `JSA.NASS_CACHE` | fully qualified in `apps/strip_trials/isa_strip_data.py` |
+| strip_trials (Yield Observations tile) | `YIELD_REPORTS.PUBLIC.ISA_STRIP_TRIALS` + `JSA.NASS_CACHE` | fully qualified in `apps/strip_trials/isa_strip_data.py` |
 
-**ISA Strip Trials is the yield portal's Strip trials page, read-only.** The
+**Yield Observations (`apps/strip_trials/`) is the yield portal's Strip trials page, read-only.** The
 table is loaded by `JSA-Dashboards/yield-portal` (`load_isa.py`, run on the
 Droplet); `apps/strip_trials/` only reads it, beside Iowa's NASS county yields
 (the `yield_portal` job list in usda-nass-etl caches them from 2005). Its module

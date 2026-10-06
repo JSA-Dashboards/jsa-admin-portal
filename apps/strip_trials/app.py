@@ -1,4 +1,4 @@
-"""ISA Strip Trials — the Iowa Soybean Association's on-farm strip trials, each field's
+"""Yield Observations — the Iowa Soybean Association's on-farm strip trials, each field's
 yield beside its county's NASS yield.
 
 The yield portal's Strip trials page (JSA-Dashboards/yield-portal,
@@ -24,7 +24,7 @@ STATE_INK = "#9aa0a6"
 SERIES = ["Strip-trial fields", "Their counties (NASS)", "Iowa (NASS)"]
 SCALE = alt.Scale(domain=SERIES, range=[FIELD_INK, COUNTY_INK, STATE_INK])
 
-st.title("ISA Strip Trials")
+st.title("Yield Observations")
 st.caption("The Iowa Soybean Association's replicated on-farm strip trials, 2005 onward: "
            "farmers comparing two or more practices across a whole field, so each trial "
            "is one real field's yield, read against its county's NASS yield.")
