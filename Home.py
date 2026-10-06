@@ -129,7 +129,7 @@ LIVE_DASHBOARDS = [
     {"title": "Crop Conditions & Yield Model", "category": "Supply & Demand",
      "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
      "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
-    {"title": "Yield Observations", "category": "Supply & Demand",
+    {"title": "JSA Yield Observations", "category": "Supply & Demand",
      "desc": "Iowa on-farm strip trials since 2005: each field's yield against its county's NASS yield.",
      "page": "apps/strip_trials/app.py", "url_path": "yield-observations"},
     {"title": "EIA Energy", "category": "Supply & Demand",
