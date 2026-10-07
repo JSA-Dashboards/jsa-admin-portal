@@ -114,6 +114,29 @@ the one-row `save_lock` table first, because Snowflake autocommits and doesn't
 enforce PRIMARY KEYs. Without the lock, two simultaneous saves of a date
 duplicate its rows. Keep it in step with river-fob-portal's `db.py`.
 
+**River FOB's futures: Massive button + a check before Save (2026-10-06).** On
+10/06 a paste here archived the Bid Sheet's cached Eikon futures (12-14% under the
+market, 4 of 8 months), and because that paste saved first, the Bid Sheet email
+import correctly skipped the day. So:
+
+- **Button:** the Inputs tab now has river-fob-portal's **🔄 Pull live CBOT
+  futures (Massive)** button (`_pull_massive_futures`). It uses
+  `riverfob_massive_api.py` / `riverfob_massive_futures.py`, copies of
+  river-fob-portal's modules renamed because `grain_seasonal` has its own,
+  different `massive_api.py` in the shared `sys.modules`.
+- **Save check:** **Save to archive** runs `_futures_issues()` first:
+  - months with no CBOT price;
+  - for today's sheet only, any contract more than `STALE_FUTURES_PCT` (3%) from
+    the live board.
+
+  If it finds problems, nothing is saved: a warning offers **Save anyway** or
+  **Cancel**. The live board after 7 PM is overnight trade (about 2% off the
+  close one evening), which is why the threshold isn't tighter.
+- `MASSIVE_API_KEY` reaches the page through `Home.py`'s bridge (and the page's
+  own secrets loop).
+- To test locally, use AppTest with `at.secrets` set; the local
+  `secrets.toml` points at the dead old account.
+
 Two data homes, because River FOB owns its own database:
 
 | App / tab | Snowflake location | pinned in |
