@@ -103,9 +103,12 @@ LIVE_DASHBOARDS = [
     {"title": "Basis Tracker", "category": "Cash Grain",
      "desc": "Cash grain basis history for corn and soy: processing, river, rail, and milling trends.",
      "page": "https://jsa-basis-tracker.streamlit.app/"},
+    # Opens the standalone app, like Basis Tracker above (2026-10-06): the bundled
+    # copy in apps/river_fob had drifted far behind it (no Net Carry, Return to
+    # Carry or Massive button), and a paste there archived stale futures.
     {"title": "River FOB Portal", "category": "Cash Grain",
-     "desc": "CIF NOLA, barge freight, and location FOB values by river reach.",
-     "page": "apps/river_fob/app.py", "url_path": "river-fob"},
+     "desc": "CIF NOLA, barge freight, location FOB values by river reach, net carry and return to carry.",
+     "page": "https://river-fob.streamlit.app/"},
     {"title": "Rail Freight", "category": "Cash Grain",
      "desc": "USDA agtransport rail shipments — railroad, state & destination detail.",
      "page": "apps/rail_freight/app.py", "url_path": "rail-freight"},
@@ -314,9 +317,9 @@ def render_home():
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)
 
-# Basis Tracker's "page" is an external URL (its own live Cloud app, not a
-# bundled copy) -- st.page_link handles that fine on the home tile, but
-# st.Page/st.navigation only take local pages, so it's excluded here.
+# Basis Tracker's and River FOB's "page" is an external URL (their own live
+# Cloud apps, not bundled copies) -- st.page_link handles that fine on the home
+# tile, but st.Page/st.navigation only take local pages, so they're excluded here.
 pg = st.navigation(
     [home_page] + [
         st.Page(d["page"], title=d["title"], url_path=d["url_path"])

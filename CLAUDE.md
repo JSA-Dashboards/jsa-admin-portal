@@ -114,6 +114,16 @@ the one-row `save_lock` table first, because Snowflake autocommits and doesn't
 enforce PRIMARY KEYs. Without the lock, two simultaneous saves of a date
 duplicate its rows. Keep it in step with river-fob-portal's `db.py`.
 
+**River FOB's tile now opens river-fob.streamlit.app (2026-10-06), like Basis
+Tracker's.** `apps/river_fob/` is no longer served. Kolten chose this over
+porting about 1,000 lines plus 17 modules: the bundled copy had drifted far behind
+the standalone (no Net Carry, Return to Carry or Massive button), and that drift
+is what let a bad paste through. The code is kept for rollback only. Re-enabling
+it means restoring the tile's `"page": "apps/river_fob/app.py"` + `url_path`, and
+then it is a writer to `RIVER_FOB.PUBLIC` again. Everything below about this page
+describes the dormant copy. The save check described next also lives in
+river-fob-portal, where it is live.
+
 **River FOB's futures: Massive button + a check before Save (2026-10-06).** On
 10/06 a paste here archived the Bid Sheet's cached Eikon futures (12-14% under the
 market, 4 of 8 months), and because that paste saved first, the Bid Sheet email
