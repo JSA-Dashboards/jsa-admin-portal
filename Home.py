@@ -139,9 +139,12 @@ LIVE_DASHBOARDS = [
      "desc": "Natural gas production/storage/prices + ethanol & biofuels capacity.",
      "page": "apps/eia_energy/app.py", "url_path": "eia-energy"},
 
+    # Opens the standalone app, like River FOB above (2026-10-07): the bundled copy in
+    # apps/major_exporters had gone stale (live TDM calls blocked from Cloud, hardcoded
+    # USDA forecasts). The standalone reads a daily Snowflake cache and live USDA PSD.
     {"title": "Major Exporters", "category": "Grain Flows",
-     "desc": "Corn exports by major origin — US Census/FGIS + vessel lineup.",
-     "page": "apps/major_exporters/corn_exporter_dashboard.py", "url_path": "major-exporters"},
+     "desc": "Monthly exports by major origin for corn, soybeans, meal and wheat, with USDA forecasts, inspections and export sales.",
+     "page": "https://global-exports-dashboard-jsa.streamlit.app/"},
     {"title": "Rail Shipments", "category": "Grain Flows",
      "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
      "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},

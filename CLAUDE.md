@@ -124,6 +124,18 @@ then it is a writer to `RIVER_FOB.PUBLIC` again. Everything below about this pag
 describes the dormant copy. The save check described next also lives in
 river-fob-portal, where it is live.
 
+**Major Exporters' tile now opens global-exports-dashboard-jsa.streamlit.app
+(2026-10-07).** `apps/major_exporters/` is no longer served. The dashboard moved to
+its own repo (JSA-Dashboards/global-exports-dashboard) and this bundled copy had
+gone stale: it called TDM live from Cloud (Ukraine never loaded), used hardcoded
+USDA forecasts, and kept the old chart legend, so colleagues using the portal never
+saw any of the changes. The standalone reads a Snowflake cache that a droplet cron
+fills daily, plus live USDA PSD forecasts. The code is kept for rollback only;
+re-enabling it means restoring the tile's `"page":
+"apps/major_exporters/corn_exporter_dashboard.py"` + `url_path`. The standalone's
+Vessel Lineup tab asks for an upload (this copy shipped a 2026-08-21 snapshot of
+`Vessel Lineup - US.xlsx`); the portal's own Vessel Lineup tile is the place for it.
+
 **River FOB's futures: Massive button + a check before Save (2026-10-06).** On
 10/06 a paste here archived the Bid Sheet's cached Eikon futures (12-14% under the
 market, 4 of 8 months), and because that paste saved first, the Bid Sheet email
