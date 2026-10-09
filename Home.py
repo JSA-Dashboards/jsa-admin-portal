@@ -122,6 +122,9 @@ LIVE_DASHBOARDS = [
     {"title": "Grain Seasonal Futures & Spreads", "category": "Futures, Options & Spreads",
      "desc": "CBOT corn/soybean/wheat seasonal charts, multi-leg & cross-commodity spreads, WASDE/NASS markers, AI chat.",
      "page": "apps/grain_seasonal/app.py", "url_path": "grain-seasonal-spreads"},
+    {"title": "CFTC Commitments of Traders", "category": "Futures, Options & Spreads",
+     "desc": "Managed money, producer, swap and index-trader positioning across ag futures, with history back to 1986.",
+     "page": "apps/cftc_cot/app.py", "url_path": "cftc-cot"},
 
     {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",
