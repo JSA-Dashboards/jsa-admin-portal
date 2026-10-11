@@ -37,6 +37,9 @@ jobs:
       - name: Open or update the sync pull request
         uses: peter-evans/create-pull-request@v6
         with:
+          # GITHUB_TOKEN can't open PRs while the org blocks "Allow GitHub Actions to
+          # create pull requests"; a PAT in SYNC_TOKEN (repo scope) isn't subject to that.
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
           branch: auto-sync
           delete-branch: true
           title: "Sync apps from their standalone repos"
