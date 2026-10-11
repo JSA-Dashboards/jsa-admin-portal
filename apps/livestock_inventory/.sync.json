@@ -1,0 +1,11 @@
+{
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/livestock_inventory",
+ "branch": "master",
+ "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "8687844c01bee8f4e9fe937470b95a9bb9bdb362d2ff8c763a5330f4d589ed93",
+  "nass_cache_client.py": "17583d06120cb5fdac554e6b8bc10d2c5fa1022611227eac656aeabae5459eb7"
+ }
+}
