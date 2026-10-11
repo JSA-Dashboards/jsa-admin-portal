@@ -55,11 +55,8 @@ st.html(
 # other's DATABASE_URL. Setting all of them once here, before navigation ever
 # runs, means nothing mutates os.environ again after startup.
 _ENV_SECRET_KEYS = (
-    "RIVER_DATABASE_URL",         # river_fob cross-read (Postgres rollback)
-    "RIVERFOB_DATABASE_URL",      # river_fob's own DB (was DATABASE_URL)
-    "BASIS_DATABASE_URL",         # river_fob's cross-read of basis data
-    "FOB_VESSEL_API_KEY",
-    "FOB_VESSEL_SERVICE_NAME",
+    "RIVER_DATABASE_URL",         # rail_fob's cross-read of river data (Postgres rollback)
+    "BASIS_DATABASE_URL",         # rail_fob's cross-read of basis data (Postgres rollback)
     "APP_PASSWORD",
     "VIEW_ONLY",
     "MASSIVE_API_KEY",           # cost_of_carry's + grain_seasonal's Massive futures feed
@@ -103,9 +100,9 @@ LIVE_DASHBOARDS = [
     {"title": "Basis Tracker", "category": "Cash Grain",
      "desc": "Cash grain basis history for corn and soy: processing, river, rail, and milling trends.",
      "page": "https://jsa-basis-tracker.streamlit.app/"},
-    # Opens the standalone app, like Basis Tracker above (2026-10-06): the bundled
-    # copy in apps/river_fob had drifted far behind it (no Net Carry, Return to
-    # Carry or Massive button), and a paste there archived stale futures.
+    # Opens the standalone app, like Basis Tracker above. The bundled copy was
+    # removed on 2026-10-11 (it had drifted far behind, and a paste there
+    # archived stale futures); it is in git history if ever needed.
     {"title": "River FOB Portal", "category": "Cash Grain",
      "desc": "CIF NOLA, barge freight, location FOB values by river reach, net carry and return to carry.",
      "page": "https://river-fob.streamlit.app/"},
@@ -142,8 +139,8 @@ LIVE_DASHBOARDS = [
      "desc": "Natural gas production/storage/prices + ethanol & biofuels capacity.",
      "page": "apps/eia_energy/app.py", "url_path": "eia-energy"},
 
-    # Opens the standalone app, like River FOB above (2026-10-07): the bundled copy in
-    # apps/major_exporters had gone stale (live TDM calls blocked from Cloud, hardcoded
+    # Opens the standalone app, like River FOB above. The bundled copy was removed
+    # on 2026-10-11 (it had gone stale: live TDM calls blocked from Cloud, hardcoded
     # USDA forecasts). The standalone reads a daily Snowflake cache and live USDA PSD.
     {"title": "Major Exporters", "category": "Grain Flows",
      "desc": "Monthly exports by major origin for corn, soybeans, meal and wheat, with USDA forecasts, inspections and export sales.",

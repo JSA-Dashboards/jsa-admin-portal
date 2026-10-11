@@ -27,13 +27,11 @@ Two dashboards sharing one process would otherwise clobber each other's
 `DATABASE_URL`. `Home.py` bridges renamed secrets into `os.environ` once at
 startup:
 
-- `BASISTRACKER_DATABASE_URL` — basis_tracker's own DB
 - `RIVER_DATABASE_URL` — rail_fob's cross-read of river (CIF) data
-- `RIVERFOB_DATABASE_URL` — river_fob's own DB
-- `BASIS_DATABASE_URL` — river_fob + rail_fob cross-read of basis data
+- `BASIS_DATABASE_URL` — rail_fob's cross-read of basis data
 
 If you copy a dashboard in from its standalone repo, rename its `DATABASE_URL`
-the same way or it will fight whichever app loads first.
+the same way or it will fight whichever app loads first. (basis_tracker and river_fob, which had their own, are no longer bundled.)
 
 **These were removed from the deployed Secrets on 2026-10-04. Do not re-add
 them.** They pointed at the frozen Supabase copies (newest day Sept 3), and
@@ -107,65 +105,18 @@ line breaks every module**: cryptography refuses a password for an unencrypted
 key. A new bundled app that reads another schema needs a grant on
 `ADMIN_PORTAL_ROLE`, or it fails with "does not exist or not authorized".
 
-**River FOB's "Save to archive" takes a lock.** This page is one of three writers
-to `RIVER_FOB.PUBLIC`, along with the river-fob-portal app and its Bid Sheet
-import. `apps/river_fob/db.py` `save_snapshot` runs one transaction that UPDATEs
-the one-row `save_lock` table first, because Snowflake autocommits and doesn't
-enforce PRIMARY KEYs. Without the lock, two simultaneous saves of a date
-duplicate its rows. Keep it in step with river-fob-portal's `db.py`.
+**River FOB and Major Exporters are not bundled here.** Their tiles open
+river-fob.streamlit.app and global-exports-dashboard-jsa.streamlit.app, and the
+bundled copies (`apps/river_fob/`, `apps/major_exporters/`) were deleted on
+2026-10-11 after drifting far behind the standalones (the River FOB copy had no
+Net Carry, Return to Carry or Massive button, and a paste into it archived stale
+futures on 10/06). They are in git history. Do not restore them: the River FOB
+copy was a second writer to `RIVER_FOB.PUBLIC`.
 
-**River FOB's tile now opens river-fob.streamlit.app (2026-10-06), like Basis
-Tracker's.** `apps/river_fob/` is no longer served. Kolten chose this over
-porting about 1,000 lines plus 17 modules: the bundled copy had drifted far behind
-the standalone (no Net Carry, Return to Carry or Massive button), and that drift
-is what let a bad paste through. The code is kept for rollback only. Re-enabling
-it means restoring the tile's `"page": "apps/river_fob/app.py"` + `url_path`, and
-then it is a writer to `RIVER_FOB.PUBLIC` again. Everything below about this page
-describes the dormant copy. The save check described next also lives in
-river-fob-portal, where it is live.
-
-**Major Exporters' tile now opens global-exports-dashboard-jsa.streamlit.app
-(2026-10-07).** `apps/major_exporters/` is no longer served. The dashboard moved to
-its own repo (JSA-Dashboards/global-exports-dashboard) and this bundled copy had
-gone stale: it called TDM live from Cloud (Ukraine never loaded), used hardcoded
-USDA forecasts, and kept the old chart legend, so colleagues using the portal never
-saw any of the changes. The standalone reads a Snowflake cache that a droplet cron
-fills daily, plus live USDA PSD forecasts. The code is kept for rollback only;
-re-enabling it means restoring the tile's `"page":
-"apps/major_exporters/corn_exporter_dashboard.py"` + `url_path`. The standalone's
-Vessel Lineup tab asks for an upload (this copy shipped a 2026-08-21 snapshot of
-`Vessel Lineup - US.xlsx`); the portal's own Vessel Lineup tile is the place for it.
-
-**River FOB's futures: Massive button + a check before Save (2026-10-06).** On
-10/06 a paste here archived the Bid Sheet's cached Eikon futures (12-14% under the
-market, 4 of 8 months), and because that paste saved first, the Bid Sheet email
-import correctly skipped the day. So:
-
-- **Button:** the Inputs tab now has river-fob-portal's **🔄 Pull live CBOT
-  futures (Massive)** button (`_pull_massive_futures`). It uses
-  `riverfob_massive_api.py` / `riverfob_massive_futures.py`, copies of
-  river-fob-portal's modules renamed because `grain_seasonal` has its own,
-  different `massive_api.py` in the shared `sys.modules`.
-- **Save check:** **Save to archive** runs `_futures_issues()` first:
-  - months with no CBOT price;
-  - for today's sheet only, any contract more than `STALE_FUTURES_PCT` (3%) from
-    the live board.
-
-  If it finds problems, nothing is saved: a warning offers **Save anyway** or
-  **Cancel**. The live board after 7 PM is overnight trade (about 2% off the
-  close one evening), which is why the threshold isn't tighter.
-- `MASSIVE_API_KEY` reaches the page through `Home.py`'s bridge (and the page's
-  own secrets loop).
-- To test locally, use AppTest with `at.secrets` set; the local
-  `secrets.toml` points at the dead old account.
-
-Two data homes, because River FOB owns its own database:
+Where each bundled app reads Snowflake:
 
 | App / tab | Snowflake location | pinned in |
 |---|---|---|
-| basis_tracker (retired stub) | — redirects to the Streamlit-in-Snowflake app, touches no DB | `apps/basis_tracker/app.py` |
-| river_fob own archive | `RIVER_FOB.PUBLIC` | `apps/river_fob/db.py::_sf_connect` |
-| river_fob bids cross-read | `JSA.BASIS_TRACKER` | `apps/river_fob/bids_data.py` (`USE SCHEMA`) |
 | rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
 | strip_trials (JSA Yield Observations tile) | `YIELD_REPORTS.PUBLIC.ISA_STRIP_TRIALS` + `JSA.NASS_CACHE` | fully qualified in `apps/strip_trials/isa_strip_data.py` |
@@ -185,7 +136,7 @@ which Snowflake refuses ("JWT token is invalid"); the deployed Secrets are the
 way (e.g. AppTest with `at.secrets`).
 
 **The `SNOWFLAKE_DATABASE=JSA` collision:** the shell sets `SNOWFLAKE_DATABASE=JSA`
-(no schema) globally, but the River FOB archive lives in a **separate**
+(no schema) globally, but the River FOB archive (read by rail_fob) lives in a **separate**
 `RIVER_FOB.PUBLIC` database. Every module that reads it therefore pins
 `database="RIVER_FOB", schema="PUBLIC"` at connect time (see the `_sf_connect`
 helpers), ignoring the ambient `JSA`. Miss that and the tab reads `JSA`, finds
