@@ -1,4 +1,7 @@
-﻿import streamlit as st
+﻿import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
+import streamlit as st
 import msal
 import requests
 from requests.exceptions import Timeout, ConnectionError as ReqConnError
@@ -47,16 +50,16 @@ def _sf_secret(name, default=""):
 
 
 def _load_private_key():
-    """RSA private key for Snowflake key-pair auth (the account enforces MFA on
-    password sign-ins), as DER bytes; None if not configured (falls back to password).
-    Source: SNOWFLAKE_PRIVATE_KEY_PATH (.p8 file) or SNOWFLAKE_PRIVATE_KEY (PEM text)."""
+    """RSA private key (DER bytes) for key-pair auth; None if not configured (then
+    password is used). The account enforces MFA on password sign-ins, so Streamlit
+    Cloud must use the key -- PEM text in the SNOWFLAKE_PRIVATE_KEY secret."""
     pem = _sf_secret("SNOWFLAKE_PRIVATE_KEY")
     path = _sf_secret("SNOWFLAKE_PRIVATE_KEY_PATH")
-    pwd = _sf_secret("SNOWFLAKE_PRIVATE_KEY_PWD") or None
     if not pem and not path:
         return None
     from cryptography.hazmat.primitives import serialization
     data = open(path, "rb").read() if path else pem.replace("\\n", "\n").encode()
+    pwd = _sf_secret("SNOWFLAKE_PRIVATE_KEY_PWD") or None
     key = serialization.load_pem_private_key(data, password=pwd.encode() if pwd else None)
     return key.private_bytes(
         encoding=serialization.Encoding.DER,
@@ -319,9 +322,10 @@ def wa_get_qr(profile=None):
     except Exception:
         return None
 
-def wa_get_chats(profile=None):
+def wa_get_chats(profile=None, force=False):
     try:
-        r = requests.get(f"{WA_SERVICE_URL}/chats", headers=wa_headers(profile), timeout=15)
+        url = f"{WA_SERVICE_URL}/chats" + ("?force=1" if force else "")
+        r = requests.get(url, headers=wa_headers(profile), timeout=15)
         return r.json() if r.status_code == 200 else []
     except Exception:
         return []
@@ -356,13 +360,65 @@ def save_wa_groups(groups, profile):
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+
+# The Streamlit Cloud badge (creator avatar + logo) is drawn by Cloud's outer page,
+# outside this iframe, so CSS here can't reach it; add the rule to the parent
+# document instead (same-origin). No-op when run locally.
+_BADGE_JS = """<script>(function(){try{var w=window;while(w.parent&&w.parent!==w){try{void w.parent.document;w=w.parent;}catch(e){break;}}var d=w.document;if(d.getElementById('jsa-hide-cloud-badge'))return;var s=d.createElement('style');s.id='jsa-hide-cloud-badge';s.textContent="[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";d.head.appendChild(s);}catch(e){}})();</script>"""
+try:
+    st.html(_BADGE_JS, unsafe_allow_javascript=True)
+except TypeError:  # older Streamlit without st.html JS support
+    import streamlit.components.v1 as _stc
+    _stc.html(_BADGE_JS, height=0)
 st.title("📣 Teams Broadcast Tool")
 
 st.markdown("""
 <style>
+/* ── Hide Streamlit chrome ── */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+/* ── Spellcheck ── */
 textarea { spellcheck: true; }
+
+/* ── Mobile-first layout ── */
+/* Full-width primary buttons everywhere */
+.stButton > button {
+    width: 100%;
+    min-height: 48px;
+    font-size: 1rem;
+    font-weight: 600;
+    border-radius: 8px;
+}
+/* Tabs: scroll horizontally on narrow screens, don't wrap */
+.stTabs [data-baseweb="tab-list"] {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    gap: 0;
+    scrollbar-width: none;
+}
+.stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { display: none; }
+.stTabs [data-baseweb="tab"] {
+    white-space: nowrap;
+    padding: 8px 14px;
+    font-size: 0.9rem;
+}
+/* File uploader — larger tap area on mobile */
+[data-testid="stFileUploader"] {
+    width: 100%;
+}
+/* Expander tap target */
+details summary {
+    padding: 10px 0;
+}
+/* Selectbox full width */
+[data-testid="stSelectbox"] { width: 100%; }
+/* Remove excess top padding on mobile */
+@media (max-width: 640px) {
+    .block-container { padding-top: 1rem !important; }
+    h1 { font-size: 1.4rem !important; }
+}
 </style>
 <script>
 document.querySelectorAll('textarea').forEach(t => t.spellcheck = true);
@@ -379,14 +435,11 @@ if not st.session_state.profile:
     profiles = load_profiles()
 
     if profiles:
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            selected_profile = st.selectbox("Select your profile", profiles)
-        with col1:
-            if st.button("Continue", type="primary"):
-                st.session_state.profile = selected_profile
-                st.query_params["profile"] = selected_profile
-                st.rerun()
+        selected_profile = st.selectbox("Select your profile", profiles)
+        if st.button("Continue", type="primary"):
+            st.session_state.profile = selected_profile
+            st.query_params["profile"] = selected_profile
+            st.rerun()
 
     st.divider()
     st.write("**Add a new profile**")
@@ -485,7 +538,7 @@ with st.sidebar:
         st.query_params.clear()
         st.rerun()
 
-tab_broadcast, tab_whatsapp, tab_groups, tab_settings = st.tabs(["📣 Teams Broadcast", "💬 WhatsApp Broadcast", "👥 Manage Groups", "⚙️ Settings"])
+tab_broadcast, tab_whatsapp, tab_groups, tab_settings = st.tabs(["📣 Teams", "💬 WhatsApp", "👥 Groups", "⚙️ Settings"])
 
 # ── Broadcast tab ─────────────────────────────────────────────────────────────
 
@@ -504,9 +557,9 @@ with tab_broadcast:
     )
 
     if uploaded_files:
-        cols = st.columns(min(len(uploaded_files), 4))
+        cols = st.columns(min(len(uploaded_files), 2))
         for i, f in enumerate(uploaded_files):
-            cols[i % 4].image(f, use_container_width=True)
+            cols[i % 2].image(f, use_container_width=True)
 
     group_options = sorted(groups.get("subgroups", {}).keys())
     selected = st.selectbox("Send to", group_options, key="teams_group_select")
@@ -520,7 +573,7 @@ with tab_broadcast:
             "Recipients",
             options=target_ids,
             default=target_ids,
-            format_func=lambda x: chat_lookup.get(x, x),
+            format_func=lambda x: chat_lookup.get(x, f"⚠️ Unknown — {x}"),
             label_visibility="collapsed",
             key=f"refine_{st.session_state.message_key}_{selected}",
         )
@@ -613,7 +666,7 @@ with tab_whatsapp:
         # WhatsApp is connected — show broadcast UI
         st.success("✅ WhatsApp connected")
 
-        if "wa_chats" not in st.session_state:
+        if not st.session_state.get("wa_chats"):
             with st.spinner("Loading WhatsApp chats..."):
                 st.session_state.wa_chats = wa_get_chats(profile)
 
@@ -633,9 +686,9 @@ with tab_whatsapp:
             key=f"wa_uploader_{st.session_state.wa_uploader_key}"
         )
         if wa_uploaded:
-            cols = st.columns(min(len(wa_uploaded), 4))
+            cols = st.columns(min(len(wa_uploaded), 2))
             for i, f in enumerate(wa_uploaded):
-                cols[i % 4].image(f, use_container_width=True)
+                cols[i % 2].image(f, use_container_width=True)
 
         wa_group_options = sorted(wa_groups.get("subgroups", {}).keys())
         wa_selected = st.selectbox("Send to", wa_group_options, key="wa_group_select")
@@ -646,9 +699,12 @@ with tab_whatsapp:
             st.caption("Uncheck any contacts to skip for this send only.")
             wa_target_ids = st.multiselect(
                 "WA Recipients", options=wa_target_ids, default=wa_target_ids,
-                format_func=lambda x: wa_chat_lookup.get(x, x),
+                format_func=lambda x: wa_chat_lookup.get(x, f"⚠️ Unknown — {x}"),
                 label_visibility="collapsed", key=f"wa_refine_{st.session_state.wa_message_key}_{wa_selected}"
             )
+            _unknown_send = [x for x in wa_target_ids if x not in wa_chat_lookup]
+            if _unknown_send:
+                st.warning(f"⚠️ {len(_unknown_send)} unrecognized chat ID(s) in this group — fix in Manage Groups tab.")
 
         st.caption(f"{len(wa_target_ids)} chat(s) selected")
 
@@ -717,6 +773,12 @@ with tab_whatsapp:
 with tab_groups:
     st.subheader("📣 Teams Subgroups")
 
+    if st.button("🔄 Refresh Teams chat list", key="teams_refresh_manage"):
+        with st.spinner("Reloading Teams chats..."):
+            st.session_state.chats = fetch_chats(token)
+        st.success(f"Loaded {len(st.session_state.chats)} chats.")
+        st.rerun()
+
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
@@ -745,19 +807,35 @@ with tab_groups:
             edit_target = st.selectbox("Select group to edit", list(groups["subgroups"].keys()), key="edit_target")
             current = groups["subgroups"].get(edit_target, [])
 
+            # Auto-fetch chats if chat_lookup is empty and we have a valid token
+            _edit_cl = chat_lookup
+            if not _edit_cl and token:
+                with st.spinner("Loading Teams chats..."):
+                    st.session_state.chats = fetch_chats(token)
+                _hidden = set(groups.get("hidden", []))
+                _edit_cl = {c["id"]: chat_label(c) for c in st.session_state.chats if c["id"] not in _hidden}
+
+            if not _edit_cl:
+                st.info("Teams chats not loaded — click **Refresh Teams chat list** above.")
+
             # Include saved IDs even if not in current fetch — don't silently drop them
-            all_options = list({cid: None for cid in list(chat_lookup.keys()) + current}.keys())
+            all_options = list({cid: None for cid in list(_edit_cl.keys()) + current}.keys())
             chosen = st.multiselect(
                 "Chats in this group",
                 options=all_options,
                 default=current,
-                format_func=lambda x: chat_lookup.get(x, x),
+                format_func=lambda x: _edit_cl.get(x, f"⚠️ Unknown (remove & re-add) — {x}"),
+                key=f"chosen_{edit_target}",
             )
+            _teams_unknown = [x for x in chosen if x not in _edit_cl]
+            if _teams_unknown:
+                st.warning(f"{len(_teams_unknown)} unrecognized ID(s) — remove them and re-add the correct chat from the dropdown.")
 
             if st.button("Save Changes", type="primary"):
                 groups["subgroups"][edit_target] = chosen
                 save_groups(groups, profile)
-                st.success("Saved.")
+                st.session_state.pop("groups_cache", None)
+                st.rerun()
         else:
             st.info("Create a subgroup on the left to get started.")
 
@@ -789,11 +867,17 @@ with tab_groups:
     if not wa_status_groups or not wa_status_groups.get("ready"):
         st.info("Start the WhatsApp service and connect your WhatsApp account to manage groups.")
     else:
+        if st.button("🔄 Refresh WA chat list", key="wa_refresh_manage"):
+            with st.spinner("Reloading WhatsApp chats..."):
+                st.session_state.wa_chats = wa_get_chats(profile, force=True)
+            st.success(f"Loaded {len(st.session_state.wa_chats)} chats.")
+            st.rerun()
+
         if "wa_groups_cache" not in st.session_state:
             st.session_state.wa_groups_cache = load_wa_groups(profile)
         wa_groups_edit = st.session_state.wa_groups_cache
 
-        if "wa_chats" not in st.session_state:
+        if not st.session_state.get("wa_chats"):
             with st.spinner("Loading WhatsApp chats..."):
                 st.session_state.wa_chats = wa_get_chats(profile)
         wa_cl = {c["id"]: c["name"] for c in st.session_state.wa_chats}
@@ -826,20 +910,24 @@ with tab_groups:
                 wa_edit_target = st.selectbox("Select group to edit", list(wa_groups_edit["subgroups"].keys()), key="wa_edit_target")
                 wa_current = wa_groups_edit["subgroups"].get(wa_edit_target, [])
 
-                # Include any already-saved IDs in the options even if not in current fetch
+                # Include saved IDs even if not in current fetch — don't silently drop them
                 all_wa_options = list({**{c: c for c in wa_current}, **wa_cl}.keys())
                 wa_chosen = st.multiselect(
                     "Contacts in this group",
                     options=all_wa_options,
                     default=wa_current,
-                    format_func=lambda x: wa_cl.get(x, x),
-                    key="wa_chosen"
+                    format_func=lambda x: wa_cl.get(x, f"⚠️ Unknown (remove & re-add) — {x}"),
+                    key=f"wa_chosen_{wa_edit_target}"
                 )
+                _unknown = [x for x in wa_chosen if x not in wa_cl]
+                if _unknown:
+                    st.warning(f"{len(_unknown)} unrecognized ID(s) above — remove them and re-add the correct chat from the current list.")
 
                 if st.button("Save Changes", type="primary", key="wa_save"):
                     wa_groups_edit["subgroups"][wa_edit_target] = wa_chosen
                     save_wa_groups(wa_groups_edit, profile)
-                    st.success("Saved.")
+                    st.session_state.pop("wa_groups_cache", None)
+                    st.rerun()
             else:
                 st.info("Create a subgroup on the left to get started.")
 

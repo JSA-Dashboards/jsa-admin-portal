@@ -1,0 +1,10 @@
+{
+ "repo": "JSA-Dashboards/teams-broadcast",
+ "subdir": null,
+ "branch": "main",
+ "commit": "22b81876a2a6dd5f90cb65dd8d3f416729fcc650",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "c2f0b89e89471a1386eb04bf6a44de3f344330d7d01d00fc4830ae964fc7f3a1"
+ }
+}
