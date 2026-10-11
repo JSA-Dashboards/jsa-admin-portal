@@ -1,0 +1,23 @@
+{
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/cme_feeder_cattle",
+ "branch": "master",
+ "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "39c39b9bac6650d6edebda6c26737333838c4a28234bab429bad0b9e33bdbbbe",
+  "barn_basis.py": "3fec9cd02cd23f6280e5104785c2769ce4ee42a1bdb559317d18613bb8fdb86e",
+  "barn_report.py": "63efea3321dd72603acf99a72c8ea8b2101c37ba49ccc7397995edb500146f45",
+  "bucketing.py": "18ba67540d9ab155dd27b0b4d4ea39875ccc13094608eae182a91e27e40606fb",
+  "cash_calves.py": "6c3298851dc920a660c0528d3b70cb94d1e36543923f9c0f72b67cc0ad587a11",
+  "composition.py": "2a675b842943dafde28bc6d6d14cf34e4200ecc189dd77152161d1f6bcc91de1",
+  "data/Feeder Cattle Info Ross.xlsx": "6f510b389c7095528fba679d9ed4ce41d82dd506f1f8bd2c8a03fa95c5ae8064",
+  "data/mars_history.db": "8d871bc563eadb0a2bfb19780fd57867f2e8d875cd2d4231d3be4913117a91f3",
+  "data/mars_roster.json": "8adedc1514ebfdb1b9f1a20ad7d5ad33f2a99b5a9547c1fb243a7a5d15456857",
+  "index_dates.py": "7a8ccbacb6c0536d907ef00d3a2826292e6a431990071c04299c2a945d9e3119",
+  "mars_census_view.py": "73012d74f22bcf4db7aa8ad94e286e5028e4b054e5d9e9b99c48b4c26f7915d8",
+  "snapshots.py": "872552e5a1994214fef87ed095b7d5abf1adaacfb877ba110b85aae0db1d97a1",
+  "snowflake_db.py": "a784799690e4528e24e82d4ea37361b281f51290e3da2d472500c36c31830c50",
+  "volumes.py": "6480cea5d77cfda5923d95bafe8677a6e94eb561d9f56086593f4d7cea115c0f"
+ }
+}
