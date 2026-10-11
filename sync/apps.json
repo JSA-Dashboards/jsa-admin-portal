@@ -123,8 +123,9 @@
    "repo": "JSA-Dashboards/cftc-cot-dashboard",
    "branch": "main",
    "private": true,
-   "sync": false,
-   "why": "being edited in this repo right now; bring under sync once that work lands upstream"
+   "exclude": [
+    "*.sql"
+   ]
   },
   "basis_tracker": {
    "repo": "JSA-Dashboards/basis-tracker",

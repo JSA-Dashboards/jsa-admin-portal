@@ -10,7 +10,10 @@ by cftc-cot-etl. Reports are as of Tuesday and released Friday 2:30pm CT.
 Visual language follows the Livestock Portal's COT page (sage palette, hero and
 stat tiles, uppercase section headers, green/red split net charts).
 """
-import sys
+import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
+import base64
 from datetime import date
 from pathlib import Path
 
@@ -18,12 +21,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# A page's own directory is never added to sys.path automatically.
-sys.path.insert(0, str(Path(__file__).parent))
-import cot_client as cc  # noqa: E402
+import cot_client as cc
 
-# st.set_page_config removed -- the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
 
 # -- palette (matches livestock-portal/apps/cot_report) ------------------------
 JSA_GREEN = "#5e7164"
@@ -40,6 +40,19 @@ GROUPS = {  # label -> (net column, colour)
     "Non-reportable": ("nonrept_net", "#b8c4bc"),
 }
 MM_COLOR = GROUPS["Managed money"][1]
+
+HERE = Path(__file__).parent
+WATERMARK = HERE / "assets" / "logo-50yr.png"
+WATERMARK_OPACITY = 0.10
+
+
+@st.cache_data(show_spinner=False)
+def watermark_uri() -> str | None:
+    try:
+        return "data:image/png;base64," + base64.b64encode(WATERMARK.read_bytes()).decode()
+    except OSError:
+        return None
+
 
 LABELS = {
     "CORN": "Corn", "SOYBEANS": "Soybeans", "SOYBEAN_MEAL": "Soybean meal",
@@ -59,6 +72,18 @@ REPORT_TYPES = {"Futures only": "FUT", "Futures + options": "COMBINED"}
 AXIS = dict(gridcolor=DM_BORDER, linecolor=DM_BORDER, showgrid=True,
             tickfont=dict(color=DM_MUTED, size=11),
             title_font=dict(color=DM_MUTED, size=11), zeroline=False)
+
+_wm = watermark_uri()
+# The dataframe grid paints its cells on an opaque canvas, so a background image never
+# shows through. The mark is overlaid instead, pointer-events:none so sorting, scrolling
+# and the toolbar still work.
+table_wm_css = (f"""
+[class*="st-key-tablewrap_"] {{ position: relative; }}
+[class*="st-key-tablewrap_"]::after {{
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  background-image: url('{_wm}'); background-repeat: no-repeat; background-position: center center;
+  background-size: min(34%, 260px); opacity: {WATERMARK_OPACITY};
+}}""" if _wm else "")
 
 st.markdown(f"""
 <style>
@@ -94,6 +119,7 @@ html, body, p, span, div, label, button, td, th {{ font-family:'Source Sans 3','
     color:{DM_MUTED}; font-size:0.82rem; margin-bottom:12px; }}
 .asof b {{ color:{DM_TEXT}; }}
 hr {{ border-color:{DM_BORDER}; }}
+{table_wm_css}
 #MainMenu, footer {{ visibility:hidden; }}
 .stDeployButton {{ display:none; }}
 </style>
@@ -184,6 +210,12 @@ def trim(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
 
 
 def style_fig(fig: go.Figure, height=340, yaxis_title="contracts", legend=True) -> go.Figure:
+    wm = watermark_uri()
+    if wm:
+        fig.add_layout_image(dict(
+            source=wm, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+            xanchor="center", yanchor="middle", sizing="contain",
+            opacity=WATERMARK_OPACITY, layer="below"))
     fig.update_layout(
         height=height, margin=dict(l=10, r=10, t=10, b=10),
         paper_bgcolor=DM_SURFACE, plot_bgcolor=DM_SURFACE, hovermode="x unified",
@@ -299,7 +331,8 @@ def tab_snapshot():
                     "Index 1Y": "{:.0f}", "Index 3Y": "{:.0f}", "Prod/merc net": "{:+,.0f}",
                     "Swap net": "{:+,.0f}", "Open interest": "{:,.0f}", "OI chg": "{:+,.0f}"},
                    na_rep="–"))
-    st.dataframe(sty, width="stretch", height=min(40 + 35 * len(t), 780))
+    with st.container(key="tablewrap_snapshot"):
+        st.dataframe(sty, width="stretch", height=min(40 + 35 * len(t), 780))
 
 
 # -- Market detail -------------------------------------------------------------
@@ -396,9 +429,10 @@ def tab_detail():
     with st.expander("Weekly data"):
         cols = ["report_date", "mm_long", "mm_short", "mm_net", "prod_merc_net", "swap_net",
                 "other_net", "nonrept_net", "open_interest", "traders_total"]
-        st.dataframe(g[cols].sort_values("report_date", ascending=False).head(104)
-                     .rename(columns=lambda c_: c_.replace("_", " ").title()),
-                     width="stretch", hide_index=True)
+        with st.container(key="tablewrap_weekly"):
+            st.dataframe(g[cols].sort_values("report_date", ascending=False).head(104)
+                         .rename(columns=lambda c_: c_.replace("_", " ").title()),
+                         width="stretch", hide_index=True)
 
 
 # -- Seasonal overlay ----------------------------------------------------------
