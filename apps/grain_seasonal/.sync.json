@@ -1,0 +1,19 @@
+{
+ "repo": "JSA-Dashboards/grain-seasonal-dashboard",
+ "subdir": null,
+ "branch": "master",
+ "commit": "9a33d35249a2e2b8e3e160187feaf95ccb285e05",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "ai_chat.py": "80a0727f3b505059d43c2a6703d95f3f036d1fb3af57c37d279d01c575f22622",
+  "app.py": "ac114df0e38f95dbd058700089d10877028b8e0c08832f1c32913c5869e00f42",
+  "assets/jsa_favicon.png": "f894128daaf0884918bb1bed00c69bc8de6a07cb945d136247e63088d97e702d",
+  "assets/logo-50yr.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
+  "data/High Low Model.xlsx": "4118eec6d169a6523948f758b1cf48dcbe9026f668eb244488104fd39113b22a",
+  "hl_model.py": "7d399cd8930bef82a3b8cfc99f2b2ae5b0f1dd09559ffbe9c62bd8ac4755b9e8",
+  "legacy_futures_history.csv": "9477c93cb87c6650899ec67375ef3676113af2dc8ce26f4607acb8637991dfc5",
+  "legacy_history.py": "6f87337d8c3aa819fe839b8a47aef0d0967ddd4a92c5ccb20e2b2bb376654ded",
+  "massive_api.py": "3867446209fc76dfa08b42824f08143d2380a21473837d8acd549e87f987ed4a",
+  "report_dates.py": "ab6252c34a85db6a1b26cc839b4e70aba62059306b12c798dc72a6e7d9f44bad"
+ }
+}
