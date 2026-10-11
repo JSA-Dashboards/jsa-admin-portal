@@ -1,56 +1,46 @@
-"""JSA Yield Observations — the Iowa Soybean Association's on-farm strip trials, each field's
-yield beside its county's NASS yield.
-
-The yield portal's Strip trials page (JSA-Dashboards/yield-portal,
-app_pages/strip_trials.py), bundled here; keep the two in step. The table is
-loaded by that repo, so nothing here writes.
-"""
+"""Strip trials — the Iowa Soybean Association's on-farm strip trials, each field's
+yield beside its county's NASS yield."""
 import datetime
-import sys
-from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-# st.navigation runs this file from Home.py's directory, so its own folder isn't on
-# sys.path unless added (the same shim as the other bundled apps)
-sys.path.insert(0, str(Path(__file__).parent))
-import isa_strip_data as data  # noqa: E402
+import yp_isa_trials as isa_trials
+import yp_nass as nass
 
+VIEW_ONLY = st.session_state.get("view_only", False)
 FIELD_INK = "#0693e3"
 COUNTY_INK = "#1baf7a"
 STATE_INK = "#9aa0a6"
 SERIES = ["Strip-trial fields", "Their counties (NASS)", "Iowa (NASS)"]
 SCALE = alt.Scale(domain=SERIES, range=[FIELD_INK, COUNTY_INK, STATE_INK])
 
-st.title("JSA Yield Observations")
+st.title("Strip trials")
 st.caption("The Iowa Soybean Association's replicated on-farm strip trials, 2005 onward: "
            "farmers comparing two or more practices across a whole field, so each trial "
            "is one real field's yield, read against its county's NASS yield.")
 
-try:
-    trials = data.load_trials()
-except Exception as exc:
-    if "not authorized" in str(exc).lower() or "does not exist" in str(exc).lower():
-        st.error("This portal's Snowflake role can't read the strip-trial table. "
-                 "`ADMIN_PORTAL_ROLE` needs SELECT on `YIELD_REPORTS.PUBLIC` "
-                 "(see CLAUDE.md).", icon=":material/lock:")
-    else:
-        st.error(f"Couldn't read the strip-trial table: {exc}", icon=":material/cloud_off:")
-    st.stop()
-if trials.empty:
-    st.info("The strip-trial table is empty. The yield portal's loader fills it "
-            "(`python load_isa.py load --target snowflake`).", icon=":material/database:")
+if VIEW_ONLY:                       # belt and braces: not registered on the view link
     st.stop()
 
 try:
-    county, state = data.load_nass(datetime.date.today().year)
-except Exception:                             # the trials still stand on their own
-    county = pd.DataFrame(columns=["crop", "year", "county", "yield"])
-    state = pd.DataFrame(columns=["crop", "year", "final"])
-trials = data.with_nass(trials, county, state)
-HAVE_NASS = not county.empty
+    trials = isa_trials.load()
+except Exception as exc:                  # e.g. the database login is refused
+    st.error(f"Couldn't read the strip-trial table: {exc}", icon=":material/cloud_off:")
+    st.stop()
+if trials.empty:
+    st.info("The strip-trial table isn't loaded in this database yet.",
+            icon=":material/database:")
+    st.code("python load_isa.py fetch\npython load_isa.py load --target snowflake",
+            language="bash")
+    st.caption("`fetch` downloads ISA's trial list and each report's text, a few hours "
+               "the first time, so run it on the Droplet.")
+    st.stop()
+
+county_raw, state_raw, _ = nass.load(datetime.date.today().year)
+trials = isa_trials.with_nass(trials, county_raw, nass.state_table(state_raw))
+HAVE_NASS = not county_raw.empty
 
 
 @st.fragment
@@ -67,11 +57,11 @@ def strip_trials():
         # a blank district comes back NULL, and one None would make the mask NaN
         hay = f[["county", "district", "trial_type", "trial_detail"]].fillna("").agg(" ".join, axis=1)
         f = f[hay.str.contains(q, case=False, regex=False)]
-    read = f[f.status.isin(data.READ)]
+    read = f[f.status.isin(isa_trials.READ)]
     if read.empty:
         st.info("No trials with read yields match these filters.")
         return
-    one = data.fields(read)                   # each field once
+    one = isa_trials.fields(read)             # each field once
 
     with st.container(horizontal=True):
         st.metric("Fields read", f"{len(one):,}", border=True,
@@ -92,7 +82,7 @@ def strip_trials():
                   help="Each field's yield over Iowa's NASS yield that season, the median "
                        "across fields.")
 
-    season = data.by_season(read)
+    season = isa_trials.by_season(read)
     with st.container(border=True):
         head, toggle = st.columns([3, 1], vertical_alignment="center")
         head.markdown(f"**{crop}: strip-trial fields against NASS, by season**")
@@ -157,8 +147,8 @@ def strip_trials():
                         help="Median of each field's yield over Iowa's."),
                 })
         if not HAVE_NASS:
-            st.caption("NASS yields couldn't be read from the fleet's cache, so only the "
-                       "trials show.")
+            st.caption("NASS yields come from the shared cache on Snowflake; this database "
+                       "has none, so only the trials show.")
 
     cols = ["year", "county", "district", "trial_type", "trial_detail", "yields",
             "trial_yield", "county_final", "vs_county", "avg_response", "status", "listed_crop",
@@ -208,8 +198,8 @@ def strip_trials():
             """
 **Source.** ISA's public strip-trial database lists every trial since 2005 with its
 county and the yield response ISA measured. Each trial's yields are only in its PDF
-report. The yield portal's loader keeps the text of those reports and reads each one's
-summary of treatment averages. The report layout has changed several times since 2005.
+report. The loader keeps the text of those reports and reads each one's summary of
+treatment averages. The report layout has changed several times since 2005.
 
 **Checked against ISA.** A reading counts when the gap between two of its treatments
 matches the response ISA lists for the trial. For three or more treatments, ISA's
@@ -235,8 +225,8 @@ The trials also move between counties from year to year, and their number has fa
 from about 400 a season to under 100. Read the gap to NASS and how it shifts across
 seasons; the level of the trial line says little on its own.
 
-**Internal.** ISA states its copyright and no other terms, so the trials stay behind
-passwords: this portal and the yield portal's internal pages, never a public link.
+**Internal.** ISA states its copyright and no other terms, so the trial table is not on
+the view link, and the report text is not in the app's public repository.
             """)
 
 
