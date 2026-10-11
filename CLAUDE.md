@@ -3,6 +3,37 @@
 A single Streamlit process (`Home.py`) that merges ~20 previously standalone
 dashboards under `apps/`. Most of what bites here comes from that merge.
 
+## `apps/<name>/` is a generated mirror. Never edit it here.
+
+Each bundled dashboard is owned by another repo (listed in `sync/apps.json`:
+a standalone repo, or `livestock-portal` for the livestock family). **Change the
+dashboard in that repo, then run `python sync/sync_apps.py apply <name>`.** Edits
+made inside `apps/` are overwritten by the next sync. This replaced hand-copying,
+which left 13 of 16 bundled apps behind their source by October 2026.
+
+- `status` shows drift per app, `plan <name>` the files and any NEW secrets the
+  app now reads, `diff <name>` the diff. `check` finds module-name collisions and
+  cwd-relative paths (no network). `python sync/smoke.py` loads every page once in
+  one process, like the portal does.
+- The sync copies the source and applies three idempotent patches, never touching
+  logic: it removes `st.set_page_config` (`Home.py` makes the one call allowed per
+  run), adds a `sys.path` shim so sibling imports resolve to the app's folder, and
+  anchors literal relative file names to the app's folder (the portal's cwd is the
+  repo root). `Home.py` also restores the top navigation if an app's CSS hides the
+  header, and reloads any app module whose file changed on disk.
+- **Collisions:** every bundled app shares one `sys.modules`. `check` fails if two
+  apps ship the same sibling module name with different content. Fix by adding
+  `"prefix_modules": "xx_"` to that app in `apps.json` (as `cost_of_carry` does).
+- **A new upstream feature may need a secret, a Snowflake grant or a package the
+  portal doesn't have.** `plan` lists new secret names; compare `requirements.txt`
+  too. Secrets stay per deployment (see "Apps sharing code do not share secrets").
+- **Themes:** the portal's `.streamlit/config.toml` applies to every page; a
+  source's own `.streamlit/config.toml` is ignored. A source whose inline palette
+  is dark (`vessel_lineup` at the time of writing) can't be synced until it is
+  made light upstream, because the portal is light-only.
+- `.github/workflows/sync-apps.yml` runs the sync daily and opens one pull request.
+  Merging it is the update; the portal still needs Manage app > Reboot app.
+
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
 Several bundled dashboards read Snowflake, and each defaults

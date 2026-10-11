@@ -25,3 +25,7 @@ boto3>=1.34.0
 snowflake-connector-python>=3.12  # cme_feeder_cattle DB backend when USE_SNOWFLAKE=1
 anthropic>=0.40  # grain_seasonal's Ask AI tab
 tzdata  # cost_of_carry: America/Chicago where the OS lacks zoneinfo
+cryptography>=42  # snowflake_db converts the PEM key (eia_energy, rma_map, the livestock apps)
+pypdf>=5.0  # beef_cutout's am_cutout.py parses USDA AMS PDFs
+pyarrow<24  # rail_fob reads its bundled shipments parquet
+urllib3>=2.0.0

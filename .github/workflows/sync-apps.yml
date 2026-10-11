@@ -1,0 +1,48 @@
+name: Sync apps from their standalone repos
+
+# Each dashboard under apps/ is a generated mirror of the repo that owns it
+# (sync/apps.json). This opens or updates ONE pull request with whatever changed
+# upstream since the last sync, after the collision check and a load test of every
+# page. Merging it is the update; the portal still needs Manage app > Reboot app
+# afterwards (see CLAUDE.md "Pushing to GitHub does not deploy").
+on:
+  schedule:
+    - cron: "30 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Pull every source repo and rewrite apps/
+        run: python sync/sync_apps.py apply
+        env:
+          # Optional: a fine-grained PAT with read access to the private source repos
+          # (crop-conditions-dashboard, cftc-cot-dashboard). Without it those are skipped.
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      - run: python sync/sync_apps.py check
+      - name: Load every page once (code-level errors fail the run)
+        run: python sync/smoke.py
+      - name: Open or update the sync pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: auto-sync
+          delete-branch: true
+          title: "Sync apps from their standalone repos"
+          commit-message: "Sync apps from their standalone repos"
+          body: |
+            Automated mirror of upstream changes. Review the diff per app, merge, then
+            **Manage app > Reboot app** on the portal.
+
+            New secrets an app now reads are listed by `python sync/sync_apps.py plan`.

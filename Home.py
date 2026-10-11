@@ -13,8 +13,13 @@ from pathlib import Path
 import streamlit as st
 
 from shared.auth import require_admin_login
+from shared.fresh_modules import drop_changed_modules
 
 HERE = Path(__file__).parent
+
+# Runs first on every rerun: a redeploy re-reads each page's script but keeps
+# the modules it imported, so changed sibling modules would otherwise serve old code.
+drop_changed_modules()
 
 
 def _asset(name: str) -> str:
@@ -331,4 +336,19 @@ pg = st.navigation(
     ],
     position="top",
 )
+
+# Dashboards synced from their standalone repos run unmodified, and many of them
+# hide Streamlit's header/toolbar for their standalone look -- which is where this
+# portal's top navigation lives. The extra specificity ("html body") beats those
+# rules wherever they were injected, so no per-app patch is needed. Home keeps its
+# own chrome.
+if pg.title != "Home":
+    st.markdown(
+        "<style>"
+        "html body header[data-testid='stHeader'], html body [data-testid='stHeader'],"
+        "html body [data-testid='stToolbar']"
+        "{display:flex !important; visibility:visible !important;}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
 pg.run()
