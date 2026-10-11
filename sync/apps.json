@@ -117,11 +117,6 @@
    "sync": false,
    "why": "being edited in this repo right now; bring under sync once that work lands upstream"
   },
-  "strip_trials": {
-   "repo": "JSA-Dashboards/yield-portal",
-   "sync": false,
-   "why": "a single page of yield-portal with renamed modules; needs its own subdir mapping"
-  },
   "rail_freight": {
    "repo": null,
    "sync": false,
@@ -150,6 +145,19 @@
    "branch": "main",
    "exclude": [
     "etl.py"
+   ]
+  },
+  "yield_portal": {
+   "repo": "JSA-Dashboards/yield-portal",
+   "prefix_modules": "yp_",
+   "wrapper": "sync/templates/yield_portal.py",
+   "exclude": [
+    "streamlit_app.py",
+    "snowflake_admin",
+    "logs",
+    "add.py",
+    "review.py",
+    "import_pdf.py"
    ]
   }
  },

@@ -160,16 +160,18 @@ Where each bundled app reads Snowflake:
 |---|---|---|
 | rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
-| strip_trials (JSA Yield Observations tile) | `YIELD_REPORTS.PUBLIC.ISA_STRIP_TRIALS` + `JSA.NASS_CACHE` | fully qualified in `apps/strip_trials/isa_strip_data.py` |
+| yield_portal (JSA Yield Observations tile) | `YIELD_REPORTS.PUBLIC` + `JSA.NASS_CACHE` | pinned in `apps/yield_portal/yp_db.py` |
 
-**JSA Yield Observations (`apps/strip_trials/`) is the yield portal's Strip trials page, read-only.** The
-table is loaded by `JSA-Dashboards/yield-portal` (`load_isa.py`, run on the
-Droplet); `apps/strip_trials/` only reads it, beside Iowa's NASS county yields
-(the `yield_portal` job list in usda-nass-etl caches them from 2005). Its module
-is named `isa_strip_data`, not `db`, because every bundled app shares one
-`sys.modules`. A change to how the yield portal counts fields or compares them
-with NASS belongs in both. ISA states its copyright and no other terms, which is
-why it lives only behind passwords: here and the yield portal's internal pages.
+**JSA Yield Observations (`apps/yield_portal/`) is the yield portal's read pages, a synced mirror
+of `JSA-Dashboards/yield-portal`** (Explore, Report text, Reports vs normal, Field issues,
+Variety trials, Strip trials). The yield portal runs them under its own `st.navigation`,
+which can't nest inside this portal's, so `sync/templates/yield_portal.py` is copied in as
+`app.py`: a page switcher that runs each page script as-is. Add reports, Review & edit and
+Import PDF are excluded in `sync/apps.json` because they write, and `ADMIN_PORTAL_ROLE`
+only has SELECT on `YIELD_REPORTS.PUBLIC`; edit data in the standalone yield portal.
+`yp_db.py` pins `YIELD_REPORTS.PUBLIC` itself, so the shell's `SNOWFLAKE_DATABASE` doesn't
+matter. ISA states its copyright and no other terms, which is why the strip trials live only
+behind passwords. The old `apps/strip_trials/` copy is deleted.
 
 The local `.streamlit/secrets.toml` still holds the old `GNC89034` personal key,
 which Snowflake refuses ("JWT token is invalid"); the deployed Secrets are the

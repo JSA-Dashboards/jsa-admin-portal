@@ -292,6 +292,9 @@ def desired_tree(name: str, spec: dict) -> tuple[dict[str, bytes], str]:
             if bom:
                 data = codecs.BOM_UTF8 + data
         out[rel] = data
+    if spec.get("wrapper"):          # an entry this tool owns (the source's own nav can't nest)
+        out[entry] = apply_patches(entry, (ROOT / spec["wrapper"]).read_text(encoding="utf-8"),
+                                   entry).encode("utf-8")
     if entry not in out:
         raise RuntimeError(f"{name}: entry {entry} not found in {spec['repo']}")
     if spec.get("prefix_modules"):

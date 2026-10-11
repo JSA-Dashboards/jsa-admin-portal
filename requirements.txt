@@ -29,3 +29,5 @@ cryptography>=42  # snowflake_db converts the PEM key (eia_energy, rma_map, the 
 pypdf>=5.0  # beef_cutout's am_cutout.py parses USDA AMS PDFs
 pyarrow<24  # rail_fob reads its bundled shipments parquet
 urllib3>=2.0.0
+pymupdf  # yield_portal's report text and PDF parsing (import fitz)
+python-docx  # yield_portal's Word report text
