@@ -1,0 +1,11 @@
+{
+ "repo": "JSA-Dashboards/usda-rail-dashboard",
+ "subdir": null,
+ "branch": "master",
+ "commit": "b69827fd5b5efbc8e1cf18a7bf06b1aea4e9e8a2",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "93c2716641815f4c90c007dac94aca00718750b6dc3bfb020d5b2d587d6762eb",
+  "rail_report.py": "8e893e41c6ab6f1443ed2d53e52fe588155181f9d8032b789db7eeb53d77634a"
+ }
+}
