@@ -1,0 +1,18 @@
+# Package spec for Streamlit in Snowflake's warehouse runtime — SEPARATE from
+# requirements.txt (which only Streamlit Community Cloud reads). SiS installs
+# exclusively from the Snowflake Anaconda channel; pip packages aren't allowed
+# here, and psycopg2-binary specifically won't work — plain psycopg2 is the
+# Anaconda-channel package name. Pin versions once this deploy is confirmed
+# working, so a future Anaconda-channel bump can't silently change behavior.
+name: app_environment
+channels:
+  - snowflake
+dependencies:
+  - python=3.11
+  - streamlit
+  - psycopg2
+  - pandas
+  - numpy
+  - pyarrow
+  - plotly
+  - requests

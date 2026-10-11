@@ -12,14 +12,17 @@ from that reference instead of the original dense mono-terminal look.
 Three top-level tabs keep the raw bid boards separate from the CSX/NS origin
 economics, instead of one long mixed scroll.
 """
+import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import base64
 import json
 import os
 import re
-import sys
 from collections import Counter
-from datetime import datetime
-from pathlib import Path as _Path
+from datetime import date, datetime
+from html import escape as _esc
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -27,17 +30,36 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-sys.path.insert(0, str(_Path(__file__).parent))
-
 import freight_data as FD
 import rail_data as RD
 import river_data as RVD
 import shipment_data as SD
-# Renamed on disk (rail_corridors.py -> railfob_rail_corridors.py) for the JSA
-# Admin Portal merge: basis_tracker has its OWN same-named module, and
-# Python's sys.modules cache would silently hand one page's import to the
-# other page once either had loaded first in this shared process.
-from railfob_rail_corridors import MANUAL_SECTIONS, RAIL_DISPLAY, RAIL_COLORS
+from rail_corridors import MANUAL_SECTIONS, RAIL_DISPLAY, RAIL_COLORS
+
+# The 💵 Net Carry tab's modules (vendored from the basis tracker — see CLAUDE.md). Guarded so that a runtime that
+# can't import them costs only that tab, never the whole portal: net_carry_compare.py has a backslash inside an
+# f-string expression (a SyntaxError before Python 3.12, e.g. the 3.11 that environment.sis.yml pins), and
+# net_carry_chart.py needs Altair >= 5.
+try:
+    import carry_rate as CR
+    import net_carry as NC
+    import net_carry_chart as NCC
+    import net_carry_compare as NCMP
+    import net_carry_data as ND
+    _NC_IMPORT_ERROR = None
+except Exception as _nc_err:
+    CR = NC = NCC = NCMP = ND = None
+    _NC_IMPORT_ERROR = _nc_err
+
+# The Return to Carry history under the Net Carry tab (return_to_carry*.py, vendored from the tracker as well). Guarded on its
+# own: if it cannot load, the carry ladder above it still draws.
+try:
+    import return_to_carry_block as RTCB
+    import return_to_carry_data as RTCD
+    _RTC_IMPORT_ERROR = None
+except Exception as _rtc_err:
+    RTCB = RTCD = None
+    _RTC_IMPORT_ERROR = _rtc_err
 
 # Local .env, optional (Streamlit Cloud uses st.secrets instead).
 try:
@@ -47,14 +69,32 @@ except ModuleNotFoundError:
     pass
 
 try:
-    for _secret_key in ("BASIS_DATABASE_URL", "RIVER_DATABASE_URL", "USDA_APP_TOKEN"):
+    # Snowflake (JSA.BASIS_TRACKER for rail bids, RIVER_FOB.PUBLIC for CIF) is the
+    # live source when USE_SNOWFLAKE is set; the *_DATABASE_URL Postgres secrets
+    # remain only as a rollback. rail_data/river_data pin their own database+schema
+    # at connect time, so SNOWFLAKE_DATABASE/SCHEMA need not be set here.
+    for _secret_key in ("BASIS_DATABASE_URL", "RIVER_DATABASE_URL", "USDA_APP_TOKEN",
+                        "USE_SNOWFLAKE", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER",
+                        "SNOWFLAKE_PASSWORD", "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE",
+                        "SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"):
         if _secret_key in st.secrets and not os.environ.get(_secret_key):
-            os.environ[_secret_key] = st.secrets[_secret_key]
+            os.environ[_secret_key] = str(st.secrets[_secret_key])
 except Exception:
     pass  # st.secrets unavailable locally — fine, .env covers it
 
-# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+# The Streamlit Cloud badge (creator avatar + logo) is drawn by Cloud's outer page,
+# outside this iframe, so CSS here can't reach it; add the rule to the parent
+# document instead (same-origin). No-op when run locally.
+_BADGE_JS = """<script>(function(){try{var w=window;while(w.parent&&w.parent!==w){try{void w.parent.document;w=w.parent;}catch(e){break;}}var d=w.document;if(d.getElementById('jsa-hide-cloud-badge'))return;var s=d.createElement('style');s.id='jsa-hide-cloud-badge';s.textContent="[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";d.head.appendChild(s);}catch(e){}})();</script>"""
+try:
+    st.html(_BADGE_JS, unsafe_allow_javascript=True)
+except TypeError:  # older Streamlit without st.html JS support
+    import streamlit.components.v1 as _stc
+    _stc.html(_BADGE_JS, height=0)
 
 
 @st.cache_data
@@ -124,6 +164,27 @@ _TABLE_CSS = f"""
     font-size: 9px; color: #fff; background: #d97706; padding: 2px 7px;
     border-radius: 8px; margin-left: 6px;
   }}
+  /* 💵 Net Carry ladder. Colour semantics follow the basis tracker's tab: green = inverse (+),
+     red = carry (−), amber = the top of net carry. In here (not the page style) so the
+     copy / PNG export of the table looks the same as the page. */
+  table.sheet.nc th {{ white-space: normal; line-height: 1.25; vertical-align: bottom; }}
+  table.sheet td.fut {{ text-align: left; color: #6b7280; }}
+  table.sheet td.dim {{ color: #94a3b8; }}
+  table.sheet td.inv {{ color: #0a7f3f; font-weight: 700; }}
+  table.sheet td.car {{ color: #c0392b; font-weight: 700; }}
+  table.sheet td.flat {{ color: #64748b; }}
+  table.sheet tr.nc-top td {{ background: #fff4e5; }}
+  /* the amber accent bar on the row's first cell is a gradient, not an inset box-shadow: html2canvas (the PNG
+     export) paints an inset shadow as a solid fill over the whole cell */
+  table.sheet tr.nc-top td:first-child {{
+    background: linear-gradient(to right, #f28e2b 0, #f28e2b 4px, #fff4e5 4px);
+  }}
+  table.sheet tr.nc-top td.net {{ font-weight: 800; }}
+  .nc-tag {{
+    background: #f28e2b; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 9px; margin-left: 8px; white-space: nowrap; vertical-align: 1px;
+  }}
+  .nc-flag {{ color: #c0392b; }}
 """
 
 st.markdown(
@@ -136,9 +197,7 @@ st.markdown(
       }}
       {_TABLE_CSS}
 
-      /* Hide Streamlit's menu — NOT the header itself: the JSA Admin Portal
-         shell's top nav (page switcher) lives inside stHeader, so hiding it
-         would strand every page with no way to navigate elsewhere. */
+      header[data-testid="stHeader"] {{ display: none !important; }}
       #MainMenu {{ visibility: hidden !important; }}
       footer {{ visibility: hidden !important; }}
       .block-container {{ padding-top: 0.75rem !important; padding-bottom: 1rem !important; max-width: 1300px; }}
@@ -184,6 +243,15 @@ st.markdown(
       .legend .sw.dn {{ background: #ffebee; border: 1px solid #c00000; }}
       .legend .sw.bt {{ background: #eaf4fc; border: 1px solid {JPSI_BLUE}; }}
 
+      /* 💵 Net Carry tab: the one-line summary and the amber "top of net carry" callout. */
+      .nc-summary {{ font-size: 0.78rem; color: #6b7280; margin: 8px 0 4px 0; }}
+      .nc-callout {{
+        background: #fff7ed; border: 1px solid #fed7aa; border-left: 5px solid #f28e2b;
+        border-radius: 8px; padding: 10px 14px; margin: 8px 0 10px 0;
+        font-size: 0.92rem; line-height: 1.5; color: #7c2d12;
+      }}
+      .nc-callout .tri {{ color: #f28e2b; font-size: 15px; margin-right: 6px; }}
+
       .stButton > button {{
         background: {JPSI_BLUE}; color: #fff; border: none; border-radius: 6px; font-weight: 600;
       }}
@@ -208,7 +276,9 @@ st.markdown(
       /* Railroad logos on their tabs, in place of a generic emoji. Streamlit's
          st.tabs() only takes plain text, so this positions each carrier's mark
          via nth-of-type — must stay in sync with the literal tab order below
-         (Bids, CSX, NS, BN, CN, Map, References). */
+         (Bids, CSX, NS, BN, CN, Map, References, Shipments, Net Carry). Logos sit on
+         tabs 2-5, so a new tab goes at the END of the list; inserting one before
+         position 5 would slide every logo onto the wrong tab. */
       [role="tab"] p {{ display: flex; align-items: center; gap: 6px; }}
       [role="tab"]:nth-of-type(2) p::before {{
         content: ""; display: inline-block; width: 26px; height: 16px;
@@ -286,6 +356,8 @@ def _table_actions(table_html, filename):
         f"background:{JPSI_BLUE};color:#fff;border:none;border-radius:6px;"
         "padding:6px 14px;cursor:pointer;margin-right:8px"
     )
+    if RD._in_sis():
+        return  # components.html blocked in Streamlit in Snowflake
     components.html(f"""
       <style>{_TABLE_CSS}</style>
       <div>
@@ -1271,7 +1343,8 @@ def _map_tab():
     st.markdown("### CN Rail Network Map")
     st.caption("Live embed of CN's GeoMapGuide. If it doesn't load (some networks block "
                "third-party embeds), use the link below to open it directly.")
-    components.iframe("https://cnebusiness.geomapguide.ca/", height=750, scrolling=True)
+    if not RD._in_sis():
+        components.iframe("https://cnebusiness.geomapguide.ca/", height=750, scrolling=True)
     st.markdown(
         '<div style="margin-top:8px">'
         '<a href="https://cnebusiness.geomapguide.ca/" target="_blank" '
@@ -1316,7 +1389,7 @@ _SHIP_VALID_STATES = [
     'VA', 'VT', 'WA', 'WI', 'WV', 'WY',
 ]
 _SHIP_POS, _SHIP_NEG, _SHIP_GOLD = "#16a34a", "#dc2626", "#b45309"
-_SHIP_PARQUET_PATH = _Path(__file__).parent / "data" / "rail_data.parquet"
+_SHIP_PARQUET_PATH = Path(__file__).parent / "data" / "rail_data.parquet"
 
 
 def _ship_layout(**kwargs):
@@ -1426,6 +1499,12 @@ def _shipments_tab():
         st.caption("KCS reported as a national total only (no state breakdown).")
 
     _secret_token = os.environ.get("USDA_APP_TOKEN", "")
+    if not _secret_token:
+        try:
+            import _snowflake
+            _secret_token = (_snowflake.get_generic_secret_string("USDA_APP_TOKEN") or "").strip()
+        except ImportError:
+            pass  # not running inside Snowflake — fine, this secret is optional anyway
     effective_token = token or _secret_token
 
     if st.session_state.get("ship_force_api"):
@@ -1895,8 +1974,344 @@ def _ship_tab_summary(df, all_years):
         st.plotly_chart(fig6b, width='stretch')
 
 
-bids_tab, csx_tab, ns_tab, bn_tab, cn_tab, map_tab, refs_tab, ship_tab = st.tabs(
-    ["📋 Bids", "CSX", "NS", "BN", "CN", "🗺️ Map", "🔗 References", "📦 Shipments"])
+# ─────────────────────────────────────────────────────────────────────────────
+# NET CARRY TAB (added 2026-10-05) — the basis tracker's 💵 Net Carry tab for
+# this portal's corridors: every delivery a corridor posted, re-expressed against
+# ONE futures contract, charged interest from the carry-start month and netted;
+# plus the top of net carry, the Cash Fwd Curve chart and a side-by-side
+# comparison of corridors. The maths is VENDORED unchanged from the tracker
+# (net_carry*.py, carry_rate.py, delivery_period.py — re-sync with
+# basis-tracker-streamlit/sync_carry_modules.py, see CLAUDE.md); net_carry_data.py
+# feeds it: the bids from the rail_fob rows read above, the futures from the
+# tracker's FUTURES_PRICES. Everything is cents/bu.
+# ─────────────────────────────────────────────────────────────────────────────
+_NC_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _nc_archive():
+    """(rows, catalog): every rail_fob bid cell from both sources, each tagged with its source, and the
+    corridors that can show a carry ladder. Built from the same cached reads the Bids tab uses."""
+    rows = ND.tag_rows({src: _cached_all(src) for src in RD.SOURCES})
+    return rows, ND.build_catalog(rows)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _nc_curve(asof_iso):
+    """({symbol: cents}, the day it is from): the basis tracker's FUTURES_PRICES, latest day on/before the date."""
+    return ND.futures_curve(date.fromisoformat(asof_iso))
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _nc_fed_funds():
+    """Effective fed funds history behind the default interest rate (FRED, with the committed
+    data/fed_funds_dff.csv snapshot as the offline fallback)."""
+    return CR.load_fed_funds()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Loading the futures history…")
+def _nc_futures_history(root):
+    """{date: {symbol: cents}} for every ZC / ZS contract: the analyst-sheet weeks before the settlement archive starts, under the
+    basis tracker's FUTURES_PRICES (Return to Carry rolls the hedge through the crop year with it)."""
+    return ND.futures_history(root)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _nc_prime():
+    """Bank prime rate history (FRED DPRIME, the committed data/prime_rate.csv snapshot offline) — the Return to Carry report's rate."""
+    return CR.load_prime()
+
+
+def _nc_f(v, dec=1, sign=True):
+    if v is None:
+        return "—"
+    return f"{v:+.{dec}f}" if sign else f"{v:.{dec}f}"
+
+
+def _nc_quoted(v):
+    """Quoted basis: whole cents when it is whole, else one decimal."""
+    return _nc_f(v, 0 if float(v).is_integer() else 1)
+
+
+def _nc_ladder_html(nc_rows, ref_sym, top_row):
+    """The Net Carry sheet as one <table class="sheet nc">: Delivery | Futures | Quoted basis | Futures spread
+    vs REF | Basis REF | Interest | Net of Interest | Inverse(+)/Carry(−). `top_row` = the table row holding the
+    top of net carry (tagged, amber)."""
+    ref = _esc(ref_sym or "ref")
+    heads = [("lblhdr", "Delivery"), ("lblhdr", "Futures"), ("", "Quoted basis"),
+             ("", f"Futures spread vs {ref}"), ("", f"Basis {ref}"), ("", "Interest"),
+             ("", f"Net of interest {ref}"), ("", "Inverse (+) / Carry (−)")]
+    out = ['<table class="sheet nc"><tbody><tr>']
+    out += [f'<th class="{c}">{h}</th>' if c else f'<th>{h}</th>' for c, h in heads]
+    out.append('</tr>')
+    for i, r in enumerate(nc_rows):
+        top = i == top_row
+        flag = '' if r.converted else (' <span class="nc-flag" title="no futures spread to the '
+                                       'reference — raw basis">·</span>')
+        tag = '<span class="nc-tag">▲ TOP OF NET CARRY</span>' if top else ''
+        if r.credit is None:
+            spread = '<td class="dim">—</td>'
+        elif abs(r.credit) < 0.05:           # quoted off the reference itself: nothing to credit
+            spread = '<td class="dim">0.0</td>'
+        else:
+            spread = f'<td>{_nc_f(r.credit)}</td>'
+        interest = '' if r.months == 0 else _nc_f(r.interest, 1, sign=False)
+        if r.carry is None:
+            carry = '<td></td>'
+        else:
+            cls = 'inv' if r.carry > 0.0049 else 'car' if r.carry < -0.0049 else 'flat'
+            carry = f'<td class="{cls}">{_nc_f(r.carry)}</td>'
+        out.append(
+            ('<tr class="nc-top">' if top else '<tr>')
+            + f'<td class="lbl">{_esc(r.delivery)}{flag}{tag}</td>'
+            + f'<td class="fut">{_esc(r.futures) if r.futures else "—"}</td>'
+            + f'<td>{_nc_quoted(r.raw_basis)}</td>' + spread
+            + f'<td>{_nc_f(r.basis_ref)}</td><td>{interest}</td>'
+            + f'<td class="net">{_nc_f(r.net)}</td>' + carry + '</tr>')
+    out.append('</tbody></table>')
+    return ''.join(out)
+
+
+@st.fragment
+def _netcarry_tab():
+    if _NC_IMPORT_ERROR is not None:
+        st.warning(f"Net Carry isn't available in this runtime — its modules didn't load "
+                   f"({type(_NC_IMPORT_ERROR).__name__}: {_NC_IMPORT_ERROR}). The other tabs are unaffected.")
+        return
+    st.caption(
+        "Each delivery a corridor posted, re-expressed against one futures contract and netted against the cost "
+        "to carry grain forward. **Inverse (+)** = the market pays to move grain now; **Carry (−)** = the market "
+        "pays to store it. Bids are exactly as archived — only the futures spread and the interest are added. "
+        "Values are ¢/bu.")
+    try:
+        rows, catalog = _nc_archive()
+    except Exception as e:
+        st.warning(f"Couldn't read the rail archive for Net Carry ({type(e).__name__}: {e}).")
+        return
+    pickable = [c for c in catalog if c.dates]
+    if not pickable:
+        st.info("No corridor has posted two or more priced forward periods yet, so there is no carry curve to build.")
+        return
+    by_key = {c.key: c for c in pickable}
+
+    # ── which corridor, which posting ─────────────────────────────────────────
+    ca, cb = st.columns([3, 2])
+    with ca:
+        ckey = st.selectbox("Corridor", list(by_key), format_func=lambda k: by_key[k].label, key="nc_corridor")
+    corridor = by_key[ckey]
+    latest = corridor.dates[0]
+    with cb:
+        # the key carries the corridor: the options depend on it (a stale value would not be one of them)
+        dsel = st.selectbox(
+            "Posting date", list(corridor.dates), key=f"nc_date_{corridor.key}",
+            format_func=lambda d: date.fromisoformat(d).strftime("%b %d, %Y") + (" · latest" if d == latest else ""),
+            help="The dates this corridor posted two or more priced periods. Each date reads its own bids and "
+                 "that day's futures curve.")
+    asof = date.fromisoformat(dsel)
+    if corridor.spot_only:
+        st.caption(f"{corridor.spot_only:,} other posting{'s' if corridor.spot_only != 1 else ''} carried only one "
+                   "priced period (mostly the weekly spot history) — nothing to build a curve from, so "
+                   "they aren't listed.")
+    items = ND.corridor_items(rows, corridor.source, corridor.market, corridor.commodity, dsel)
+
+    # ── how to express it: reference contract, carry start, interest rate ─────
+    o1, o2, o3 = st.columns(3)
+    with o1:
+        mode_lbl = st.radio(
+            "Express basis vs", ["Front delivery's futures", "Nearest new-crop"], horizontal=True, key="nc_refmode",
+            help="Front delivery's futures: the contract the nearest delivery is quoted off. It reads exactly as "
+                 "quoted, and every later month is credited its futures spread vs that contract. Nearest "
+                 "new-crop: corn Dec / soy Nov / wheat Jul.")
+    with o2:
+        anchor_lbl = st.selectbox("Carry starts (interest = 0)", _NC_MONTHS, index=9, key="nc_anchor")
+    # The default rate is the Cost of Carry sheet's: effective fed funds on the posting date + 2.25%. The widget key
+    # carries the date so the default is re-derived when the date changes (a widget otherwise keeps its first value).
+    cr = CR.rate_for(asof, _nc_fed_funds())
+    with o3:
+        rate_pct = st.number_input(
+            "Interest rate (annual %)", min_value=0.0, max_value=25.0, value=min(25.0, round(cr.rate_pct, 2)),
+            step=0.01, key=f"nc_rate_{dsel}",
+            help="Defaults to the Cost of Carry sheet's rate: effective fed funds on the posting date + "
+                 f"{CR.FED_FUNDS_SPREAD_PCT:.2f}%. Edit to use your own cost of funds.")
+    anchor_month = _NC_MONTHS.index(anchor_lbl) + 1
+    mode = "front" if mode_lbl.startswith("Front") else "newcrop"
+
+    # ── the futures that day (basis tracker's FUTURES_PRICES) ─────────────────
+    curve, curve_day, curve_failed = {}, None, False
+    try:
+        curve, curve_day = _nc_curve(dsel)
+    except Exception as e:
+        curve_failed = True
+        st.warning(f"Couldn't read futures prices from the basis tracker's archive ({type(e).__name__}: {e}). "
+                   "Showing the quoted basis only — no futures spread or interest.")
+    if not curve_failed and curve_day is None:
+        st.warning(f"No futures prices are on file on or before {asof:%b %d, %Y} (the archive starts in Nov 2006), "
+                   "so only the quoted basis is shown — no futures spread or interest.")
+    elif curve_day is not None and curve_day != asof:
+        st.caption(f"Futures prices are from {curve_day:%a %b %d, %Y} — the latest curve on file on or before "
+                   "the posting date.")
+
+    # ── the maths (vendored from the basis tracker) ───────────────────────────
+    try:
+        ref_sym = NC.reference_symbol(corridor.commodity, mode, curve, asof, items=items, anchor_month=anchor_month)
+        nc_rows, meta = NC.compute_net_carry(items, ref_sym, curve, anchor_month, rate_pct / 100.0)
+        mpts = NC.monthly_carry(nc_rows)      # one point per calendar month (its best quote): charts + the top
+        top = NC.top_of_net_carry(mpts, meta["anchor_ym"]) if meta["ref_price"] is not None else None
+    except Exception as e:
+        st.warning(f"Couldn't build the carry ladder for this posting ({type(e).__name__}: {e}).")
+        return
+    if not nc_rows:
+        # either every quote is a package spanning months (AMJJ), or the archive has no futures contract for them,
+        # and a month name alone ('Sep') cannot be placed in time without one
+        st.info("None of this posting's quotes can be placed on a delivery month — they are packages spanning "
+                "several months (AMJJ) or have no futures contract recorded to date them by — so there is no "
+                "carry ladder to draw.")
+        if meta.get("skipped"):
+            st.caption("Not on the carry ladder: " + ", ".join(meta["skipped"]))
+        return
+
+    ay = meta["anchor_ym"]
+    anchor_abbr = _NC_MONTHS[ay[1] - 1] if ay else anchor_lbl
+    anchor_txt = f"{anchor_abbr} {ay[0] % 100:02d}" if ay else anchor_lbl
+
+    # ── summary line + the headline answer ────────────────────────────────────
+    bits = [f"Reference <b>{ref_sym or '—'}</b> "
+            + ("(front delivery's futures)" if mode == "front" else "(nearest new-crop)")]
+    if meta["ref_price"] is not None:
+        bits.append(f"board {meta['ref_price'] / 100:.2f}")
+    if meta["per_month"] is not None:
+        bits.append(f"interest <b>{meta['per_month']:.2f}¢/mo</b> @ {rate_pct:.2f}%")
+    bits.append(f"carry from <b>{anchor_txt}</b>")
+    if curve_day is not None:
+        bits.append(f"futures of {curve_day:%b %d}")
+    st.markdown(f'<div class="nc-summary">{" · ".join(bits)}</div>', unsafe_allow_html=True)
+    if top:
+        st.markdown(
+            '<div class="nc-callout"><span class="tri">▲</span>'
+            f'<b>{_esc(NC.top_headline(top))}.</b> {_esc(NC.top_detail(top))}</div>',
+            unsafe_allow_html=True)
+    if cr.source == "fallback":
+        rate_src = ("Fed funds history is unavailable, so the default is the Cost of Carry fallback rate, "
+                    f"{CR.FALLBACK_ANNUAL_RATE_PCT:.2f}%.")
+    else:
+        rate_src = (f"Default rate = effective fed funds {cr.fed_funds_pct:.2f}% ({cr.obs_date:%b %d, %Y}, FRED) + "
+                    f"{CR.FED_FUNDS_SPREAD_PCT:.2f}% = {cr.rate_pct:.2f}%.")
+    st.caption("Interest = reference board price × rate × days ÷ 360 (actual days from the carry-start month) — the "
+               "same formula as the Cost of Carry sheet. " + rate_src)
+    st.caption(f"Futures spread = the futures price of the contract each delivery is quoted off minus "
+               f"{ref_sym or 'the reference'}'s, in cents. It is credited to the quoted basis so every month is on "
+               f"the same footing: quoted basis + futures spread = basis vs {ref_sym or 'reference'}.")
+    if ay and ay[1] != anchor_month:
+        st.caption(f"This posting has no {anchor_lbl} delivery, so interest starts at its front delivery, {anchor_txt}.")
+    if any(r.new_crop for r in nc_rows):
+        st.caption("NC (new crop) is the harvest-time bid — the earliest new-crop delivery — so it is the front of "
+                   f"the ladder and the carry anchor: interest starts there ({anchor_lbl}).")
+    if not meta["all_converted"]:
+        st.caption("⚠️ Some deliveries lack a futures spread to the reference contract — those rows show raw basis "
+                   "(flagged ·) and their carry may be off.")
+    if meta.get("skipped"):
+        st.caption("Not on the carry ladder (a package spanning several months, or no futures contract recorded "
+                   "to place it in time): " + ", ".join(meta["skipped"]))
+
+    # ── the table ─────────────────────────────────────────────────────────────
+    st.markdown(f"### Carry ladder — {corridor.label}")
+    table_html = _nc_ladder_html(nc_rows, ref_sym, top["row"] if top else None)
+    st.markdown(_card_open() + table_html + _card_close(), unsafe_allow_html=True)
+    slug = re.sub(r"[^a-z0-9]+", "_", f"{corridor.label}_{dsel}".lower()).strip("_")
+    _table_actions(table_html, f"net_carry_{slug}.png")
+    src_txt = "Palmetto's scrape" if corridor.source == "palmetto" else "the manual rundown"
+    st.markdown(
+        f'<div class="legend">{_esc(corridor.label)} · posted {asof:%b %d, %Y} ({src_txt}), bids exactly as '
+        'archived — no roll or adjustment. <span class="sw up"></span>inverse (+) '
+        '<span class="sw dn"></span>carry (−) '
+        '<span class="sw" style="background:#fff4e5;border:1px solid #f28e2b"></span>top of net carry. '
+        'A red <span class="nc-flag">·</span> after a delivery = no futures spread to the reference, so it shows '
+        'its raw basis. Every quote keeps its own row, so a month quoted twice (first half / last half, a package) '
+        'shows both.</div>',
+        unsafe_allow_html=True)
+
+    # ── the Cash Fwd Curve ────────────────────────────────────────────────────
+    st.markdown("### Cash forward curve")
+    if len(mpts) >= 2:
+        show_net = meta["ref_price"] is not None
+        ttl, sub = NCC.chart_titles(corridor.commodity, ref_sym, corridor.label)
+        try:
+            # The legend sits under the plot and is clipped on a ~360 px phone if its entries run long, so the
+            # net line is just "Net of interest" (where interest starts is in the summary line and the caption).
+            chart = NCC.build_curve_chart(
+                mpts, top, title=ttl, subtitle=sub, curve_label=asof.strftime("%m/%d/%y"),
+                net_label="Net of interest", anchor_ym=ay, show_net=show_net, logo_uri=WATERMARK or None)
+            with st.container(border=True):
+                st.altair_chart(chart, width="stretch")
+        except Exception as e:
+            st.warning(f"Couldn't draw the chart ({type(e).__name__}: {e}).")
+        st.caption(
+            f"Solid blue = each month's basis re-expressed against {ref_sym or 'its own futures'} (the Basis "
+            "column). " + (f"Orange dashed = the same curve net of interest from {anchor_txt} (the Net of Interest "
+                           "column); ▲ marks its top. " if show_net else "")
+            + "One point per calendar month — a month quoted more than once uses its best quote (the table "
+              "above keeps every one).")
+    else:
+        st.caption("Only one delivery month is quoted on this posting, so there is no curve to chart.")
+
+    # ── Return to carry: what storing this corridor's grain from harvest has paid, crop year by crop year ──────
+    view = st.radio(
+        "View", ["Net of interest", "Gross carry (before interest)"], horizontal=True, key="nc_measure",
+        help="Net of interest = after the interest to carry the grain. Gross carry = the same numbers before "
+             "the interest. Applies to the return history below and to the comparison after it.")
+    measure = "net" if view.startswith("Net") else "gross"
+    if _RTC_IMPORT_ERROR is not None:
+        st.info("The return-to-carry history isn't available in this runtime "
+                f"({type(_RTC_IMPORT_ERROR).__name__}: {_RTC_IMPORT_ERROR}).")
+    else:
+        RTCB.render(
+            obs=RTCD.obs_from_rail(rows, corridor.market, corridor.commodity),
+            quotes=RTCD.quotes_from_rail(rows, corridor.market, corridor.commodity),
+            asof=asof, grain=corridor.commodity, measure=measure, tab_rate_pct=rate_pct,
+            load_futures=_nc_futures_history, load_prime=_nc_prime, load_fed_funds=_nc_fed_funds,
+            logo_uri=WATERMARK or None, scope=corridor.key,
+            note="History: this corridor's weekly Spot bid in the rail archive (the old rundown reports), or its nearest forward "
+                 "period where the rundown stopped posting Spot; the shipment table's forward bids are the periods posted since "
+                 "August 2026.")
+
+    # ── side by side with other corridors ─────────────────────────────────────
+    st.markdown("### Compare corridors along the curve")
+    options = ND.compare_options(pickable, corridor, asof)
+    if not options:
+        st.caption(f"No other {corridor.commodity.lower()} corridor has posted within {ND.MAX_AGE_DAYS} days of "
+                   f"{asof:%b %d} to compare with.")
+        return
+    opt_by_key = {c.key: c for c in options}
+    default_keys = [c.key for c in ND.default_peers(corridor, options)]
+    picked_keys = st.multiselect(
+        "Compare with", list(opt_by_key), default=default_keys, format_func=lambda k: opt_by_key[k].label,
+        key=f"nc_cmp_{corridor.key}_{dsel}",
+        help=f"Corridors that posted {corridor.commodity.lower()} in the last {ND.MAX_AGE_DAYS} days. Starts with "
+             "the same railroad's other corridors (Palmetto's boards are pickable but not preselected — they "
+             "are the same corridors posted a second way). Type to search.")
+    entries = ND.comparison_entries(rows, corridor, items, asof, [opt_by_key[k] for k in picked_keys])
+    res = NCMP.build_comparison(entries, ref_sym, curve, anchor_month, meta["anchor_ym"], rate_pct / 100.0,
+                                measure, asof)
+    cmp_html = NCMP.render_html(res)
+    st.markdown(_card_open() + '<div style="padding:8px 8px 2px">' + cmp_html + '</div>' + _card_close(),
+                unsafe_allow_html=True)
+    # the vendored table sets no font of its own (on the page it inherits Source Sans Pro); the export iframe
+    # has no page stylesheet, so give it the same stack or the PNG / copied table comes out in a serif
+    _table_actions("<div style=\"font-family:'Source Sans Pro',system-ui,-apple-system,sans-serif\">"
+                   + cmp_html + "</div>", f"net_carry_compare_{slug}_{measure}.png")
+    st.caption(
+        f"Every corridor is re-based to {ref_sym or 'its own futures'} on the same futures day, with interest from "
+        f"{anchor_txt} at {rate_pct:.2f}% — so the columns compare directly. ★ = the corridor above · amber ▲ = "
+        f"that corridor's top of {'net' if measure == 'net' else 'gross'} carry · green = the best in that month. "
+        f"Each corridor shows its latest posting on or before {asof:%b %d} (within {ND.MAX_AGE_DAYS} days); a "
+        "different date is flagged under its name.")
+    if len(entries) == 1:
+        st.caption("Pick more corridors above to compare them with this one.")
+
+
+bids_tab, csx_tab, ns_tab, bn_tab, cn_tab, map_tab, refs_tab, ship_tab, carry_tab = st.tabs(
+    ["📋 Bids", "CSX", "NS", "BN", "CN", "🗺️ Map", "🔗 References", "📦 Shipments", "💵 Net Carry"])
 
 with bids_tab:
     st.markdown("### Manual Rail Corridors (chat-fed)")
@@ -1922,3 +2337,7 @@ with refs_tab:
 
 with ship_tab:
     _shipments_tab()
+
+# Net Carry stays LAST: the railroad logos on tabs 2-5 are CSS-keyed to tab position (see the style block).
+with carry_tab:
+    _netcarry_tab()

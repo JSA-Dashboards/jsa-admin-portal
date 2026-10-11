@@ -6,7 +6,7 @@ CSX/NS/BN do — Kolten's call (2026-08-26): net it against CIF NOLA from
 the River FOB Portal instead, since CN's whole business here is moving grain
 to the Gulf for export, same as the barge/river network CIF represents.
 
-Backend: Snowflake (RIVER_FOB.PUBLIC — the portal's own database) when
+Backend: Snowflake (RIVER_FOB.PUBLIC — the River FOB Portal's own database) when
 USE_SNOWFLAKE is set; otherwise the portal's Postgres via RIVER_DATABASE_URL
 (the same name the basis tracker already uses for this exact cross-database
 read). Degrades to a notice, never raises, if neither is available.
@@ -35,7 +35,18 @@ def _url() -> str:
         return ""   # not running inside Snowflake — no secret to fall back to
 
 
+def _in_sis() -> bool:
+    """True when running inside Streamlit in Snowflake."""
+    try:
+        import _snowflake  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def _use_snowflake() -> bool:
+    if _in_sis():
+        return True
     return os.environ.get("USE_SNOWFLAKE", "").strip().lower() in (
         "1", "true", "yes", "on")
 
@@ -50,10 +61,11 @@ def source_name() -> str:
     return "Snowflake" if _use_snowflake() else "Postgres"
 
 
-# The River FOB archive lives in its OWN database, RIVER_FOB.PUBLIC — NOT the JSA
-# database the admin-portal shell (Home.py) sets globally via SNOWFLAKE_DATABASE.
-# Pin database/schema here or unqualified `cif_history` would resolve to JSA and
-# silently find nothing.
+# This portal cross-reads two Snowflake databases — RIVER_FOB.PUBLIC (CIF, here)
+# and JSA.BASIS_TRACKER (rail bids, in rail_data.py) — so each module pins its own
+# database+schema at connect time rather than relying on an ambient
+# SNOWFLAKE_DATABASE. The River FOB archive lives in its own RIVER_FOB.PUBLIC
+# database (deliberately not a schema inside JSA).
 _SF_DATABASE = "RIVER_FOB"
 _SF_SCHEMA = "PUBLIC"
 
@@ -77,6 +89,12 @@ def _load_private_key():
 
 
 def _sf_connect():
+    if _in_sis():
+        from snowflake.snowpark.context import get_active_session
+        conn = get_active_session().connection
+        conn.cursor().execute(f"USE DATABASE {_SF_DATABASE}")
+        conn.cursor().execute(f"USE SCHEMA {_SF_SCHEMA}")
+        return conn
     import snowflake.connector as sc
     kw = dict(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
@@ -110,7 +128,8 @@ def _sf_rows(sql, params):
         cur.execute(sql, params)
         return [{k.lower(): v for k, v in r.items()} for r in cur.fetchall()]
     finally:
-        conn.close()
+        if not _in_sis():
+            conn.close()
 
 
 def _pg_rows(sql, params):
