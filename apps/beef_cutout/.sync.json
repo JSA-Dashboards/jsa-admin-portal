@@ -1,0 +1,11 @@
+{
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/beef_cutout",
+ "branch": "master",
+ "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "am_cutout.py": "7e57f6946da89c380828b756d43a97995fa0b4e3b97bf53996b86aeeb95e9039",
+  "app.py": "39d2beb900a2de652c7e38ac27c96a39d1619bf28a7a080caa1e3098f43b1697"
+ }
+}
