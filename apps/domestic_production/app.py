@@ -1,6 +1,6 @@
-import sys
-from pathlib import Path
-
+import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -10,11 +10,6 @@ import base64
 import pathlib
 from datetime import date
 from io import BytesIO
-
-# st.Page runs this file via exec(), not as a standalone script, so its own
-# directory is never added to sys.path automatically -- without this, the
-# local nass_cache_client import below raises ModuleNotFoundError.
-sys.path.insert(0, str(Path(__file__).parent))
 
 # ── Constants ────────────────────────────────────────────────────────────────
 # This dashboard reads NASS data from a shared, scheduled-pull cache (see
@@ -349,8 +344,25 @@ _REV_PALETTE = [
 ]
 
 # ── Page config ──────────────────────────────────────────────────────────────
-# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+
+st.markdown("""<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+</style>""", unsafe_allow_html=True)
+
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+# The Streamlit Cloud badge (creator avatar + logo) is drawn by Cloud's outer page,
+# outside this iframe, so CSS here can't reach it; add the rule to the parent
+# document instead (same-origin). No-op when run locally.
+_BADGE_JS = """<script>(function(){try{var w=window;while(w.parent&&w.parent!==w){try{void w.parent.document;w=w.parent;}catch(e){break;}}var d=w.document;if(d.getElementById('jsa-hide-cloud-badge'))return;var s=d.createElement('style');s.id='jsa-hide-cloud-badge';s.textContent="[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";d.head.appendChild(s);}catch(e){}})();</script>"""
+try:
+    st.html(_BADGE_JS, unsafe_allow_javascript=True)
+except TypeError:  # older Streamlit without st.html JS support
+    import streamlit.components.v1 as _stc
+    _stc.html(_BADGE_JS, height=0)
 
 st.markdown(f"""
 <style>
@@ -702,6 +714,39 @@ def _olympic6(vals):
     return sum(clean[1:-1]) / len(clean[1:-1])
 
 # ── Data loaders ─────────────────────────────────────────────────────────────
+# The ETL (usda-nass-etl) only caches ONE broad, unfiltered-by-year/-period
+# row per (commodity, metric-or-stocks-series, agg_level) -- no year__LE, no
+# reference_period_desc filter (see jobs/domestic_production.py). Every
+# loader below used to pass a narrow year/reference_period_desc filter
+# straight to NASS; they now fetch that one broad cached row via these two
+# helpers and filter the resulting DataFrame locally instead of re-querying.
+MIN_CACHED_YEAR = "1980"  # must match jobs/domestic_production.py's MIN_YEAR
+
+
+def _broad_metric_params(mp: dict, agg: str) -> dict:
+    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
+    return {
+        **base,
+        "source_desc": "SURVEY",
+        "domain_desc": "TOTAL",
+        "freq_desc": "ANNUAL",
+        "agg_level_desc": agg,
+        "year__GE": MIN_CACHED_YEAR,
+    }
+
+
+def _broad_stocks_params(commodity: str, agg: str) -> dict:
+    meta = STOCKS_META[commodity]
+    return {
+        **meta,
+        "statisticcat_desc": "STOCKS",
+        "source_desc": "SURVEY",
+        "domain_desc": "TOTAL",
+        "agg_level_desc": agg,
+        "year__GE": MIN_CACHED_YEAR,
+    }
+
+
 def _prefer_all_classes(df: pd.DataFrame) -> pd.DataFrame:
     """When NASS returns multiple class rows per year/state (e.g. Wheat has
     ALL CLASSES / WINTER / SPRING / DURUM), keep only 'ALL CLASSES' rows.
@@ -716,19 +761,19 @@ def load_national(commodity: str, y0: int, y1: int) -> pd.DataFrame:
     params_map = COMMODITIES[commodity]
     frames = []
     for label, mp in params_map.items():
-        df = _fetch({
-            **mp,
-            "agg_level_desc": "NATIONAL",
-            "domain_desc":    "TOTAL",
-            "freq_desc":      "ANNUAL",
-            "year__GE":       str(y0),
-            "year__LE":       str(y1),
-        })
+        df = _fetch(_broad_metric_params(mp, "NATIONAL"))
         if df.empty:
             continue
         # Prefer "ALL CLASSES" rows when commodity reports multiple classes
         df = _prefer_all_classes(df)
+        # Original query filtered to reference_period_desc="YEAR" (final
+        # published values only, no forecast revisions) -- the broad cache
+        # row carries every period, so apply that filter locally.
+        if "reference_period_desc" in df.columns:
+            df = df[df["reference_period_desc"] == mp.get("reference_period_desc", "YEAR")]
         df = df[["year", "Value"]].copy()
+        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+        df = df[(df["year"] >= y0) & (df["year"] <= y1)]
         df["year"]   = df["year"].astype(int)
         df["value"]  = df["Value"].apply(_clean)
         df["metric"] = label
@@ -791,15 +836,11 @@ def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
     params_map = COMMODITIES[commodity]
     frames = []
     for label, mp in params_map.items():
-        # Strip reference_period so we get all periods, then pick the best per state
-        base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
-        df = _fetch({
-            **base,
-            "agg_level_desc": "STATE",
-            "domain_desc":    "TOTAL",
-            "freq_desc":      "ANNUAL",
-            "year":           str(year),
-        })
+        # Broad cached row carries all periods and all years; filter to this
+        # year locally, then pick the best period per state below.
+        df = _fetch(_broad_metric_params(mp, "STATE"))
+        if not df.empty and "year" in df.columns:
+            df = df[pd.to_numeric(df["year"], errors="coerce") == year]
         if df.empty:
             continue
         # Prefer "ALL CLASSES" rows when commodity reports multiple classes
@@ -829,10 +870,11 @@ def load_period_snapshot(commodity: str, metric: str, year: int, period: str) ->
     """Fetch state-level values for an explicit NASS reference_period_desc."""
     if commodity not in COMMODITIES or metric not in COMMODITIES[commodity]:
         return pd.DataFrame()
-    mp   = COMMODITIES[commodity][metric]
-    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
-    df   = _fetch({**base, "agg_level_desc": "STATE", "domain_desc": "TOTAL",
-                   "reference_period_desc": period, "year": str(year)})
+    mp = COMMODITIES[commodity][metric]
+    df = _fetch(_broad_metric_params(mp, "STATE"))
+    if not df.empty:
+        df = df[(pd.to_numeric(df["year"], errors="coerce") == year)
+                & (df["reference_period_desc"] == period)]
     if df.empty:
         return pd.DataFrame()
     df = _prefer_all_classes(df)
@@ -847,10 +889,11 @@ def load_national_period_snapshot(commodity: str, metric: str, year: int, period
     """Fetch the US national total for a specific NASS reference_period_desc."""
     if commodity not in COMMODITIES or metric not in COMMODITIES[commodity]:
         return None
-    mp   = COMMODITIES[commodity][metric]
-    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
-    df   = _fetch({**base, "agg_level_desc": "NATIONAL", "domain_desc": "TOTAL",
-                   "reference_period_desc": period, "year": str(year)})
+    mp = COMMODITIES[commodity][metric]
+    df = _fetch(_broad_metric_params(mp, "NATIONAL"))
+    if not df.empty:
+        df = df[(pd.to_numeric(df["year"], errors="coerce") == year)
+                & (df["reference_period_desc"] == period)]
     if df.empty:
         return None
     df = _prefer_all_classes(df)
@@ -874,14 +917,15 @@ _HIST_METRIC_MAP: dict[str, dict[str, str]] = {
 @st.cache_data(ttl=300, show_spinner=False)
 def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.DataFrame:
     mp = COMMODITIES[commodity][metric]
-    df = _fetch({
-        **mp,
-        "agg_level_desc": "STATE",
-        "domain_desc":    "TOTAL",
-        "freq_desc":      "ANNUAL",
-        "year__GE":       str(y0),
-        "year__LE":       str(y1),
-    })
+    df = _fetch(_broad_metric_params(mp, "STATE"))
+    if df.empty:
+        return pd.DataFrame()
+    # Original query filtered to reference_period_desc="YEAR" (final
+    # published values only) and a specific year range -- apply both locally.
+    if "reference_period_desc" in df.columns:
+        df = df[df["reference_period_desc"] == mp.get("reference_period_desc", "YEAR")]
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df[(df["year"] >= y0) & (df["year"] <= y1)]
     if df.empty:
         return pd.DataFrame()
     # Prefer "ALL CLASSES" rows when commodity reports multiple classes
@@ -894,12 +938,9 @@ def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.Data
     return df[["year", "value", "state_abbr", "state_name"]].sort_values(["state_abbr", "year"])
 
 # ── Quarterly stocks loaders ─────────────────────────────────────────────────
-def _stocks_base(commodity: str, quarter: str) -> dict:
-    meta = STOCKS_META[commodity]
-    # NASS stores quarterly stocks as "FIRST OF MAR" etc., not "MAR 1".
-    api_period = STOCKS_QUARTERS_API.get(quarter, quarter)
-    return {**meta, "statisticcat_desc": "STOCKS", "source_desc": "SURVEY",
-            "domain_desc": "TOTAL", "reference_period_desc": api_period}
+# NASS stores quarterly stocks as "FIRST OF MAR" etc., not "MAR 1".
+def _stocks_period(quarter: str) -> str:
+    return STOCKS_QUARTERS_API.get(quarter, quarter)
 
 def _filter_storage(df: pd.DataFrame, storage: str) -> pd.DataFrame:
     """Filter a raw NASS stocks DataFrame to avoid double-counting.
@@ -908,9 +949,9 @@ def _filter_storage(df: pd.DataFrame, storage: str) -> pd.DataFrame:
     util_practice_desc ('ON FARM'/'OFF FARM' in the value for sub-rows).
     For TOTAL we keep only the aggregate row using both filters."""
     if storage != "TOTAL":
-        # ON FARM / OFF FARM explicit selection — filter class_desc
-        if "class_desc" in df.columns:
-            return df[df["class_desc"].str.upper() == storage]
+        # ON FARM / OFF FARM — util_practice_desc values are like "ON FARM, GRAIN"
+        if "util_practice_desc" in df.columns:
+            return df[df["util_practice_desc"].str.upper().str.contains(storage)]
         return df
 
     # TOTAL: keep ALL CLASSES rows that are NOT the on-farm or off-farm sub-rows
@@ -927,8 +968,10 @@ def load_stocks_snapshot(commodity: str, quarter: str, year: int,
                          storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
         return pd.DataFrame()
-    df = _fetch({**_stocks_base(commodity, quarter),
-                 "agg_level_desc": "STATE", "year": str(year)})
+    df = _fetch(_broad_stocks_params(commodity, "STATE"))
+    if not df.empty:
+        df = df[(pd.to_numeric(df["year"], errors="coerce") == year)
+                & (df["reference_period_desc"] == _stocks_period(quarter))]
     if df.empty:
         return pd.DataFrame()
     df["value"]      = df["Value"].apply(_clean)
@@ -944,8 +987,10 @@ def load_stocks_history(commodity: str, quarter: str, y0: int, y1: int,
                         storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
         return pd.DataFrame()
-    df = _fetch({**_stocks_base(commodity, quarter),
-                 "agg_level_desc": "STATE", "year__GE": str(y0), "year__LE": str(y1)})
+    df = _fetch(_broad_stocks_params(commodity, "STATE"))
+    if not df.empty:
+        yr = pd.to_numeric(df["year"], errors="coerce")
+        df = df[(yr >= y0) & (yr <= y1) & (df["reference_period_desc"] == _stocks_period(quarter))]
     if df.empty:
         return pd.DataFrame()
     df["year"]       = df["year"].astype(int)
@@ -961,8 +1006,10 @@ def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
                          storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
         return pd.DataFrame()
-    df = _fetch({**_stocks_base(commodity, quarter),
-                 "agg_level_desc": "NATIONAL", "year__GE": str(y0), "year__LE": str(y1)})
+    df = _fetch(_broad_stocks_params(commodity, "NATIONAL"))
+    if not df.empty:
+        yr = pd.to_numeric(df["year"], errors="coerce")
+        df = df[(yr >= y0) & (yr <= y1) & (df["reference_period_desc"] == _stocks_period(quarter))]
     if df.empty:
         return pd.DataFrame()
     df["year"]  = df["year"].astype(int)
@@ -973,26 +1020,24 @@ def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
     return df[["year", "value"]].sort_values("year")
 
 # ── Production loaders (for disappearance calculation) ───────────────────────
-def _prod_fetch_params(commodity: str) -> dict:
-    """Return NASS fetch params for state-level annual final production."""
+def _prod_metric_dict(commodity: str) -> dict:
+    """Return the COMMODITIES metric dict for this commodity's Production
+    metric (the same dict load_national/load_state_history use for it)."""
     if commodity not in COMMODITIES:
         return {}
     prod_key = next((k for k in COMMODITIES[commodity] if "Production" in k), None)
-    if not prod_key:
-        return {}
-    mp = COMMODITIES[commodity][prod_key]
-    return {k: v for k, v in mp.items()
-            if k not in ("reference_period_desc", "agg_level_desc")}
+    return COMMODITIES[commodity][prod_key] if prod_key else {}
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_production_snapshot(commodity: str, year: int) -> pd.DataFrame:
     """State-level annual production for one year — used in disappearance snapshot."""
-    base = _prod_fetch_params(commodity)
-    if not base:
+    mp = _prod_metric_dict(commodity)
+    if not mp:
         return pd.DataFrame()
-    df = _fetch({**base, "agg_level_desc": "STATE", "domain_desc": "TOTAL",
-                 "freq_desc": "ANNUAL", "reference_period_desc": "YEAR",
-                 "year": str(year)})
+    df = _fetch(_broad_metric_params(mp, "STATE"))
+    if not df.empty:
+        df = df[(pd.to_numeric(df["year"], errors="coerce") == year)
+                & (df["reference_period_desc"] == "YEAR")]
     if df.empty:
         return pd.DataFrame()
     df["value"]      = df["Value"].apply(_clean)
@@ -1005,12 +1050,13 @@ def load_production_snapshot(commodity: str, year: int) -> pd.DataFrame:
 @st.cache_data(ttl=300, show_spinner=False)
 def load_production_state_history(commodity: str, y0: int, y1: int) -> pd.DataFrame:
     """State-level annual production across a year range — used in disappearance table."""
-    base = _prod_fetch_params(commodity)
-    if not base:
+    mp = _prod_metric_dict(commodity)
+    if not mp:
         return pd.DataFrame()
-    df = _fetch({**base, "agg_level_desc": "STATE", "domain_desc": "TOTAL",
-                 "freq_desc": "ANNUAL", "reference_period_desc": "YEAR",
-                 "year__GE": str(y0), "year__LE": str(y1)})
+    df = _fetch(_broad_metric_params(mp, "STATE"))
+    if not df.empty:
+        yr = pd.to_numeric(df["year"], errors="coerce")
+        df = df[(yr >= y0) & (yr <= y1) & (df["reference_period_desc"] == "YEAR")]
     if df.empty:
         return pd.DataFrame()
     df["year"]       = df["year"].astype(int)
@@ -1024,12 +1070,13 @@ def load_production_state_history(commodity: str, y0: int, y1: int) -> pd.DataFr
 @st.cache_data(ttl=300, show_spinner=False)
 def load_production_nat_history(commodity: str, y0: int, y1: int) -> pd.DataFrame:
     """National annual production across a year range — used in disappearance table footer."""
-    base = _prod_fetch_params(commodity)
-    if not base:
+    mp = _prod_metric_dict(commodity)
+    if not mp:
         return pd.DataFrame()
-    df = _fetch({**base, "agg_level_desc": "NATIONAL", "domain_desc": "TOTAL",
-                 "freq_desc": "ANNUAL", "reference_period_desc": "YEAR",
-                 "year__GE": str(y0), "year__LE": str(y1)})
+    df = _fetch(_broad_metric_params(mp, "NATIONAL"))
+    if not df.empty:
+        yr = pd.to_numeric(df["year"], errors="coerce")
+        df = df[(yr >= y0) & (yr <= y1) & (df["reference_period_desc"] == "YEAR")]
     if df.empty:
         return pd.DataFrame()
     df["year"]  = df["year"].astype(int)
@@ -1048,9 +1095,11 @@ def load_nass_storage_capacity(y0: int, y1: int) -> pd.DataFrame:
         "commodity_desc":    "GRAIN STORAGE CAPACITY",
         "statisticcat_desc": "CAPACITY",
         "agg_level_desc":    "STATE",
-        "year__GE":          str(y0),
-        "year__LE":          str(y1),
+        "year__GE":          MIN_CACHED_YEAR,
     })
+    if not df.empty:
+        yr = pd.to_numeric(df["year"], errors="coerce")
+        df = df[(yr >= y0) & (yr <= y1)]
     if df.empty:
         return pd.DataFrame()
     df["year"]       = df["year"].astype(int)

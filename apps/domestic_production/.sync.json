@@ -1,0 +1,12 @@
+{
+ "repo": "JSA-Dashboards/domestic-production-dashboard",
+ "subdir": null,
+ "branch": "master",
+ "commit": "af6adc349e6e0ce90c56683c0e7259dc0bb866f8",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "606f3e31da310af2130d1e2d76c649c5dab2927284a77a7d9a736405cabf14e2",
+  "assets/jsa_50th_logo.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
+  "nass_cache_client.py": "17583d06120cb5fdac554e6b8bc10d2c5fa1022611227eac656aeabae5459eb7"
+ }
+}
