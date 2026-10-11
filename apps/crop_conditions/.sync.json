@@ -1,0 +1,18 @@
+{
+ "repo": "JSA-Dashboards/crop-conditions-dashboard",
+ "subdir": null,
+ "branch": "master",
+ "commit": "05f64afa7e2045854be4786230cc906ee387be1a",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  ".python-version": "8dfda54ba2f66ab3a8ebab460f4338bbeea1fb1e0f85ce06fe3530aa3c64679b",
+  "50 Year logo JSA.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
+  "app.py": "87e570afa8d66e96eef53521ba8a30f49f1e27fa5e1443dcf7cda72700d699d3",
+  "JSA Logo.png": "83b5bc0a845ca66a45e11f9b181a9fde6618172d8569752a31d5c4c9c110a3bf",
+  "jsa_favicon.png": "f894128daaf0884918bb1bed00c69bc8de6a07cb945d136247e63088d97e702d",
+  "logo-full.png": "83b5bc0a845ca66a45e11f9b181a9fde6618172d8569752a31d5c4c9c110a3bf",
+  "nass_cache_client.py": "17583d06120cb5fdac554e6b8bc10d2c5fa1022611227eac656aeabae5459eb7",
+  "Picture1.jpg": "053aa5ea3d52eb1499c5afd5a51bbb395e36e67cea5a78816dcea3aa3df9f086",
+  "Transparent Smal logo.png": "0238b4a2f3b324ee66e174776ffb6b83ff74de02d37d93eaa5639d4e192eab39"
+ }
+}

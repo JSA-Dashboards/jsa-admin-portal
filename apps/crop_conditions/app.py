@@ -1,4 +1,7 @@
-﻿import streamlit as st
+﻿import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -17,14 +20,6 @@ warnings.filterwarnings("ignore")
 # NASS API key at all. NASS registers API keys per individual, not for public/
 # shared use, so a client-facing dashboard hitting NASS live under one shared
 # key would violate NASS's terms.
-import sys
-from pathlib import Path
-
-# st.Page runs this file via exec(), not as a standalone script, so its own
-# directory is never added to sys.path automatically -- without this, the
-# local nass_cache_client import below raises ModuleNotFoundError.
-sys.path.insert(0, str(Path(__file__).parent))
-
 from nass_cache_client import fetch_cached
 
 def _to_excel(df) -> bytes:
@@ -5000,8 +4995,21 @@ def build_stacked_area(
 
 
 # ── Page Config ────────────────────────────────────────────────────────────────
-# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+from PIL import Image as _PILImage
+_favicon = _PILImage.open(__import__("os").path.join(__import__("os").path.dirname(__file__), 'jsa_favicon.png'))
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+# The Streamlit Cloud badge (creator avatar + logo) is drawn by Cloud's outer page,
+# outside this iframe, so CSS here can't reach it; add the rule to the parent
+# document instead (same-origin). No-op when run locally.
+_BADGE_JS = """<script>(function(){try{var w=window;while(w.parent&&w.parent!==w){try{void w.parent.document;w=w.parent;}catch(e){break;}}var d=w.document;if(d.getElementById('jsa-hide-cloud-badge'))return;var s=d.createElement('style');s.id='jsa-hide-cloud-badge';s.textContent="[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";d.head.appendChild(s);}catch(e){}})();</script>"""
+try:
+    st.html(_BADGE_JS, unsafe_allow_javascript=True)
+except TypeError:  # older Streamlit without st.html JS support
+    import streamlit.components.v1 as _stc
+    _stc.html(_BADGE_JS, height=0)
 
 st.markdown(f"""
 <style>
@@ -8186,6 +8194,126 @@ with _tab_yield:
 
 with _tab_validation:
     if not _yield_full.empty:
+        # ── R² Progression — Condition Signal Strength by Week ────────────────────
+        import json as _r2_json
+        st.markdown(
+            '<div class="sec-hdr">Condition Signal Strength — R² by Week</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "How predictive are crop condition ratings at each week of the season? "
+            "R² = share of year-to-year yield deviation explained by the JSA condition index at that week. "
+            "Higher R² = stronger signal. Peak week (amber line) is the best-signal ISO week "
+            "the JSA yield model uses. Dotted line = 50% explanatory power threshold."
+        )
+
+        # Build series options: US first, then state alphas, then class series for wheat
+        _r2_all_series = sorted(_yield_lookup.keys())
+        _r2_states = ["US"] + sorted(
+            s for s in _r2_all_series
+            if len(s) == 2 and s != "US"                    # 2-char = state alpha
+        )
+        _r2_class_series = [s for s in _r2_all_series if s not in _r2_states]
+        _r2_series_opts = _r2_states + _r2_class_series
+
+        _r2_c1, _r2_c2 = st.columns([1, 3])
+        with _r2_c1:
+            _r2_sel = st.selectbox(
+                "State / Series",
+                _r2_series_opts,
+                index=0,
+                key="r2_series_selector",
+                help="Select US Total or a specific state to see how the condition index's predictive power builds through the season.",
+            )
+
+        # Run scan (cached — free on repeat calls with same args)
+        _r2_devs_raw = {
+            sk: {str(yr): v["dev"] for yr, v in yl.items() if v.get("dev") is not None}
+            for sk, yl in _yield_lookup.items()
+            if any(v.get("dev") is not None for v in yl.values())
+        }
+        _r2_iso_min, _r2_iso_max = commodity_cfg.get("scan_iso_range", (5, 22))
+        _r2_scan_res = _scan_best_week(
+            raw_df, sel_usda_yr,
+            _r2_json.dumps(_r2_devs_raw),
+            tuple(sorted(_dynamic_hrw_weights.items())),
+            tuple(sorted(_dynamic_srw_weights.items())),
+            tuple(sorted(_dynamic_white_weights.items())),
+            _crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
+            _scan_iso_min=_r2_iso_min,
+            _scan_iso_max=_r2_iso_max,
+            commodity_key=commodity_label,
+        )
+
+        _r2_res = _r2_scan_res.get(_r2_sel)
+        if _r2_res and _r2_res.get("all_r2"):
+            _r2_by_week  = _r2_res["all_r2"]
+            _r2_best_iso = _r2_res["best_iso"]
+            _r2_best_val = _r2_res["r2"]
+            _r2_n_yrs    = _r2_res["n_years"]
+
+            _r2_weeks = sorted(_r2_by_week.keys())
+            _r2_vals  = [_r2_by_week[w] * 100 for w in _r2_weeks]
+
+            _r2_fig = go.Figure()
+            _r2_fig.add_trace(go.Scatter(
+                x=_r2_weeks,
+                y=_r2_vals,
+                mode="lines+markers",
+                line=dict(color=JPSI_BLUE, width=2.5),
+                marker=dict(size=7, color=JPSI_BLUE,
+                            line=dict(color=DM_SURFACE2, width=1.5)),
+                hovertemplate="<b>ISO Week %{x}</b><br>R²: <b>%{y:.1f}%</b><extra></extra>",
+                name="R²",
+            ))
+            # Peak-week annotation
+            _r2_fig.add_vline(
+                x=_r2_best_iso, line_color="#f59e0b", line_width=2, line_dash="dash",
+                annotation_text=f"Peak Wk {_r2_best_iso} · R²={_r2_best_val*100:.1f}%",
+                annotation_position="top right" if _r2_best_iso < (_r2_iso_min + _r2_iso_max) / 2 else "top left",
+                annotation_font=dict(color="#f59e0b", size=11),
+            )
+            # 50% reference
+            _r2_fig.add_hline(
+                y=50, line_color=DM_MUTED, line_width=1, line_dash="dot",
+                annotation_text="50%", annotation_position="right",
+                annotation_font=dict(color=DM_MUTED, size=10),
+            )
+            # Tick every 2nd week to avoid crowding
+            _r2_tick_vals  = _r2_weeks[::2]
+            _r2_tick_labels = [f"Wk {w}" for w in _r2_tick_vals]
+            _r2_fig.update_layout(
+                height=360,
+                paper_bgcolor=DM_BG, plot_bgcolor=DM_SURFACE2,
+                font=dict(color=DM_TEXT, size=12),
+                showlegend=False,
+                hovermode="x unified",
+                margin=dict(l=60, r=40, t=30, b=50),
+                xaxis=dict(
+                    title="ISO Week",
+                    tickmode="array", tickvals=_r2_tick_vals, ticktext=_r2_tick_labels,
+                    gridcolor=DM_BORDER, zeroline=False, tickfont=dict(size=11),
+                ),
+                yaxis=dict(
+                    title="R² (%)",
+                    gridcolor=DM_BORDER, zeroline=False,
+                    range=[0, max(100, max(_r2_vals) + 5)],
+                ),
+            )
+            _show_chart(_r2_fig, "r2_progression_by_week")
+            st.caption(
+                f"**{_r2_sel}** &nbsp;·&nbsp; Best-signal week: **ISO {_r2_best_iso}** "
+                f"&nbsp;·&nbsp; R² at peak: **{_r2_best_val*100:.1f}%** "
+                f"&nbsp;·&nbsp; {_r2_n_yrs} years of data"
+            )
+        else:
+            st.info(
+                f"Not enough data to compute R² by week for **{_r2_sel}**. "
+                f"At least 8 years of yield + condition overlap are required."
+            )
+
+        st.markdown("---")
+
         # ── HRW Model Validation: Weighted Estimate vs. USDA Official HRW Final ────
         if commodity_cfg.get("has_classes", True) and (not _hrw_nass_us.empty or not _hrw_weighted_df.empty):
             st.markdown(
@@ -11191,8 +11319,18 @@ with _tab_prod:
                     _stk_row["vs LY"] = f"{'+'if _sc2>=0 else ''}{_sc2:.1f}%"
                 else:
                     _stk_row["vs LY"] = "—"
-                _stk_row[_jsa_col_hdr]       = "—"
-                _stk_row["vs LY ▸ JSA"]      = "—"
+                _jsa_stk_val = _stk_vals.get(sel_usda_yr)
+                if _jsa_stk_val is not None:
+                    _jsa_stk_sfx = "*" if _sep1_has_estimate else ""
+                    _stk_row[_jsa_col_hdr] = f"{_jsa_stk_val / 1_000_000:.1f}{_jsa_stk_sfx}"
+                    if _stk_prev is not None and _stk_prev != 0:
+                        _jsa_stk_pct = (_jsa_stk_val - _stk_prev) / abs(_stk_prev) * 100
+                        _stk_row["vs LY ▸ JSA"] = f"{'+'if _jsa_stk_pct>=0 else ''}{_jsa_stk_pct:.1f}%"
+                    else:
+                        _stk_row["vs LY ▸ JSA"] = "—"
+                else:
+                    _stk_row[_jsa_col_hdr]  = "—"
+                    _stk_row["vs LY ▸ JSA"] = "—"
                 _stk_row["vs Olympic ▸ JSA"] = "—"
                 _stk_hist = (
                     _sep1_stocks_df[
@@ -11381,13 +11519,60 @@ with _tab_prod:
                     f"USDA NASS Grain Stocks report publishes actual data ~Sep 30."
                 )
 
-            # Backtest expander — show how each state method performed historically
-            if not _bt_summary.empty and not _cur_yr_us_published:
-                with st.expander("📊 State estimation backtest — method comparison", expanded=False):
+            # Backtest expander — show method comparison + actuals when published
+            if not _bt_summary.empty:
+                _bt_exp_label = (
+                    f"📊 Sep 1 {sel_usda_yr} stocks — actuals vs. estimates & backtest"
+                    if _cur_yr_us_published
+                    else "📊 State estimation backtest — method comparison"
+                )
+                with st.expander(_bt_exp_label, expanded=_cur_yr_us_published):
+                    # ── When Sep 1 is published: show actual vs. estimated for current year ──
+                    if _cur_yr_us_published:
+                        st.markdown(f"**Sep 1, {sel_usda_yr} — Actual (NASS) vs. Model Estimate ({_best_state_method})**")
+                        _cur_actuals = _sep1_stocks_df[
+                            _sep1_stocks_df["year"] == sel_usda_yr
+                        ].copy()
+                        _cur_j1 = _jun1_stocks_df[
+                            _jun1_stocks_df["year"] == sel_usda_yr
+                        ].set_index("state_alpha")["stocks_bu"]
+                        _actuals_rows = []
+                        for _, _ar in _cur_actuals.sort_values(
+                            "state_alpha", key=lambda s: s.map(lambda x: ("0" if x == "US" else x))
+                        ).iterrows():
+                            _st = _ar["state_alpha"]
+                            _actual_bu = float(_ar["stocks_bu"])
+                            _st_j1 = float(_cur_j1.get(_st, 0) or 0)
+                            _est_bu = _estimate_state_sep1(
+                                _st, _st_j1, _us_total_est_bu, _us_jun1_bu,
+                                _sep1_stocks_df, _jun1_stocks_df, _best_method_key,
+                                sel_usda_yr, n_avg=5,
+                            ) if _st_j1 > 0 and _us_total_est_bu > 0 else None
+                            _err = (
+                                (_est_bu - _actual_bu) / abs(_actual_bu) * 100
+                                if _est_bu and _actual_bu
+                                else None
+                            )
+                            _actuals_rows.append({
+                                "State":           _st,
+                                f"Actual (M bu)":  f"{_actual_bu/1_000_000:.1f}",
+                                f"Estimate (M bu)": f"{_est_bu/1_000_000:.1f}" if _est_bu else "—",
+                                "Error %":         (
+                                    f"{'+'if _err>=0 else ''}{_err:.1f}%"
+                                    if _err is not None else "—"
+                                ),
+                            })
+                        if _actuals_rows:
+                            st.dataframe(
+                                pd.DataFrame(_actuals_rows),
+                                use_container_width=True, hide_index=True,
+                            )
+                        st.markdown("---")
+
                     st.markdown(
-                        "Each method is tested against actual NASS Sep 1 state stocks "
+                        "Each method backtested against actual NASS Sep 1 state stocks "
                         "for every year where Jun 1 data was available. "
-                        "The lowest MAPE method is applied automatically above."
+                        "The lowest MAPE method is applied automatically."
                     )
                     _bt_disp = _bt_summary.copy()
                     _bt_disp.index = _bt_disp.index + 1
