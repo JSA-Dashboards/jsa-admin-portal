@@ -3,6 +3,9 @@ Cattle on Feed Dashboard — USDA NASS QuickStats
 On-feed inventory, placements, marketings, and the quarterly heifers-on-feed
 share (herd-cycle signal) for the 13 major feedlot states + US total.
 
+Carries a second USDA report behind the switch at the top of the page: Cold
+Storage end-of-month warehouse stocks, back to 1917. See cold_storage.py.
+
 John Stewart & Associates
 Data source: USDA NASS QuickStats API (https://quickstats.nass.usda.gov)
 """
@@ -16,11 +19,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# st.Page runs this file via exec(), not as a standalone script, so its own
-# directory is never added to sys.path automatically -- without this, the
-# local nass_cache_client import below raises ModuleNotFoundError.
+# Sibling modules for the COF Recap tab and the Cold Storage view. Safe under
+# the portal's shared sys.modules despite the usual by-name collision trap —
+# "cof_recap" and "cold_storage" each exist exactly once in the repo, unlike
+# snowflake_db.py and friends.
 sys.path.insert(0, str(Path(__file__).parent))
-from nass_cache_client import fetch_cached
+import cof_recap  # noqa: E402
+import cold_storage  # noqa: E402
+from nass_cache_client import fetch_cached  # noqa: E402
 
 # ── JSA brand ────────────────────────────────────────────────────────────────
 JSA_GREEN    = "#5e7164"
@@ -40,9 +46,10 @@ HEIFER_COLOR = "#6fa8c4"
 JSA_LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
-# This dashboard reads NASS data from the shared, scheduled-pull cache (see
-# usda-nass-etl's jobs/cattle_on_feed.py) instead of calling the API live --
-# it no longer needs a NASS API key at all.
+# Cattle on Feed and Cold Storage read NASS through the shared, scheduled-pull
+# cache (usda-nass-etl: jobs/cattle_on_feed.py and jobs/cold_storage.py), so this
+# page needs no NASS API key. nass_cache_client.py is vendored; keep it
+# byte-identical to that repo's copy.
 
 # The 13 states NASS publishes individually in the Cattle on Feed report
 # (1,000+ head feedlots); "OT" is NASS's "Other States" catch-all.
@@ -121,6 +128,51 @@ st.markdown(f"""
     color:{DM_MUTED}; font-size:0.72rem; text-transform:uppercase; letter-spacing:.1em; margin:14px 0 6px;
   }}
   div[data-testid="stDataFrame"] {{ background:{DM_SURFACE}; border-radius:8px; }}
+
+  /* The report switch, dressed as a tab bar so it reads as one with the tabs
+     below it. It stays an st.segmented_control rather than becoming an
+     st.tabs entry because a hidden Streamlit tab is hidden, not skipped: its
+     body runs every rerun, so Cold Storage would pay for the nine-request
+     Cattle on Feed load and vice versa. Same reason the Beef Trimmings page
+     switches its two views this way. */
+  [data-testid="stButtonGroup"] {{
+    margin:0 0 14px 0; border-bottom:1px solid {DM_BORDER}; gap:0 !important;
+  }}
+  [data-testid="stButtonGroup"] > div {{ gap:0 !important; }}
+  [data-testid="stButtonGroup"] button[data-variant="segmented_control"] {{
+    background:transparent !important; border:none !important;
+    border-bottom:2px solid transparent !important; border-radius:0 !important;
+    box-shadow:none !important; color:{DM_MUTED} !important;
+    font-size:0.95rem !important; font-weight:500 !important;
+    padding:6px 20px 9px 20px !important; margin:0 !important;
+  }}
+  [data-testid="stButtonGroup"] button[data-variant="segmented_control"]:hover {{
+    color:{DM_TEXT} !important;
+  }}
+  [data-testid="stButtonGroup"] button[aria-checked="true"] {{
+    color:{JSA_GREEN} !important; border-bottom-color:{JSA_GREEN} !important;
+    font-weight:700 !important;
+  }}
+
+  .cs-call {{
+    background:{DM_SURFACE}; border:1px solid {DM_BORDER};
+    border-left:4px solid {JSA_GREEN}; border-radius:8px;
+    padding:16px 20px 14px; margin:2px 0 14px;
+  }}
+  .cs-call-lead {{ color:{DM_TEXT}; font-size:1.05rem; line-height:1.5; }}
+  .cs-call-sub  {{ color:{DM_MUTED}; font-size:0.82rem; margin-top:8px; line-height:1.55; }}
+  .run-table {{ width:100%; border-collapse:collapse; font-size:0.82rem; }}
+  .run-table th {{
+    color:{DM_MUTED}; font-weight:500; text-transform:uppercase; font-size:0.66rem;
+    letter-spacing:.06em; padding:6px 10px; border-bottom:1px solid {DM_BORDER}; text-align:right;
+  }}
+  .run-table th:first-child {{ text-align:left; }}
+  .run-table td {{
+    padding:6px 10px; border-bottom:1px solid {DM_BORDER}; text-align:right; color:{DM_TEXT};
+  }}
+  .run-table td:first-child {{ text-align:left; font-weight:600; }}
+  .run-table tr:last-child td {{ border-bottom:none; }}
+  .run-now td {{ background:{DM_SURFACE2}; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -136,12 +188,11 @@ def _month_num(reference_period_desc: str):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_series(short_desc: str, years: tuple, domaincat_filter: str = None) -> pd.DataFrame:
-    # Reads the shared NASS cache (see usda-nass-etl's jobs/cattle_on_feed.py)
-    # instead of calling NASS live. The ETL caches ONE broad, unfiltered pull
-    # per series -- no year bounds, no domaincat_desc -- because a cache key
-    # built from year__GE/year__LE (which shift every January) would go stale
-    # annually and silently miss. Year range and the 1,000+-head domaincat
-    # filter are therefore applied locally below instead of server-side.
+    # Reads the shared NASS cache (usda-nass-etl jobs/cattle_on_feed.py), not NASS
+    # live. The ETL caches ONE broad, unfiltered pull per series -- no year bounds,
+    # no domaincat_desc -- because a key built from year__GE/year__LE (which shift
+    # every January) would go stale annually and silently miss. The year range and
+    # the 1,000+-head domaincat filter are applied locally below instead.
     params = {
         "source_desc":       "SURVEY",
         "sector_desc":       "ANIMALS & PRODUCTS",
@@ -404,6 +455,336 @@ def _to_excel(sheets: dict) -> bytes:
     return buf.getvalue()
 
 
+# ── Cold Storage ─────────────────────────────────────────────────────────────
+# The second report on this page. Fetching and the MoM/YoY arithmetic live in
+# cold_storage.py; everything below is this page's brand and layout, which is
+# why it is here rather than there — same split as cof_recap.
+
+CS_HEADLINE = ["Beef, total", "Pork, total", cold_storage.TOTAL_RED_MEAT]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cs_fetch(label: str) -> pd.DataFrame:
+    return cold_storage.fetch_series(cold_storage.SERIES[label], _month_num)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cs_load(label: str) -> pd.DataFrame:
+    if label == cold_storage.TOTAL_RED_MEAT:
+        return cold_storage.combine({k: _cs_fetch(k) for k in cold_storage.RED_MEAT_PARTS})
+    return _cs_fetch(label)
+
+
+def _cs_mlb(lb) -> str:
+    """Pounds in as million pounds out. USDA prints thousand pounds, which runs
+    to six digits on every red-meat line and reads worse at a glance."""
+    return "—" if lb is None or pd.isna(lb) else f"{lb / 1e6:,.1f}"
+
+
+def _cs_card(label: str, frame: pd.DataFrame, accent: str = JSA_GREEN) -> str:
+    kpi = cold_storage.latest(frame)
+    if not kpi:
+        return _snap_card(label, "—", "", _dc(None), _dc(None), accent=accent)
+    return _snap_card(
+        label, _cs_mlb(kpi["value"]), "million lb",
+        _dc(kpi["mom"], "+.1f", "%") + " " + _dc(kpi["mom_abs"] / 1e6 if kpi["mom_abs"] is not None else None, "+,.1f", "M"),
+        _dc(kpi["yoy"], "+.1f", "%") + " " + _dc(kpi["yoy_abs"] / 1e6 if kpi["yoy_abs"] is not None else None, "+,.1f", "M"),
+        accent=accent, foot=kpi["date"].strftime("%b %Y"),
+    )
+
+
+def _cs_span(run: dict) -> str:
+    if run["start"] == run["end"]:
+        return run["start"].strftime("%b %Y")
+    return f'{run["start"]:%b %Y} – {run["end"]:%b %Y}'
+
+
+def _cs_callout(label: str, frame: pd.DataFrame) -> str:
+    """The question this view exists to answer: when was this last building?
+
+    Written against YEAR-OVER-YEAR, not month-over-month. Cold storage beef
+    fills from September into December and empties through the summer every
+    single year, so an MoM rise in October says nothing about the market. The
+    streaks below are months above year-ago.
+    """
+    kpi = cold_storage.latest(frame)
+    if not kpi or kpi["yoy"] is None:
+        return ""
+
+    rising    = cold_storage.yoy_runs(frame, rising=True)
+    falling   = cold_storage.yoy_runs(frame, rising=False)
+    building  = kpi["yoy"] > 0
+    current   = (rising if building else falling)
+    current   = current[-1] if current and current[-1]["end"] == kpi["date"] else None
+    n         = current["months"] if current else 0
+    streak    = "month" if n == 1 else "months"
+
+    lead = (
+        f'<b>{label}</b> stocks are <b style="color:{COL_POS if building else COL_NEG}">'
+        f'{"building" if building else "drawing down"}</b>. '
+        f'{kpi["date"]:%B %Y} came in at {_cs_mlb(kpi["value"])} million lb, '
+        f'{kpi["yoy"]:+.1f}% on the year and {kpi["mom"]:+.1f}% on the month — '
+        f'{n} straight {streak} {"above" if building else "below"} year-ago.'
+    )
+
+    # When stocks are building, the useful comparison is the run before this
+    # one; when they are not, it is the last run of any length that was.
+    prior = [r for r in rising if current is None or r["end"] < current["start"]]
+    if prior:
+        p = prior[-1]
+        gap = (f'{"Before this, the" if building else "The"} last run above year-ago was '
+               f'<b>{_cs_span(p)}</b> — {p["months"]} {"month" if p["months"] == 1 else "months"}, '
+               f'averaging {p["avg"]:+.1f}%.')
+    else:
+        gap = "No earlier run above year-ago in the published history."
+
+    longest = max(rising, key=lambda r: r["months"]) if rising else None
+    best = (f' Longest on record: <b>{_cs_span(longest)}</b>, {longest["months"]} months.'
+            if longest else "")
+
+    return (f'<div class="cs-call"><div class="cs-call-lead">{lead}</div>'
+            f'<div class="cs-call-sub">{gap}{best}</div></div>')
+
+
+def _cs_runs_table(frame: pd.DataFrame, n: int = 12) -> str:
+    runs = cold_storage.yoy_runs(frame, rising=True)
+    if not runs:
+        return '<div class="cs-call-sub">No months above year-ago in the published history.</div>'
+    kpi = cold_storage.latest(frame)
+    tag = (f'&nbsp;<span style="font-weight:400;color:{JSA_GREEN}">current</span>')
+    rows = []
+    for r in runs[-n:][::-1]:
+        live = bool(kpi) and r["end"] == kpi["date"]
+        rows.append(
+            f'<tr class="{"run-now" if live else ""}">'
+            f'<td>{_cs_span(r)}{tag if live else ""}</td>'
+            f'<td>{r["months"]}</td>'
+            f'<td class="pos">{r["avg"]:+.1f}%</td>'
+            f'<td class="pos">{r["peak"]:+.1f}%</td></tr>'
+        )
+    return ('<table class="run-table"><thead><tr><th>Months above year-ago</th>'
+            '<th>Length</th><th>Avg YoY</th><th>Peak YoY</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table>')
+
+
+def _cs_history_chart(frame: pd.DataFrame, label: str, height: int = 420) -> go.Figure:
+    d = frame.dropna(subset=["value"])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=d["date"], y=d["value"] / 1e6, mode="lines", name=label,
+        line=dict(color=JSA_GREEN, width=1.8),
+        hovertemplate="%{x|%b %Y}: %{y:,.1f}M lb<extra></extra>",
+    ))
+    _apply(fig, height=height, y_title="Million lb")
+    fig.update_layout(showlegend=False)
+    return fig
+
+
+def _cs_yoy_chart(frame: pd.DataFrame, height: int = 380) -> go.Figure:
+    d = frame.dropna(subset=["yoy"])
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d["date"], y=d["yoy"],
+        marker_color=[COL_POS if v >= 0 else COL_NEG for v in d["yoy"]],
+        hovertemplate="%{x|%b %Y}: %{y:+.1f}%<extra></extra>",
+    ))
+    _apply(fig, height=height, y_title="% change vs. year-ago")
+    fig.update_yaxes(ticksuffix="%")
+    fig.update_layout(showlegend=False, bargap=0)
+    return fig
+
+
+def _cs_season_chart(frame: pd.DataFrame, n_years: int = 7, height: int = 420) -> go.Figure:
+    d = frame.dropna(subset=["value"]).copy()
+    if d.empty:
+        return go.Figure()
+    d["year"], d["month"] = d["date"].dt.year, d["date"].dt.month
+    years  = sorted(d["year"].unique())[-min(n_years, len(YEAR_PALETTE)):]
+    colors = YEAR_PALETTE[-len(years):]
+    fig = go.Figure()
+    for yr, color in zip(years, colors):
+        yd = d[d["year"] == yr].sort_values("month")
+        fig.add_trace(go.Scatter(
+            x=yd["month"], y=yd["value"] / 1e6, mode="lines+markers", name=str(yr),
+            line=dict(color=color, width=2.6 if yr == years[-1] else 1.8),
+            marker=dict(size=5 if yr == years[-1] else 4),
+        ))
+    _apply(fig, height=height, y_title="Million lb")
+    fig.update_xaxes(tickmode="array", tickvals=list(range(1, 13)),
+                      ticktext=[MONTH_ABBR[m] for m in range(1, 13)])
+    return fig
+
+
+def render_cold_storage() -> None:
+    labels = list(cold_storage.SERIES) + [cold_storage.TOTAL_RED_MEAT]
+    label = st.sidebar.selectbox("Commodity", labels, index=0)
+
+    st.sidebar.divider()
+    st.sidebar.markdown(
+        f'<div style="color:{DM_MUTED};font-size:.68rem;line-height:1.6">'
+        f'Stocks are end-of-month, released about three weeks later — the '
+        f'{cold_storage.FIRST_YEAR.get(label, "")} start is the whole published '
+        f'history for this series, national only. Each release also restates '
+        f'the month before it, so a prior figure here can move.</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("Loading USDA Cold Storage history…"):
+        raw = _cs_load(label)
+        heads = {k: cold_storage.monthly_frame(_cs_load(k)) for k in CS_HEADLINE}
+
+    frame = cold_storage.monthly_frame(raw)
+    kpi   = cold_storage.latest(frame)
+
+    hdr_l, hdr_r = st.columns([4, 1])
+    with hdr_l:
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:24px;padding:10px 0 8px">
+          <img src="{JSA_LOGO_FULL}" style="height:68px" />
+          <div>
+            <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
+              JSA - USDA Cold Storage
+            </div>
+            <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
+              {label} &nbsp;·&nbsp; USDA NASS QuickStats &nbsp;·&nbsp; End-of-month stocks, all warehouses, United States
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with hdr_r:
+        # Stocks are AS OF the last calendar day of the month. The frame keys
+        # months on the 1st, so the header has to roll to month-end or it
+        # reads "Aug 01" for a figure USDA labels "August 31".
+        _first = frame["date"].min().strftime("%b %Y") if not frame.empty else "N/A"
+        _last  = (kpi["date"] + pd.offsets.MonthEnd(0)).strftime("%b %d, %Y") if kpi else "N/A"
+        st.markdown(f"""
+        <div style="text-align:right;padding-top:6px;font-size:0.75rem">
+          <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Stocks as of</div>
+          <div style="color:{DM_TEXT};font-weight:700;font-size:0.9rem;margin-bottom:8px">{_last}</div>
+          <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">History from</div>
+          <div style="color:{DM_TEXT};font-weight:700;font-size:0.9rem">{_first}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    st.divider()
+
+    if not kpi:
+        st.error("No data returned from USDA NASS QuickStats for this series — "
+                 "the shared NASS cache has no rows for it (usda-nass-etl jobs/cold_storage.py).")
+        return
+
+    tab_over, tab_hist, tab_season, tab_data = st.tabs([
+        "⭐  Overview", "📈  Full History", "📅  Seasonality", "📋  Data",
+    ])
+
+    with tab_over:
+        cards = [label] + [k for k in CS_HEADLINE if k != label]
+        cols = st.columns(len(cards))
+        for col, name in zip(cols, cards):
+            with col:
+                f = frame if name == label else heads[name]
+                st.markdown(_cs_card(name, f, JSA_GREEN if name == label else JSA_GREEN_LT),
+                            unsafe_allow_html=True)
+
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+        st.markdown(_cs_callout(label, frame), unsafe_allow_html=True)
+
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            st.markdown('<div class="sec-hdr">Year-over-year change, last 10 years</div>',
+                        unsafe_allow_html=True)
+            recent = frame[frame["date"] >= kpi["date"] - pd.DateOffset(years=10)]
+            st.plotly_chart(_cs_yoy_chart(recent), width="stretch")
+        with c2:
+            st.markdown('<div class="sec-hdr">Runs above year-ago</div>', unsafe_allow_html=True)
+            st.markdown(_cs_runs_table(frame), unsafe_allow_html=True)
+
+    with tab_hist:
+        span = st.radio("Window", ["10 years", "25 years", "50 years", "All"],
+                        index=1, horizontal=True, key="cs_span")
+        cut = {"10 years": 10, "25 years": 25, "50 years": 50}.get(span)
+        d = frame if cut is None else frame[frame["date"] >= kpi["date"] - pd.DateOffset(years=cut)]
+        st.plotly_chart(_cs_history_chart(d, label), width="stretch")
+        st.markdown('<div class="sec-hdr">Year-over-year change, same window</div>',
+                    unsafe_allow_html=True)
+        st.plotly_chart(_cs_yoy_chart(d, height=320), width="stretch")
+        st.caption(
+            f"{label} · {frame['date'].min():%b %Y} – {kpi['date']:%b %Y} · "
+            f"{int(frame['value'].notna().sum()):,} months published"
+            + (f", {int(frame['value'].isna().sum())} not reported"
+               if frame["value"].isna().any() else "")
+        )
+
+    with tab_season:
+        n_years = st.slider("Years overlaid", 3, 8, 7, key="cs_years")
+        st.plotly_chart(_cs_season_chart(frame, n_years), width="stretch")
+        st.caption("Each line is one calendar year of end-of-month stocks. The build "
+                   "from late summer into winter is the seasonal pattern that makes "
+                   "month-over-month a poor read on its own.")
+
+    with tab_data:
+        out = frame.dropna(subset=["value"]).copy()
+        out = out.sort_values("date", ascending=False)
+        # Thousand pounds, which is the unit USDA's own tables print, so a row
+        # here can be checked against the PDF without arithmetic.
+        table = pd.DataFrame({
+            "Month":         out["date"].dt.strftime("%Y-%m"),
+            "Stocks (1,000 lb)": (out["value"] / 1e3).round(0),
+            "MoM (1,000 lb)":    (out["mom_abs"] / 1e3).round(0),
+            "MoM %":             out["mom"].round(2),
+            "YoY (1,000 lb)":    (out["yoy_abs"] / 1e3).round(0),
+            "YoY %":             out["yoy"].round(2),
+        })
+        _lb_col  = st.column_config.NumberColumn(format="%,.0f")
+        _pct_col = st.column_config.NumberColumn(format="%.2f%%")
+        st.dataframe(
+            table, width="stretch", hide_index=True, height=520,
+            column_config={
+                "Stocks (1,000 lb)": _lb_col, "MoM (1,000 lb)": _lb_col,
+                "YoY (1,000 lb)": _lb_col, "MoM %": _pct_col, "YoY %": _pct_col,
+            },
+        )
+        d1, d2 = st.columns(2)
+        stem = label.lower().replace(", ", "_").replace(" ", "_").replace("(", "").replace(")", "")
+        with d1:
+            st.download_button("⬇  CSV", table.to_csv(index=False).encode(),
+                               f"cold_storage_{stem}.csv", "text/csv",
+                               width="stretch")
+        with d2:
+            st.download_button("⬇  Excel", _to_excel({"Cold Storage": table}),
+                               f"cold_storage_{stem}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               width="stretch")
+        # The report that carries a month's stocks is published the FOLLOWING
+        # month, so August stocks live in cost0926.pdf — hence the roll, and
+        # the year roll with it for a December figure.
+        _rep = kpi["date"] + pd.DateOffset(months=1)
+        st.caption(
+            "Source: USDA NASS QuickStats — "
+            f"`{cold_storage.SERIES.get(label, 'sum of ' + ', '.join(cold_storage.RED_MEAT_PARTS))}`. "
+            f"Released report: {cold_storage.report_url(_rep.year, _rep.month)}"
+        )
+
+
+# ── Report switch ────────────────────────────────────────────────────────────
+# Two different USDA reports, not two views of one. Cold Storage asks what is
+# in the freezer rather than what is in the yard, and it reads its own series,
+# so it sits behind a switch: on the Cold Storage view the Cattle on Feed
+# QuickStats load never runs, and on the Cattle on Feed view the cold storage
+# one never does.
+#
+# It is placed ABOVE the load and above the st.stop() that guards it, which is
+# the other half of the point: a QuickStats outage on the six Cattle on Feed
+# series cannot take Cold Storage down with it.
+
+VIEW_COF = "Cattle on Feed"
+VIEW_CS  = "Cold Storage"
+
+view = st.segmented_control(
+    "Report", (VIEW_COF, VIEW_CS), default=VIEW_COF,
+    label_visibility="collapsed", key="cof_view",
+) or VIEW_COF          # deselecting the active segment returns None
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 st.sidebar.markdown(
@@ -413,14 +794,21 @@ st.sidebar.markdown(
 st.sidebar.markdown(
     f'<div style="background:{JSA_GREEN};border-radius:4px;padding:5px 10px;'
     f'font-size:.7rem;color:#fff;font-weight:600;letter-spacing:.08em;'
-    f'text-transform:uppercase;margin-bottom:10px">Cattle on Feed</div>',
+    f'text-transform:uppercase;margin-bottom:10px">{view}</div>',
     unsafe_allow_html=True,
 )
 st.sidebar.markdown(
-    f'<span style="color:{DM_MUTED};font-size:.72rem">USDA NASS · Feedlots, 1,000+ head</span>',
+    f'<span style="color:{DM_MUTED};font-size:.72rem">'
+    + ("USDA NASS · End-of-month warehouse stocks"
+       if view == VIEW_CS else "USDA NASS · Feedlots, 1,000+ head")
+    + '</span>',
     unsafe_allow_html=True,
 )
 st.sidebar.divider()
+
+if view == VIEW_CS:
+    render_cold_storage()
+    st.stop()
 
 current_year = datetime.now().year
 LOAD_YEARS  = tuple(range(current_year - 8, current_year + 1))
@@ -440,13 +828,164 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
+# ── Header slot ────────────────────────────────────────────────────
+# The header is written into this container further down, once the QuickStats
+# data is in hand. Reserving its position here lets the tab bar and the COF
+# Recap tab render BEFORE the load, so a QuickStats failure cannot take down a
+# tab that never needed QuickStats. On a failure the container carries the
+# error message instead of the header.
+header_slot = st.container()
+
+# ── Tabs ─────────────────────────────────────────────────────────────────────
+
+tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
+    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
+])
+
+# ── COF Recap ─────────────────────────────────────────────────────────────────
+# The client one-pager, drawn BEFORE the QuickStats load on purpose: it reads
+# USDA's released report text over plain HTTP and needs neither that API nor a
+# key, so an outage there must not take it down. Tab display order is set by
+# st.tabs, not by where these blocks sit, so it still shows up second.
+# Deliberately NOT built off the QuickStats frames the
+# rest of this page uses: it reads USDA's released report text so the state
+# percentages are USDA's own rounded figures rather than ours, and so the
+# weight-class breakdown (absent from the series above) comes along with them.
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _latest_recap():
+    """(recap dict, error string). Cached so the tab does not refetch per rerun."""
+    year, month, text = cof_recap.latest_report()
+    if not text:
+        return None, "Could not reach the USDA report file at nass.usda.gov."
+    prior = cof_recap.fetch_report(year - 1, month)
+    return cof_recap.build_recap(year, month, text, prior), ""
+
+
+# The guesses are the one thing on the recap that cannot be re-derived, so they
+# live in the URL rather than in widget state alone: a reload, a session
+# timeout or an app reboot would otherwise mean retyping them, and the filled-in
+# link can be bookmarked or handed to someone else.
+_QP_GUESS = {"on_feed": "g_onfeed", "placed": "g_placed", "marketed": "g_mkt"}
+
+
+def _qp_float(key: str):
+    try:
+        return float(st.query_params[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _qp_write(key: str, text: str):
+    """Set or clear one query param, only when it actually changes."""
+    current = st.query_params.get(key)
+    if not text:
+        if current is not None:
+            del st.query_params[key]
+    elif current != text:
+        st.query_params[key] = text
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _recap_image(fig_json: str, fmt: str) -> bytes | None:
+    try:
+        import plotly.io as pio
+        kw = {"scale": 2} if fmt == "png" else {}
+        return pio.from_json(fig_json).to_image(format=fmt, **kw)
+    except Exception:
+        return None
+
+
+with tab_recap:
+    recap, err = _latest_recap()
+    if err:
+        st.error(err)
+    else:
+        st.markdown('<div class="sec-hdr">Pre-report analyst estimates</div>',
+                    unsafe_allow_html=True)
+        st.caption("The only figures USDA does not publish — type in whatever survey "
+                   "you quote to clients. Everything else is read from the release.")
+        g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
+        # value= seeds the widget from the URL on first render only; after that
+        # the explicit key owns the state and the write-back below keeps the URL
+        # in step.
+        guesses = {
+            "on_feed":  g1.number_input("On-Feed guess",  value=_qp_float("g_onfeed"),
+                                        step=0.1, format="%.1f", placeholder="101.8",
+                                        key="cof_g_onfeed"),
+            "placed":   g2.number_input("Placed guess",   value=_qp_float("g_placed"),
+                                        step=0.1, format="%.1f", placeholder="96.8",
+                                        key="cof_g_placed"),
+            "marketed": g3.number_input("Marketed guess", value=_qp_float("g_mkt"),
+                                        step=0.1, format="%.1f", placeholder="96.1",
+                                        key="cof_g_mkt"),
+        }
+        guess_source = g4.text_input("Source label (footer)",
+                                     value=st.query_params.get("g_src", ""),
+                                     key="cof_g_src")
+        show_footer = st.checkbox("Show source footer on the page", value=True)
+
+        for _key, _param in _QP_GUESS.items():
+            _val = guesses[_key]
+            _qp_write(_param, "" if _val is None else f"{_val:.1f}")
+        _qp_write("g_src", guess_source.strip())
+        if any(v is not None for v in guesses.values()):
+            st.caption("Your guesses are in the page URL — bookmark it, or send it on, "
+                       "and it reopens filled in.")
+
+        st.divider()
+        fig = cof_recap.build_figure(recap, guesses=guesses, footer=show_footer,
+                                     guess_source=guess_source)
+        left, right = st.columns([3, 2])
+        with left:
+            st.plotly_chart(fig, config={"displayModeBar": False})
+        with right:
+            released = recap["release_date"]
+            st.markdown(
+                f'<div class="sec-hdr">{recap["title"]}</div>'
+                f'<p style="color:{DM_MUTED};font-size:.82rem;line-height:1.5">'
+                f'Released {released:%B %d, %Y}.<br>'
+                f'On-feed as of the 1st; placements and marketings for '
+                f'{recap["placement_month"]}.</p>', unsafe_allow_html=True)
+            stem = f"{cof_recap.MONTH_ABBR[recap['month'] - 1]}_{recap['year']}_COF_Report"
+            # Gated behind a button, like livestock_seasonal's export_row: a
+            # hidden tab still runs every rerun, and to_image spins up Chromium,
+            # so rendering eagerly would tax every widget on the whole page.
+            if st.button("Prepare download", width="stretch",
+                         help="Renders the page above as PNG and PDF."):
+                st.session_state["recap_export_ready"] = True
+            if st.session_state.get("recap_export_ready"):
+                fig_json = fig.to_json()
+                with st.spinner("Rendering…"):
+                    png, pdf = _recap_image(fig_json, "png"), _recap_image(fig_json, "pdf")
+                if png:
+                    st.download_button("Download PNG", png, file_name=f"{stem}.png",
+                                       mime="image/png", width="stretch")
+                if pdf:
+                    st.download_button("Download PDF", pdf, file_name=f"{stem}.pdf",
+                                       mime="application/pdf", width="stretch")
+                if not png and not pdf:
+                    st.warning("Image export failed on the host. The table above still "
+                               "renders — use the camera icon on its toolbar.")
+            st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
+
+
 # ── Load data ────────────────────────────────────────────────────────────────
 
-with st.spinner("Loading USDA NASS data…"):
-    inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
+# Spinner goes in the reserved header slot, not here: this block now runs after
+# the tab bar has been drawn, so an un-slotted spinner would appear underneath
+# the tab content instead of at the top of the page where the header is landing.
+with header_slot:
+    with st.spinner("Loading USDA NASS data…"):
+        inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
 
 if inv.empty:
-    st.error("No data returned from USDA NASS. Check your API key in st.secrets.")
+    with header_slot:
+        st.error("No data returned from USDA NASS QuickStats — check the API key "
+                 "in st.secrets. The COF Recap tab reads USDA's released report "
+                 "file directly and is unaffected; the tabs that need this data "
+                 "will be empty.")
     st.stop()
 
 inv_s    = series_for(inv, state)
@@ -474,7 +1013,7 @@ if latest_h_row is not None:
 
 # ── Header ───────────────────────────────────────────────────────────────────
 
-hdr_l, hdr_r = st.columns([4, 1])
+hdr_l, hdr_r = header_slot.columns([4, 1])
 with hdr_l:
     st.markdown(f"""
     <div style="display:flex;align-items:center;gap:24px;padding:10px 0 8px">
@@ -506,13 +1045,7 @@ with hdr_r:
       </div>
     </div>
     """, unsafe_allow_html=True)
-st.divider()
-
-# ── Tabs ─────────────────────────────────────────────────────────────────────
-
-tab_summary, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
-    "⭐  Summary", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
-])
+header_slot.divider()
 
 # ── Summary ────────────────────────────────────────────────────────────────────
 with tab_summary:

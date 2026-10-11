@@ -59,9 +59,7 @@
   },
   "cattle_on_feed": {
    "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/cattle_on_feed",
-   "sync": false,
-   "why": "this copy reads the shared NASS cache (no key); livestock-portal's still calls NASS live. Land the cache change in livestock-portal first, then sync (that also brings Cold Storage, which calls NASS live and needs its own ETL job)."
+   "subdir": "apps/cattle_on_feed"
   },
   "cme_feeder_cattle": {
    "repo": "JSA-Dashboards/livestock-portal",
