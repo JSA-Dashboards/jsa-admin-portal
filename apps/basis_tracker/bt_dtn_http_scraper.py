@@ -1,0 +1,457 @@
+"""dtn_http_scraper.py — browser-free replacement for dtn_playwright_scraper.
+
+DTN/aghost cash-bid pages hide the basis/cash behind a per-load `displayNumber(x)`
+JS obfuscation: the real value = x run through a sequence of `x = <±const>` lines
+(constants randomized every request) then rounded. Both the args and the decoder
+are in the served HTML, so we fetch over HTTP, rebuild displayNumber() in Python,
+and decode — no Chromium.
+
+Row layout (single): <th>delivery</th> displayNumber(basis) displayNumber(cash)
+@symbol futures-price futures-change. So per bid row the FIRST displayNumber arg
+is the basis. Same output shape as dtn_playwright_scraper.fetch_dtn_playwright so
+auto_import can swap it in.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime, timezone
+
+import httpx
+
+from bt_models import NewSnapshotRequest, SnapshotRow
+from bt_vistacomm_scraper import _fut_symbol, _basis_cents, _PFX, _DTN_RE
+
+log = logging.getLogger(__name__)
+
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+# aghost sites (same platform / displayNumber obfuscation) — fully browser-free
+# here. "columnar" sites carry several plants side-by-side (parsed per column).
+# NOT handled here (see fetch_dtn_playwright fallback):
+#   * GreenAmerica (greenamericabiofuels.com) — a NEWER DTN "content-services"
+#     JS widget, not aghost; different crack entirely.
+# (Heron Lake + Granite Falls moved to CIHedging — see cihedging_scraper.py.)
+SITES: list[dict] = [
+    {"provider": "E Energy", "location": "Adams, NE", "state": "NE",
+     "facility_type": "Corn Processing", "grain": "Corn",
+     "url": "https://corn.eenergyadams.com/index.cfm?show=11&mid=6"},
+    {"provider": "Dakota Ethanol", "location": "Wentworth, SD", "state": "SD",
+     "facility_type": "Corn Processing", "grain": "Corn",
+     "url": "https://www.dakotaethanol.com/index.cfm?show=11&mid=3"},
+    {"provider": "Pennsylvania Grain Processing", "location": "Clymer, PA", "state": "PA",
+     "facility_type": "Corn Processing", "grain": "Corn",
+     "url": "http://dtn.pagrain.com/index.cfm?show=11&mid=3"},
+    {"provider": "Glacial Lakes", "state": "SD", "facility_type": "Corn Processing",
+     "grain": "Corn", "columnar": True,
+     "url": "https://corn.glaciallakesenergy.com/"},
+    {"provider": "Elbow Lake Co-op Grain", "location": "Elbow Lake, MN", "state": "MN",
+     "facility_type": "Country Elevator", "grain": "Corn",
+     "url": "https://www.elbowlakecoopgrain.com/index.cfm?show=11&mid=5"},
+    {"provider": "Highwater Ethanol", "location": "Lamberton, MN", "state": "MN",
+     "facility_type": "Corn Processing", "grain": "Corn",
+     "url": "https://www.highwaterethanol.com/index.cfm?show=11&mid=36"},
+    # Bellingham Farmers Co-op (MN) — single aghost page posting corn/soy/wheat;
+    # grain is now derived per-row from the futures symbol (see _ROOT_GRAIN).
+    {"provider": "Bellingham Farmers Co-op", "location": "Bellingham, MN", "state": "MN",
+     "facility_type": "Country Elevator", "grain": "Corn",
+     "url": "http://www.bellinghamfarmerscoop.com/index.cfm?show=11&mid=3"},
+    # Jennie-O turkey feed mills — one aghost page per plant via ?theLocation=N.
+    *[{"provider": "Jennie-O", "location": f"{_town}, {_st}", "state": _st,
+       "facility_type": "Feed Mill", "grain": "Corn", "portal": True,
+       "url": f"https://jennieo.aghostportal.com/index.cfm?show=11&mid=3&theLocation={_id}&layout=1046"}
+      for _town, _st, _id in [
+          ("Atwater", "MN", 1), ("Barron", "WI", 2), ("Dawson", "MN", 3),
+          ("Faribault", "MN", 4), ("Perham", "MN", 7)]],
+]
+
+_SYM_RE = re.compile(r"@[A-Z]{1,2}\d[FGHJKMNQUVXZ]")
+_ARITH_RE = re.compile(r"^[\dx.+\-()\s]+$")
+_DELIV_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)\b|FH |LH |NC |Balance|"
+    r"By |Split|OND|\bND\b|JFM|AMJJ", re.I)
+
+
+_COND_RE = re.compile(r"^[\dx.+\-()\s><=]+$")
+
+
+def _fn_body(html: str) -> str | None:
+    """Brace-match the displayNumber function body."""
+    i = html.find("function displayNumber")
+    if i < 0:
+        return None
+    b = html.find("{", i)
+    if b < 0:
+        return None
+    depth = 0
+    for j in range(b, len(html)):
+        if html[j] == "{":
+            depth += 1
+        elif html[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return html[b + 1:j]
+    return None
+
+
+def _build_decoder(html: str):
+    """Rebuild displayNumber(x) from the page's own JS. The obfuscation is a series of
+    optionally-`if( A >= B )`-guarded `x = <arithmetic>` statements (both the guards
+    and the constants are randomized per load), ending in document.write. We parse it
+    into (condition, expr) ops and interpret them. Returns a decode fn or None."""
+    body = _fn_body(html)
+    if body is None:
+        return None
+    ops = []
+    for stmt in body.split(";"):
+        s = stmt.strip()
+        if not s or s == "x = x" or s.replace(" ", "") == "x=x":
+            continue
+        if "document.write" in s or "return" in s:
+            break
+        m = re.match(r"if\s*\((.+?)\)\s*x\s*=\s*(.+)$", s, re.S)      # guarded assignment
+        if m:
+            cond, expr = m.group(1).strip(), m.group(2).strip()
+            if not _COND_RE.match(cond) or not _ARITH_RE.match(expr):
+                return None
+            ops.append((cond, expr))
+            continue
+        m = re.match(r"x\s*=\s*(.+)$", s, re.S)                       # plain assignment
+        if m:
+            expr = m.group(1).strip()
+            if not _ARITH_RE.match(expr):
+                return None
+            ops.append((None, expr))
+    if not ops:
+        return None
+
+    def decode(arg) -> float | None:
+        try:
+            x = float(arg)
+            for cond, expr in ops:
+                if cond is None or eval(cond, {"__builtins__": {}}, {"x": x}):
+                    x = eval(expr, {"__builtins__": {}}, {"x": x})
+            return round(x, 2)
+        except Exception:
+            return None
+
+    return decode
+
+
+# CME symbol root → (grain label). Lets a multi-commodity aghost page (e.g.
+# Bellingham posts corn/soy/wheat on one grid) label each row by its own futures
+# symbol instead of a single configured grain. Corn-only sites are unaffected.
+_ROOT_GRAIN = {"ZC": "Corn", "ZS": "Soybeans", "ZW": "Wheat", "KE": "Wheat",
+               "MW": "Wheat", "ZM": "Soybean Meal", "ZL": "Soybean Oil", "ZO": "Oats"}
+
+_DN_RE = re.compile(r"displayNumber\(([-0-9.]+)\s*,\s*\d\)")
+# delivery label anywhere: opt FH/LH, then a month (abbrev or full, any case) or
+# "New Crop", then a 4-digit year. Handles Sept/SEPT/September 2026, New Crop 2027.
+_DELIV_RE_HTML = re.compile(
+    r"(?:FH |LH )?(?:New Crop|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?)"
+    r"\s*20\d\d", re.I)
+
+
+def _parse_site(html: str, cfg: dict) -> NewSnapshotRequest | None:
+    decode = _build_decoder(html)
+    if decode is None:
+        log.warning("DTN(http) %s: no displayNumber decoder found", cfg["location"])
+        return None
+    cfg_root = {"Corn": "ZC", "Soybeans": "ZS", "Wheat": "ZW"}.get(cfg["grain"], "")
+
+    # Position-based, DOM-structure-agnostic: displayNumber args run [basis, cash] per
+    # row in document order, so even-indexed calls are the basis. For each, the row's
+    # delivery is the nearest label BEFORE it and the futures symbol is the nearest @
+    # AFTER it. Works whether the markup is one lumped table or clean per-row <tr>s.
+    dns = [(m.start(), m.group(1)) for m in _DN_RE.finditer(html)]
+    delivs = [(m.start(), re.sub(r"\s+", " ", m.group(0)).strip())
+              for m in _DELIV_RE_HTML.finditer(html)]
+    syms = [(m.start(), m.group(0)) for m in _SYM_RE.finditer(html)]
+
+    rows: list[SnapshotRow] = []
+    seen: set[str] = set()
+    for idx in range(0, len(dns) - 1, 2):             # each row = a (basis, cash) pair
+        (pos, a0), (_, a1) = dns[idx], dns[idx + 1]
+        # basis vs cash order flips across sites — basis is the small one (|v| < 2),
+        # cash is the ~4-6 flat price. Pick the small member of the pair as basis.
+        cands = [v for v in (decode(a0), decode(a1)) if v is not None and abs(v) < 2]
+        if not cands:
+            continue
+        bv = min(cands, key=abs)
+        delivery = next((d for p, d in reversed(delivs) if p < pos), "")
+        # symbol: the one physically CLOSEST to this basis cell (same row) — its column
+        # sits before the DN on some sites, after on others, and repeats per row.
+        sym = min(syms, key=lambda ps: abs(ps[0] - pos))[1] if syms else ""
+        if not delivery or not sym:
+            continue
+        cme = _fut_symbol(sym)
+        basis = _basis_cents(f"{bv:.2f}")
+        if not cme or basis is None:
+            continue
+        root = cme[:2]                       # grain/prefix from the row's own symbol
+        grain = _ROOT_GRAIN.get(root, cfg["grain"])
+        pfx = _PFX.get(root if root in _ROOT_GRAIN else cfg_root, "XX")
+        del_key = "".join(ch for ch in delivery.upper() if ch.isalnum()) or cme
+        row_id = f"{pfx}_{cme}_{del_key}"
+        if row_id in seen:
+            continue
+        seen.add(row_id)
+        rows.append(SnapshotRow(id=row_id, grain=grain, deliveryMonth=delivery,
+                                futuresSymbol=cme, basisCents=basis, isSpot=False))
+    if not rows:
+        return None
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    return NewSnapshotRequest(timestamp=ts, provider=cfg["provider"],
+                              location=cfg["location"], source="web", rows=rows)
+
+
+_MON = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
+_PORTAL_DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{2,4})")
+
+
+def _parse_portal(html: str, cfg: dict) -> NewSnapshotRequest | None:
+    """aghostportal.com hosted layout (e.g. Jennie-O feed mills). Unlike the classic
+    aghost page, each bid is a clean <tr>: <th><span>M/D/YY</span></th> (the delivery
+    date, END of the window) then displayNumber(basis)/displayNumber(...) cells and an
+    @-symbol. Delivery is read ONLY from the row's <th> so the per-row 'as of'
+    timestamp in the <td title=…> can't be mistaken for it. Grain per-row from symbol."""
+    from bs4 import BeautifulSoup
+    decode = _build_decoder(html)
+    if decode is None:
+        log.warning("DTN(portal) %s: no displayNumber decoder found", cfg["location"])
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[SnapshotRow] = []
+    seen: set[str] = set()
+    for tr in soup.find_all("tr"):
+        th = tr.find("th")
+        if not th:
+            continue
+        md = _PORTAL_DATE_RE.search(th.get_text(" ", strip=True))
+        symm = _SYM_RE.search(tr.get_text(" "))
+        if not md or not symm:
+            continue
+        # This layout ships MALFORMED (unclosed <tr>), so BeautifulSoup nests every
+        # following row inside this one — its cells bleed in. Each column is a
+        # [cash, basis] pair; the row's OWN bid is the FIRST pair, so read only args[:2]
+        # (basis = the small member) and the first @-symbol, ignoring the bleed.
+        args = re.findall(r"displayNumber\(([-0-9.]+)\s*,\s*\d\)", str(tr))[:2]
+        cands = [v for v in (decode(a) for a in args) if v is not None and abs(v) < 2]
+        if not cands:
+            continue
+        bv = min(cands, key=abs)
+        cme = _fut_symbol(symm.group(0))
+        basis = _basis_cents(f"{bv:.2f}")
+        if not cme or basis is None:
+            continue
+        mo, _dy, yr = md.groups()
+        yr = int(yr) + (2000 if int(yr) < 100 else 0)
+        delivery = f"{_MON.get(int(mo), int(mo))} {yr}"
+        root = cme[:2]
+        grain = _ROOT_GRAIN.get(root, cfg["grain"])
+        pfx = _PFX.get(root if root in _ROOT_GRAIN else "ZC", "XX")
+        del_key = "".join(c for c in delivery.upper() if c.isalnum()) or cme
+        row_id = f"{pfx}_{cme}_{del_key}"
+        if row_id in seen:
+            continue
+        seen.add(row_id)
+        rows.append(SnapshotRow(id=row_id, grain=grain, deliveryMonth=delivery,
+                                futuresSymbol=cme, basisCents=basis, isSpot=False))
+    if not rows:
+        return None
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    return NewSnapshotRequest(timestamp=ts, provider=cfg["provider"],
+                              location=cfg["location"], source="web", rows=rows)
+
+
+_COL_DELIV_RE = re.compile(
+    r"^(?:By |Balance\b|Split\b|New Crop\b|FH |LH |"
+    r"[A-Z][a-z]{2}-[A-Z][a-z]{2}\b|"                              # Oct-Nov, Nov-Dec
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)\b)", re.I)
+
+
+def _parse_columnar(html: str, cfg: dict):
+    """Columnar aghost grid (several plants side-by-side, e.g. Glacial Lakes:
+    Watertown/Mina/Aberdeen). Same displayNumber decode; the grid is one flat cell
+    stream laid out as delivery, then per plant [futures, @sym, basisDN, cashDN,
+    spacer]. For each symbol cell: basis = the DN just after it; plant column =
+    (sym_idx - delivery_idx - 2)//5 (handles rows where a plant has no bid).
+    Returns (list[NewSnapshotRequest] one per plant, list[metas])."""
+    from bs4 import BeautifulSoup
+    decode = _build_decoder(html)
+    if decode is None:
+        log.warning("DTN(http) %s: no displayNumber decoder found", cfg["provider"])
+        return [], []
+    plants: list[str] = []
+    for p in re.findall(r"GLE\s*-\s*([A-Za-z .]+,\s*[A-Z]{2})", html):
+        p = re.sub(r"\s+", " ", p).strip()
+        if p not in plants:
+            plants.append(p)
+    if not plants:
+        return [], []
+    soup = BeautifulSoup(html, "html.parser")
+    tables = soup.find_all("table")
+    if not tables:
+        return [], []
+    grid = max(tables, key=lambda t: len(_SYM_RE.findall(t.get_text(" "))))
+    cells = grid.find_all(["th", "td"])
+    pfx = _PFX.get({"Corn": "ZC", "Soybeans": "ZS"}.get(cfg["grain"], ""), "XX")
+
+    per_plant: dict[str, list] = {p: [] for p in plants}
+    for i, c in enumerate(cells):
+        if not _SYM_RE.fullmatch(c.get_text(" ", strip=True)):
+            continue
+        dj = next((k for k in range(i - 1, max(-1, i - 20), -1)
+                   if _COL_DELIV_RE.match(cells[k].get_text(" ", strip=True))), None)
+        if dj is None:
+            continue
+        pidx = (i - dj - 2) // 5
+        if not (0 <= pidx < len(plants)):
+            continue
+        pair = []
+        for off in (1, 2):
+            if i + off < len(cells):
+                a = re.findall(r"displayNumber\(([-0-9.]+)\s*,\s*\d\)", str(cells[i + off]))
+                if a:
+                    v = decode(a[0])
+                    if v is not None:
+                        pair.append(v)
+        cands = [v for v in pair if abs(v) < 2]
+        if not cands:
+            continue
+        per_plant[plants[pidx]].append(
+            (re.sub(r"\s+", " ", cells[dj].get_text(" ", strip=True)).strip(),
+             _SYM_RE.search(c.get_text(" ")).group(0), min(cands, key=abs)))
+
+    reqs, metas = [], []
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    for plant, raw in per_plant.items():
+        rows, seen = [], set()
+        for delivery, sym, bv in raw:
+            cme = _fut_symbol(sym)
+            basis = _basis_cents(f"{bv:.2f}")
+            if not cme or basis is None or len(delivery) > 22:
+                continue
+            del_key = "".join(ch for ch in delivery.upper() if ch.isalnum()) or cme
+            row_id = f"{pfx}_{cme}_{del_key}"
+            if row_id in seen:
+                continue
+            seen.add(row_id)
+            rows.append(SnapshotRow(id=row_id, grain=cfg["grain"], deliveryMonth=delivery,
+                                    futuresSymbol=cme, basisCents=basis, isSpot=False))
+        if not rows:
+            continue
+        reqs.append(NewSnapshotRequest(timestamp=ts, provider=cfg["provider"],
+                                       location=plant, source="web", rows=rows))
+        st = plant.split(",")[-1].strip() if "," in plant else cfg.get("state")
+        metas.append({"provider": cfg["provider"], "location": plant,
+                      "state": st, "facility_type": cfg.get("facility_type")})
+    return reqs, metas
+
+
+# ── DTN content-services JSON API (newer widget) ─────────────────────────────
+# The modern DTN cash-bids-table-widget (e.g. GreenAmerica) fetches a clean JSON
+# feed from api.dtn.com with the widget's public apikey — no obfuscation, no
+# browser. Each site is one siteId (from the widget's network call:
+# api.dtn.com/markets/sites/<siteId>/cash-bids).
+_DTN_API = "https://api.dtn.com/markets/sites/{site}/cash-bids?apikey={key}&units=us"
+_DTN_API_KEY = "aXMTOjnb89xRC2A9bzuMZ1Gt5D5pRAiJ"   # public cash-bids widget key
+API_SITES: list[dict] = [
+    {"provider": "GreenAmerica", "location": "Ord, NE", "state": "NE",
+     "facility_type": "Corn Processing", "site_id": "e0413701",
+     "origin": "https://greenamericabiofuels.com"},
+]
+_API_ROOT = {"Corn": "ZC", "Soybeans": "ZS", "Wheat": "ZW", "Milo": "ZC", "Sorghum": "ZC"}
+
+
+def _parse_api_site(cfg: dict, client: httpx.Client) -> NewSnapshotRequest | None:
+    url = _DTN_API.format(site=cfg["site_id"], key=_DTN_API_KEY)
+    hdrs = {}
+    if cfg.get("origin"):
+        hdrs["origin"] = cfg["origin"]
+        hdrs["referer"] = cfg["origin"].rstrip("/") + "/"
+    try:
+        data = client.get(url, headers=hdrs).json()
+    except Exception as exc:
+        log.warning("DTN(api) %s fetch failed: %s", cfg["location"], exc)
+        return None
+    rows: list[SnapshotRow] = []
+    seen: set[str] = set()
+    for rec in data or []:
+        sym = rec.get("symbol")
+        bp = rec.get("basisPrice")
+        if not sym or bp is None:
+            continue
+        cme = _fut_symbol(sym)
+        if not cme:
+            continue
+        grain = rec.get("commodityDisplayName") or cfg.get("grain", "Corn")
+        root = _API_ROOT.get(grain, "ZC")
+        pfx = _PFX.get(root, "XX")
+        basis = int(round(float(bp) * 100))
+        delivery = (rec.get("contractDeliveryLabel") or "").strip()
+        del_key = "".join(c for c in delivery.upper() if c.isalnum()) or cme
+        row_id = f"{pfx}_{cme}_{del_key}"
+        if row_id in seen:
+            continue
+        seen.add(row_id)
+        rows.append(SnapshotRow(id=row_id, grain=grain, deliveryMonth=delivery,
+                                futuresSymbol=cme, basisCents=basis, isSpot=False))
+    if not rows:
+        return None
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    return NewSnapshotRequest(timestamp=ts, provider=cfg["provider"],
+                              location=cfg["location"], source="web", rows=rows)
+
+
+def fetch_dtn_http(timeout: int = 25) -> tuple[list[NewSnapshotRequest], list[dict]]:
+    """Fetch the aghost cash-bid sites + DTN content-services API sites over HTTP
+    (no browser). Returns (snapshot requests, location metas)."""
+    reqs, metas = [], []
+    with httpx.Client(headers={"user-agent": _UA}, timeout=timeout,
+                      follow_redirects=True) as client:
+        for cfg in SITES:
+            label = cfg.get("location") or cfg.get("provider")
+            try:
+                html = client.get(cfg["url"]).text
+            except Exception as exc:
+                log.warning("DTN(http) %s fetch failed: %s", label, exc)
+                continue
+            if cfg.get("columnar"):
+                creqs, cmetas = _parse_columnar(html, cfg)
+                if not creqs:
+                    log.warning("DTN(http): no bids parsed for %s (columnar)", label)
+                reqs.extend(creqs)
+                metas.extend(cmetas)
+                continue
+            req = _parse_portal(html, cfg) if cfg.get("portal") else _parse_site(html, cfg)
+            if req is None:
+                log.warning("DTN(http): no bids parsed for %s", label)
+                continue
+            reqs.append(req)
+            metas.append({"provider": cfg["provider"], "location": cfg["location"],
+                          "state": cfg.get("state"), "facility_type": cfg.get("facility_type")})
+        # DTN content-services JSON API sites (GreenAmerica, …)
+        for cfg in API_SITES:
+            req = _parse_api_site(cfg, client)
+            if req is None:
+                log.warning("DTN(api): no bids parsed for %s", cfg["location"])
+                continue
+            reqs.append(req)
+            metas.append({"provider": cfg["provider"], "location": cfg["location"],
+                          "state": cfg.get("state"), "facility_type": cfg.get("facility_type")})
+    return reqs, metas
+
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s  %(message)s",
+                        datefmt="%H:%M:%S", handlers=[logging.StreamHandler(sys.stdout)])
+    reqs, metas = fetch_dtn_http()
+    for req in reqs:
+        print(f"\n  {req.provider} · {req.location} — {len(req.rows)} row(s)")
+        for r in req.rows[:14]:
+            sign = "+" if (r.basisCents or 0) >= 0 else ""
+            print(f"     {r.deliveryMonth:14s} {r.futuresSymbol:7s} {sign}{r.basisCents}c")
