@@ -104,13 +104,12 @@ require_admin_login()
 LIVE_DASHBOARDS = [
     {"title": "Basis Tracker", "category": "Cash Grain",
      "desc": "Cash grain basis history for corn and soy: processing, river, rail, and milling trends.",
-     "page": "https://jsa-basis-tracker.streamlit.app/"},
-    # Opens the standalone app, like Basis Tracker above. The bundled copy was
-    # removed on 2026-10-11 (it had drifted far behind, and a paste there
-    # archived stale futures); it is in git history if ever needed.
+     "page": "apps/basis_tracker/app.py", "url_path": "basis-tracker"},
+    # Bundled again 2026-10-11, now as a generated mirror of its own repo
+    # (sync/apps.json) so it can't drift the way the hand-copy did.
     {"title": "River FOB Portal", "category": "Cash Grain",
      "desc": "CIF NOLA, barge freight, location FOB values by river reach, net carry and return to carry.",
-     "page": "https://river-fob.streamlit.app/"},
+     "page": "apps/river_fob/app.py", "url_path": "river-fob"},
     {"title": "Rail Freight", "category": "Cash Grain",
      "desc": "USDA agtransport rail shipments — railroad, state & destination detail.",
      "page": "apps/rail_freight/app.py", "url_path": "rail-freight"},
@@ -144,12 +143,11 @@ LIVE_DASHBOARDS = [
      "desc": "Natural gas production/storage/prices + ethanol & biofuels capacity.",
      "page": "apps/eia_energy/app.py", "url_path": "eia-energy"},
 
-    # Opens the standalone app, like River FOB above. The bundled copy was removed
-    # on 2026-10-11 (it had gone stale: live TDM calls blocked from Cloud, hardcoded
-    # USDA forecasts). The standalone reads a daily Snowflake cache and live USDA PSD.
+    # Mirror of global-exports-dashboard (reads a daily Snowflake cache + live USDA
+    # PSD). The old hand-copy had gone stale; this one is synced.
     {"title": "Major Exporters", "category": "Grain Flows",
      "desc": "Monthly exports by major origin for corn, soybeans, meal and wheat, with USDA forecasts, inspections and export sales.",
-     "page": "https://global-exports-dashboard-jsa.streamlit.app/"},
+     "page": "apps/major_exporters/app.py", "url_path": "major-exporters"},
     {"title": "Rail Shipments", "category": "Grain Flows",
      "desc": "USDA agtransport weekly rail carloads by railroad and destination.",
      "page": "apps/rail_shipments/app.py", "url_path": "rail-shipments"},

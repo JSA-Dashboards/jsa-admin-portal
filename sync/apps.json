@@ -1,137 +1,162 @@
 {
-  "_comment": "Source of truth for every bundled dashboard. apps/<name>/ is a generated mirror of `repo` (optionally a `subdir` of it): edit the standalone repo, never the copy, then run `python sync/sync_apps.py apply <name>`. Apps with sync=false are skipped; `why` says why.",
-  "defaults": {
-    "branch": "master",
-    "entry": "app.py",
-    "exclude": [
-      ".git",
-      ".github",
-      ".gitignore",
-      ".gitattributes",
-      ".claude",
-      ".vscode",
-      ".idea",
-      ".venv",
-      "venv",
-      "__pycache__",
-      "*.pyc",
-      ".streamlit",
-      ".env",
-      ".env.*",
-      "requirements*.txt",
-      "packages.txt",
-      "runtime.txt",
-      "pyproject.toml",
-      "README*",
-      "CLAUDE.md",
-      "LICENSE*",
-      "*.md",
-      "*.bat",
-      "*.ps1",
-      "*.sh",
-      "*.log",
-      "tests",
-      "test_*.py",
-      "*_test.py",
-      "deploy",
-      "scripts",
-      "*.lock",
-      "*.db-journal",
-      "*.bak",
-      "*.orig",
-      "*.tmp",
-      "snowflake",
-      ".devcontainer"
-    ]
-  },
-  "apps": {
-    "beef_cutout": {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "subdir": "apps/beef_cutout"
-    },
-    "beef_weight": {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "subdir": "apps/beef_weight"
-    },
-    "cash_trade": {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "subdir": "apps/cash_trade"
-    },
-    "cattle_on_feed": {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "subdir": "apps/cattle_on_feed",
-      "sync": false,
-      "why": "this copy reads the shared NASS cache (no key); livestock-portal's still calls NASS live. Land the cache change in livestock-portal first, then sync (that also brings Cold Storage, which calls NASS live and needs its own ETL job)."
-    },
-    "cme_feeder_cattle": {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "subdir": "apps/cme_feeder_cattle"
-    },
-    "cost_of_carry": {
-      "repo": "JSA-Dashboards/cost-of-carry-calculator",
-      "branch": "main",
-      "prefix_modules": "coc_"
-    },
-    "crop_conditions": {
-      "repo": "JSA-Dashboards/crop-conditions-dashboard",
-      "private": true
-    },
-    "domestic_production": {
-      "repo": "JSA-Dashboards/domestic-production-dashboard"
-    },
-    "eia_energy": {
-      "repo": "JSA-Dashboards/eia-energy-dashboard"
-    },
-    "grain_seasonal": {
-      "repo": "JSA-Dashboards/grain-seasonal-dashboard"
-    },
-    "livestock_inventory": {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "subdir": "apps/livestock_inventory"
-    },
-    "rail_fob": {
-      "repo": "JSA-Dashboards/rail-fob-portal"
-    },
-    "rail_shipments": {
-      "repo": "JSA-Dashboards/usda-rail-dashboard"
-    },
-    "rma_map": {
-      "repo": "JSA-Dashboards/rma-production-map"
-    },
-    "vessel_lineup": {
-      "repo": "JSA-Dashboards/jsa-vessel-lineup-dashboard",
-      "sync": false,
-      "why": "upstream palette is dark (BG #0d1210) and the portal is light-only; this copy is a light fork 24 commits behind. Make the source light, then sync."
-    },
-    "teams_broadcast": {
-      "repo": "JSA-Dashboards/teams-broadcast",
-      "branch": "main",
-      "exclude": [
-        "whatsapp-service"
-      ]
-    },
-    "cftc_cot": {
-      "repo": "JSA-Dashboards/cftc-cot-dashboard",
-      "branch": "main",
-      "private": true,
-      "sync": false,
-      "why": "being edited in this repo right now; bring under sync once that work lands upstream"
-    },
-    "strip_trials": {
-      "repo": "JSA-Dashboards/yield-portal",
-      "sync": false,
-      "why": "a single page of yield-portal with renamed modules; needs its own subdir mapping"
-    },
-    "rail_freight": {
-      "repo": null,
-      "sync": false,
-      "why": "no standalone repo; superseded by Rail FOB's Shipments tab, candidate for deletion"
-    }
-  },
-  "root_files": [
-    {
-      "repo": "JSA-Dashboards/livestock-portal",
-      "path": "wasde.py"
-    }
+ "_comment": "Source of truth for every bundled dashboard. apps/<name>/ is a generated mirror of `repo` (optionally a `subdir` of it): edit the standalone repo, never the copy, then run `python sync/sync_apps.py apply <name>`. Apps with sync=false are skipped; `why` says why.",
+ "defaults": {
+  "branch": "master",
+  "entry": "app.py",
+  "exclude": [
+   ".git",
+   ".github",
+   ".gitignore",
+   ".gitattributes",
+   ".claude",
+   ".vscode",
+   ".idea",
+   ".venv",
+   "venv",
+   "__pycache__",
+   "*.pyc",
+   ".streamlit",
+   ".env",
+   ".env.*",
+   "requirements*.txt",
+   "packages.txt",
+   "runtime.txt",
+   "pyproject.toml",
+   "README*",
+   "CLAUDE.md",
+   "LICENSE*",
+   "*.md",
+   "*.bat",
+   "*.ps1",
+   "*.sh",
+   "*.log",
+   "tests",
+   "test_*.py",
+   "*_test.py",
+   "deploy",
+   "scripts",
+   "*.lock",
+   "*.db-journal",
+   "*.bak",
+   "*.orig",
+   "*.tmp",
+   "snowflake",
+   ".devcontainer"
   ]
+ },
+ "apps": {
+  "beef_cutout": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/beef_cutout"
+  },
+  "beef_weight": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/beef_weight"
+  },
+  "cash_trade": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cash_trade"
+  },
+  "cattle_on_feed": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cattle_on_feed",
+   "sync": false,
+   "why": "this copy reads the shared NASS cache (no key); livestock-portal's still calls NASS live. Land the cache change in livestock-portal first, then sync (that also brings Cold Storage, which calls NASS live and needs its own ETL job)."
+  },
+  "cme_feeder_cattle": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cme_feeder_cattle"
+  },
+  "cost_of_carry": {
+   "repo": "JSA-Dashboards/cost-of-carry-calculator",
+   "branch": "main",
+   "prefix_modules": "coc_"
+  },
+  "crop_conditions": {
+   "repo": "JSA-Dashboards/crop-conditions-dashboard",
+   "private": true
+  },
+  "domestic_production": {
+   "repo": "JSA-Dashboards/domestic-production-dashboard"
+  },
+  "eia_energy": {
+   "repo": "JSA-Dashboards/eia-energy-dashboard"
+  },
+  "grain_seasonal": {
+   "repo": "JSA-Dashboards/grain-seasonal-dashboard"
+  },
+  "livestock_inventory": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/livestock_inventory"
+  },
+  "rail_fob": {
+   "repo": "JSA-Dashboards/rail-fob-portal"
+  },
+  "rail_shipments": {
+   "repo": "JSA-Dashboards/usda-rail-dashboard"
+  },
+  "rma_map": {
+   "repo": "JSA-Dashboards/rma-production-map"
+  },
+  "vessel_lineup": {
+   "repo": "JSA-Dashboards/jsa-vessel-lineup-dashboard",
+   "sync": false,
+   "why": "upstream palette is dark (BG #0d1210) and the portal is light-only; this copy is a light fork 24 commits behind. Make the source light, then sync."
+  },
+  "teams_broadcast": {
+   "repo": "JSA-Dashboards/teams-broadcast",
+   "branch": "main",
+   "exclude": [
+    "whatsapp-service"
+   ]
+  },
+  "cftc_cot": {
+   "repo": "JSA-Dashboards/cftc-cot-dashboard",
+   "branch": "main",
+   "private": true,
+   "sync": false,
+   "why": "being edited in this repo right now; bring under sync once that work lands upstream"
+  },
+  "strip_trials": {
+   "repo": "JSA-Dashboards/yield-portal",
+   "sync": false,
+   "why": "a single page of yield-portal with renamed modules; needs its own subdir mapping"
+  },
+  "rail_freight": {
+   "repo": null,
+   "sync": false,
+   "why": "no standalone repo; superseded by Rail FOB's Shipments tab, candidate for deletion"
+  },
+  "basis_tracker": {
+   "repo": "JSA-Dashboards/basis-tracker",
+   "prefix_modules": "bt_",
+   "preauth": true,
+   "pin_env": {
+    "SNOWFLAKE_DATABASE": "JSA",
+    "SNOWFLAKE_SCHEMA": "BASIS_TRACKER"
+   }
+  },
+  "river_fob": {
+   "repo": "JSA-Dashboards/river-fob-portal",
+   "prefix_modules": "rf_",
+   "preauth": true,
+   "pin_env": {
+    "SNOWFLAKE_DATABASE": "RIVER_FOB",
+    "SNOWFLAKE_SCHEMA": "PUBLIC"
+   }
+  },
+  "major_exporters": {
+   "repo": "JSA-Dashboards/global-exports-dashboard",
+   "branch": "main",
+   "exclude": [
+    "etl.py"
+   ]
+  }
+ },
+ "root_files": [
+  {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "path": "wasde.py"
+  }
+ ]
 }

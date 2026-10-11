@@ -62,7 +62,7 @@ startup:
 - `BASIS_DATABASE_URL` — rail_fob's cross-read of basis data
 
 If you copy a dashboard in from its standalone repo, rename its `DATABASE_URL`
-the same way or it will fight whichever app loads first. (basis_tracker and river_fob, which had their own, are no longer bundled.)
+the same way or it will fight whichever app loads first. (basis_tracker and river_fob take their DB from Snowflake, pinned by the sync.)
 
 **These were removed from the deployed Secrets on 2026-10-04. Do not re-add
 them.** They pointed at the frozen Supabase copies (newest day Sept 3), and
@@ -136,13 +136,23 @@ line breaks every module**: cryptography refuses a password for an unencrypted
 key. A new bundled app that reads another schema needs a grant on
 `ADMIN_PORTAL_ROLE`, or it fails with "does not exist or not authorized".
 
-**River FOB and Major Exporters are not bundled here.** Their tiles open
-river-fob.streamlit.app and global-exports-dashboard-jsa.streamlit.app, and the
-bundled copies (`apps/river_fob/`, `apps/major_exporters/`) were deleted on
-2026-10-11 after drifting far behind the standalones (the River FOB copy had no
-Net Carry, Return to Carry or Massive button, and a paste into it archived stale
-futures on 10/06). They are in git history. Do not restore them: the River FOB
-copy was a second writer to `RIVER_FOB.PUBLIC`.
+**Basis Tracker, River FOB and Major Exporters are bundled again (2026-10-11),
+as generated mirrors** of basis-tracker, river-fob-portal and global-exports-dashboard
+(see "`apps/<name>/` is a generated mirror" above). The earlier hand-copies drifted
+and River FOB's was a second, stale writer to `RIVER_FOB.PUBLIC`; the mirrors run
+the same code as the standalone apps, so a second writer is now harmless (River FOB's
+save takes the `save_lock`). Things the sync does for them, in `sync/apps.json`:
+
+- `preauth`: sets the apps' own password gate (`st.session_state["_authed"]`) so
+  the portal's login is the only one.
+- `pin_env`: River FOB reads `RIVER_FOB.PUBLIC` and Basis Tracker `JSA.BASIS_TRACKER`,
+  but both take database/schema from `os.environ`, which this shell sets to `JSA`
+  with no schema for everyone. The sync replaces those reads with the literals.
+- `prefix_modules` (`bt_`, `rf_`): their sibling modules share names with each
+  other and with other apps.
+- Grants: `ADMIN_PORTAL_ROLE` reads `JSA.BASIS_TRACKER` but Basis Tracker's admin
+  actions (imports, snapshot deletes, rundown posts) also WRITE it; without a write
+  grant those fail with "insufficient privileges". Major Exporters reads `EXPORTS.PUBLIC`.
 
 Where each bundled app reads Snowflake:
 

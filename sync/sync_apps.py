@@ -24,6 +24,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -114,6 +115,37 @@ def patch_sys_path(src: str) -> str:
     return "".join(lines)
 
 
+def patch_preauth(src: str) -> str:
+    """The portal already logged the user in, so mark the app's own password gate
+    (`st.session_state["_authed"]`) as passed. Keeps one login instead of two."""
+    if f"{MARK}: portal login" in src:
+        return src
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return src
+    for n in tree.body:
+        if (isinstance(n, ast.Import) and any(a.name == "streamlit" and a.asname == "st" for a in n.names)):
+            eol = "\r\n" if "\r\n" in src else "\n"
+            lines = src.splitlines(keepends=True)
+            lines[n.end_lineno:n.end_lineno] = [
+                f'st.session_state.setdefault("_authed", True)  # {MARK}: portal login already passed{eol}']
+            return "".join(lines)
+    return src
+
+
+def patch_pins(src: str, pins: dict) -> str:
+    """Pin env reads to a fixed value for ONE app. Every bundled app shares the one
+    process environment, so an app that takes its Snowflake database/schema from
+    `os.environ` (River FOB wants RIVER_FOB.PUBLIC, Basis Tracker JSA.BASIS_TRACKER)
+    would read whatever the shell set. Replaces `os.environ.get("KEY")` /
+    `os.getenv("KEY")` with the literal."""
+    for key, val in pins.items():
+        src = re.sub(r"os\.(?:environ\.get|getenv)\(\s*[\"']" + re.escape(key) + r"[\"']\s*\)",
+                     repr(val), src)   # no comment: the call sits mid-expression (`... or None,`)
+    return src
+
+
 FILE_READERS = {"open", "read_csv", "read_excel", "read_parquet", "read_json", "read_feather",
                 "read_pickle", "read_table", "load_workbook", "ExcelFile", "connect"}
 
@@ -152,12 +184,16 @@ def patch_relative_paths(src: str) -> str:
     return "".join(lines)
 
 
-def apply_patches(rel: str, src: str, entry: str) -> str:
+def apply_patches(rel: str, src: str, entry: str, preauth: bool = False, pins: dict | None = None) -> str:
     if not rel.endswith(".py"):
         return src
     src = patch_set_page_config(src)
     src = patch_relative_paths(src)
+    if pins:
+        src = patch_pins(src, pins)
     if rel == entry:
+        if preauth:
+            src = patch_preauth(src)
         src = patch_sys_path(src)
     return src
 
@@ -252,7 +288,7 @@ def desired_tree(name: str, spec: dict) -> tuple[dict[str, bytes], str]:
         if rel.endswith(".py"):
             bom = data.startswith(codecs.BOM_UTF8)
             text = data.decode("utf-8-sig", errors="replace")
-            data = apply_patches(rel, text, entry).encode("utf-8")
+            data = apply_patches(rel, text, entry, spec.get("preauth", False), spec.get("pin_env")).encode("utf-8")
             if bom:
                 data = codecs.BOM_UTF8 + data
         out[rel] = data
