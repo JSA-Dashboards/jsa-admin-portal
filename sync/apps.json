@@ -117,11 +117,6 @@
    "sync": false,
    "why": "being edited in this repo right now; bring under sync once that work lands upstream"
   },
-  "rail_freight": {
-   "repo": null,
-   "sync": false,
-   "why": "no standalone repo; superseded by Rail FOB's Shipments tab, candidate for deletion"
-  },
   "basis_tracker": {
    "repo": "JSA-Dashboards/basis-tracker",
    "prefix_modules": "bt_",
