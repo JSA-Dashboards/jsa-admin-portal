@@ -34,6 +34,7 @@ PRODUCT_MONTHS = {
     "ZW": "HKNUZ",
     "KE": "HKNUZ",
     "HRS": "HKNUZ",
+    "6C": "HMUZ",         # CME Canadian dollar (USD per CAD); USD/CAD = 1 / settle
 }
 
 # Massive's daily bars begin here; nothing earlier is worth asking for.

@@ -5,14 +5,14 @@
  "commit": "05f64afa7e2045854be4786230cc906ee387be1a",
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
-  ".python-version": "8dfda54ba2f66ab3a8ebab460f4338bbeea1fb1e0f85ce06fe3530aa3c64679b",
-  "50 Year logo JSA.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
-  "app.py": "87e570afa8d66e96eef53521ba8a30f49f1e27fa5e1443dcf7cda72700d699d3",
-  "JSA Logo.png": "83b5bc0a845ca66a45e11f9b181a9fde6618172d8569752a31d5c4c9c110a3bf",
-  "jsa_favicon.png": "f894128daaf0884918bb1bed00c69bc8de6a07cb945d136247e63088d97e702d",
-  "logo-full.png": "83b5bc0a845ca66a45e11f9b181a9fde6618172d8569752a31d5c4c9c110a3bf",
-  "nass_cache_client.py": "17583d06120cb5fdac554e6b8bc10d2c5fa1022611227eac656aeabae5459eb7",
+  ".python-version": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
+  "50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
+  "app.py": "1261bd7b92181c4d941f65224abc5ab981be8ee6d953ac4628f613456d03dd9b",
+  "JSA Logo.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
+  "jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
+  "logo-full.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
+  "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
   "Picture1.jpg": "053aa5ea3d52eb1499c5afd5a51bbb395e36e67cea5a78816dcea3aa3df9f086",
-  "Transparent Smal logo.png": "0238b4a2f3b324ee66e174776ffb6b83ff74de02d37d93eaa5639d4e192eab39"
+  "Transparent Smal logo.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e"
  }
 }

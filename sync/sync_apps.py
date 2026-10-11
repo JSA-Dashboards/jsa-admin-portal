@@ -399,11 +399,11 @@ def cmd_apply(names):
         for rel in set(current_tree(n)) - set(want):   # stray files an earlier hand-copy left behind
             if excluded(rel, CONFIG["defaults"]["exclude"] + s.get("exclude", [])) or rel.endswith(".pyc"):
                 (d / rel).unlink(missing_ok=True)
-        (d / MANIFEST).write_text(json.dumps({
+        (d / MANIFEST).write_bytes(json.dumps({
             "repo": s["repo"], "subdir": s.get("subdir"), "branch": s["branch"], "commit": commit,
             "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
-            "files": {k: hashlib.sha256(v).hexdigest() for k, v in want.items()},
-        }, indent=1))
+            "files": {k: hashlib.sha256(norm(v)).hexdigest() for k, v in want.items()},  # line-ending neutral
+        }, indent=1).encode("utf-8"))
         print(f"synced {n} @ {commit[:8]} ({len(want)} files)")
     if not names:
         failed += sync_root_files(write=True)

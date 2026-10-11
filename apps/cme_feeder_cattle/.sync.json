@@ -5,19 +5,19 @@
  "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
-  "app.py": "39c39b9bac6650d6edebda6c26737333838c4a28234bab429bad0b9e33bdbbbe",
-  "barn_basis.py": "3fec9cd02cd23f6280e5104785c2769ce4ee42a1bdb559317d18613bb8fdb86e",
-  "barn_report.py": "63efea3321dd72603acf99a72c8ea8b2101c37ba49ccc7397995edb500146f45",
-  "bucketing.py": "18ba67540d9ab155dd27b0b4d4ea39875ccc13094608eae182a91e27e40606fb",
-  "cash_calves.py": "6c3298851dc920a660c0528d3b70cb94d1e36543923f9c0f72b67cc0ad587a11",
-  "composition.py": "2a675b842943dafde28bc6d6d14cf34e4200ecc189dd77152161d1f6bcc91de1",
-  "data/Feeder Cattle Info Ross.xlsx": "6f510b389c7095528fba679d9ed4ce41d82dd506f1f8bd2c8a03fa95c5ae8064",
-  "data/mars_history.db": "8d871bc563eadb0a2bfb19780fd57867f2e8d875cd2d4231d3be4913117a91f3",
-  "data/mars_roster.json": "8adedc1514ebfdb1b9f1a20ad7d5ad33f2a99b5a9547c1fb243a7a5d15456857",
-  "index_dates.py": "7a8ccbacb6c0536d907ef00d3a2826292e6a431990071c04299c2a945d9e3119",
-  "mars_census_view.py": "73012d74f22bcf4db7aa8ad94e286e5028e4b054e5d9e9b99c48b4c26f7915d8",
-  "snapshots.py": "872552e5a1994214fef87ed095b7d5abf1adaacfb877ba110b85aae0db1d97a1",
-  "snowflake_db.py": "a784799690e4528e24e82d4ea37361b281f51290e3da2d472500c36c31830c50",
-  "volumes.py": "6480cea5d77cfda5923d95bafe8677a6e94eb561d9f56086593f4d7cea115c0f"
+  "app.py": "7cbb38809e447fd4d27e8547932419932138b210ccbc0802be94e0455f78d030",
+  "barn_basis.py": "493d3f79380b98a99e2c83fbbe62a70dd4c2e8dfd7bc47400a686775590134aa",
+  "barn_report.py": "18e7173f4e5a787b0e406ca093a2d47781ce93987a18323990861f725a0b00d6",
+  "bucketing.py": "8daa62ecd26d2b91c61fe54b808fc54c1269e1aa7afbc28c4669ba276eeb10c8",
+  "cash_calves.py": "843279a27511a2a4bb4b76f8a51c84b4d17da7abc60cb6c12466c089a214d9b0",
+  "composition.py": "c78c2891870214f3a60db0e751a5d97716086166ced9b96636b7554b2525090b",
+  "data/Feeder Cattle Info Ross.xlsx": "c28f2f3ab44b6f392de88aa001cfe4a0556a82771de20e8689a74fc4d99dbeb3",
+  "data/mars_history.db": "f000b9d9cea82cec7f708ea9ff755fe3a3316d3ea599393bc05ca631080feda3",
+  "data/mars_roster.json": "85d5c3eab0ab73615723eb41daf3c8537c2970fd91299f521eefb4da58c07e05",
+  "index_dates.py": "142b91c7e89e7b3f302214d661887fec6a158fef0647dce395c9469f943e42bd",
+  "mars_census_view.py": "66937cf933ef99162b4da0b772a0d8c0b1b7fa2fb1a135f113c46861be720896",
+  "snapshots.py": "a4a8fce90b3077264a1beb1375332695b0097f703b12bee2fda91c47c490f57d",
+  "snowflake_db.py": "5daa187f3147e3f8872beb7dee2094a236403f0d35f5780f1af0684228c9c580",
+  "volumes.py": "8b331ef278ff67f42778638faa4c07401d88df00b24ee61f5531b72670212da7"
  }
 }

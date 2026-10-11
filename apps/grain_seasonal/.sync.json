@@ -5,15 +5,15 @@
  "commit": "9a33d35249a2e2b8e3e160187feaf95ccb285e05",
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
-  "ai_chat.py": "80a0727f3b505059d43c2a6703d95f3f036d1fb3af57c37d279d01c575f22622",
-  "app.py": "ac114df0e38f95dbd058700089d10877028b8e0c08832f1c32913c5869e00f42",
-  "assets/jsa_favicon.png": "f894128daaf0884918bb1bed00c69bc8de6a07cb945d136247e63088d97e702d",
-  "assets/logo-50yr.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
-  "data/High Low Model.xlsx": "4118eec6d169a6523948f758b1cf48dcbe9026f668eb244488104fd39113b22a",
-  "hl_model.py": "7d399cd8930bef82a3b8cfc99f2b2ae5b0f1dd09559ffbe9c62bd8ac4755b9e8",
-  "legacy_futures_history.csv": "9477c93cb87c6650899ec67375ef3676113af2dc8ce26f4607acb8637991dfc5",
-  "legacy_history.py": "6f87337d8c3aa819fe839b8a47aef0d0967ddd4a92c5ccb20e2b2bb376654ded",
-  "massive_api.py": "3867446209fc76dfa08b42824f08143d2380a21473837d8acd549e87f987ed4a",
-  "report_dates.py": "ab6252c34a85db6a1b26cc839b4e70aba62059306b12c798dc72a6e7d9f44bad"
+  "ai_chat.py": "ce709346974c7de8b116e5b7cf707cbd56f5043c9fb1cda5cd36e09b8e171957",
+  "app.py": "a85a688c55e2b37e93fd0bcabbd6720a3894d8bca3f899d99a2489eec6506f1c",
+  "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
+  "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
+  "data/High Low Model.xlsx": "8e7996dc969d8e0495da9ed667bb68c109e9503ace5616c7227916f147dd3c73",
+  "hl_model.py": "6c99f5f5b7d70167a1d18e829ce77e6c8443762312f7450981ac30c21e50b873",
+  "legacy_futures_history.csv": "b9edcebe4aa92440a60925794563f50362c2c3558ccda0cbbf23108ef299b55e",
+  "legacy_history.py": "c678ec9c6d122eb82ddf962296e1245a992693f9005fef911c5a8ea9cfac2107",
+  "massive_api.py": "c0ab8691d5e1e58f5e0e7fdce80cfc946cae54622dc2e08e10ccfa551a4548b8",
+  "report_dates.py": "d434c81f00062d5a4df9886f02c00e6029fd9404fd4cee051d6e899c9c5cbeb3"
  }
 }
