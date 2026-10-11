@@ -1,0 +1,12 @@
+{
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/cash_trade",
+ "branch": "master",
+ "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "37a039a9c339d29bee6b85516b772046b31b02f5d2ca590cf0682d6cfdb88150",
+  "leverage.py": "6879696dd0da558095525da18836f432225d11852d3c51ac102fa71100d68b33",
+  "scorecard.py": "22fd9f6819b9536eb1beaeb325b7fcb04be7919e57162cdaa3cd8285a2772f40"
+ }
+}
