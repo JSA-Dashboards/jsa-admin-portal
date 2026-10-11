@@ -154,10 +154,7 @@
    "exclude": [
     "streamlit_app.py",
     "snowflake_admin",
-    "logs",
-    "add.py",
-    "review.py",
-    "import_pdf.py"
+    "logs"
    ]
   }
  },

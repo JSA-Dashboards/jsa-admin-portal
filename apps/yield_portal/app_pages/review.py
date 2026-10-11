@@ -1,0 +1,438 @@
+"""Review & edit — the review queue (reports the checks flagged) and the full
+table for hand edits."""
+import datetime as dt
+import hashlib
+
+import pandas as pd
+import streamlit as st
+
+import yp_checks as checks
+import yp_data as data
+import yp_db as db
+import yp_nass as nass
+import yp_parse_pdfs as P
+import yp_places as places
+import yp_report_text as RT
+
+STATES = sorted(P.ABBRS)
+EDIT_COLS = ["crop_year", "date_reported", "crop", "state", "location", "yield_bpa",
+             "yield_min", "yield_max", "ly_yield", "expected_yield", "aph", "maturity",
+             "irrigation", "disease", "is_silage", "is_record", "raw_text", "notes"]
+SHORT = {"incomplete": "Needs crop/state", "split": "Two crops", "entries": "Several fields",
+         "duplicate": "Possible duplicate", "corn?": "Probably corn",
+         "reread": "Parser reads it differently", "range": "Out of range"}
+STATUS = {"clean": "", "flagged": "Needs review", "approved": "Approved", "excluded": "Excluded"}
+
+st.title("Review & edit")
+if msg := st.session_state.pop("rev_flash", None):
+    st.success(msg, icon=":material/check_circle:")
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _last_sync():
+    try:
+        return db.last_sync_run()
+    except Exception:
+        return None
+
+
+def _sync_note():
+    """When the scheduled email pickup last ran, and what it brought in."""
+    last = _last_sync()
+    if not last:
+        return
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    mins = (now - pd.Timestamp(last["run_at"]).to_pydatetime()).total_seconds() / 60
+    ago = (f"{int(mins)} min ago" if mins < 90 else f"{mins / 60:.0f} h ago" if mins < 2880
+           else f"{mins / 1440:.0f} days ago")
+    if last["error"]:
+        st.warning(f"The email pickup on {last['host']} failed {ago}: {last['error']}. "
+                   "It tries again every 30 minutes.", icon=":material/mail:")
+        return
+    need = f", {last['needs_review']} need a crop/state" if last["needs_review"] else ""
+    late = "" if mins < 180 else " The PC may be off; it catches up when it's back on."
+    st.caption(f":material/mark_email_read: Ag Trader Talk emails checked {ago} on "
+               f"{last['host']}: {last['added']} new, {last['dated']} dated{need}.{late}")
+
+
+_sync_note()
+
+df = data.load_all()
+if df.empty:
+    st.info("No reports yet.")
+    st.stop()
+queue_all = df[df["status"] == "flagged"]
+
+
+def _who():
+    return (st.session_state.get("rev_who") or "").strip() or "portal"
+
+
+def _done(message, reports_changed=False):
+    """After any write: fresh data, a new (unselected) queue table, a note. A
+    decision alone re-reads just the decisions (~0.4 s); a changed report
+    re-reads the reports too."""
+    if reports_changed:
+        data.invalidate()
+    else:
+        data.invalidate_decisions()
+    st.session_state["rev_gen"] = st.session_state.get("rev_gen", 0) + 1
+    st.session_state["rev_flash"] = message
+    st.rerun()
+
+
+def _approve(r, clear, note):
+    """Approve a report for the given checks, keeping what was approved before.
+    An excluded report stays excluded (a hand edit doesn't bring it back)."""
+    if r.get("decision") == "excluded":
+        return
+    keep = sorted(set(r["approved_flags"]) | set(clear))
+    db.set_decision(r["dedup_hash"], "approved", keep, note, _who())
+
+
+def _fix(r, note):
+    """Apply a report's suggested fix. A split makes one report per crop (each
+    with its own sentences and figures) and marks the original superseded; an
+    entries split makes one per field or practice (each with the whole text and
+    its own figures), keeps a stored row that already is one of them (with its
+    entry's figures: checks.entry_changes), and marks the report's other rows
+    superseded; any other fix is written over the
+    report, which is then approved."""
+    if "split" in (r["suggestion"] or {}):
+        kids = checks.split_rows(r)
+        db.insert_new(kids)
+        db.set_decision(r["dedup_hash"], "superseded", ["split"],
+                        "split by crop into " + ", ".join(k["dedup_hash"] for k in kids), _who())
+    elif "entries" in (r["suggestion"] or {}):
+        kids = checks.entry_rows(r)
+        keep = {k["dedup_hash"] for k in kids}
+        db.insert_new(kids)
+        for h, changes in (r["suggestion"].get("updates") or {}).items():
+            db.update_row(h, changes)
+        for h in r["suggestion"]["siblings"]:
+            if h not in keep:
+                db.set_decision(h, "superseded", ["entries"],
+                                "split into one report per entry: " + ", ".join(sorted(keep)),
+                                _who())
+    else:
+        db.update_row(r["dedup_hash"], r["suggestion"])
+        _approve(r, r["review_flags"], note)
+
+
+def _table_key(name, ids):
+    """A widget key that changes whenever the list does, so a selection made on
+    an older list (positions only) is dropped instead of pointing past the end
+    of a shorter one."""
+    sig = hashlib.md5("|".join(map(str, ids)).encode()).hexdigest()[:10]
+    return f"{name}_{st.session_state.get('rev_gen', 0)}_{sig}"
+
+
+def _picked(event, n):
+    """Selected row positions that still exist in a table of n rows."""
+    return [i for i in event.selection.rows if 0 <= i < n]
+
+
+def _place(r):
+    return ", ".join(str(v) for v in (r["location"], r["state"]) if isinstance(v, str) and v)
+
+
+def _fields_of(r):
+    """[("1", "54 bpa"), ...]: the live rows a report that gives several fields became."""
+    same = df[(df["raw_text"] == r["raw_text"]) & (df["crop"] == r["crop"])
+              & (df["crop_year"] == r["crop_year"])
+              & (df["location"].astype(str) == str(r["location"]))
+              & (df["status"] != "superseded") & df["field"].notna()]
+    out = []
+    for s in same.to_dict("records"):
+        y = s["yield_bpa"]
+        out.append((int(s["field"].split(" of ")[0]),
+                    "no yield" if y is None or y != y else f"{y:g} bpa"))
+    return [(str(n), y) for n, y in sorted(out)]
+
+
+MODES = {"queue": f"Needs review ({len(queue_all)})", "places": "Places", "all": "All reports"}
+mode = st.segmented_control(
+    "Show", list(MODES), default="queue" if len(queue_all) else "all", key="rev_mode",
+    format_func=MODES.get, label_visibility="collapsed") or "queue"
+
+# --- county matches waiting for a person -------------------------------------------
+if mode == "places":
+    st.caption("Place names that may be a NASS county: a near-spelling (\"Vermillion Co\") or a "
+               "town that shares a county's name (\"Peoria\"). Confirm and those reports use the "
+               "county's NASS yields on Reports vs normal; reject and they keep the state's. "
+               "The reports themselves don't change.")
+    county_raw, _, _ = nass.load(int(df["crop_year"].max()))
+    if county_raw.empty:
+        st.info("County matching needs the shared NASS cache on Snowflake.",
+                icon=":material/cloud_off:")
+        st.stop()
+    m = places.match_all(df, nass.county_index(county_raw), places.cached_decisions())
+    sug = m[m["county_method"] == "suggested"]
+    if sug.empty:
+        st.success("No place names waiting for a county.", icon=":material/task_alt:")
+        st.stop()
+    groups = (sug.groupby(["state", "place_key"])
+              .agg(place=("location", "first"), suggestion=("county_suggestion", "first"),
+                   counties=("county_names", "first"), fips=("county_fips", "first"),
+                   reports=("dedup_hash", "size"))
+              .reset_index().sort_values(["state", "place"]).reset_index(drop=True))
+    st.text_input("Reviewed by", placeholder="Your initials", key="rev_who", width=160)
+    event = st.dataframe(
+        groups[["state", "place", "suggestion", "reports"]], hide_index=True,
+        on_select="rerun", selection_mode="multi-row",
+        key=_table_key("rev_places", groups["state"] + ":" + groups["place_key"]),
+        column_config={"state": st.column_config.TextColumn("State", width="small"),
+                       "place": "As written", "suggestion": "Suggested NASS county",
+                       "reports": st.column_config.NumberColumn("Reports", width="small")})
+    picked = groups.iloc[_picked(event, len(groups))]
+    with st.container(horizontal=True):
+        if st.button(f"Confirm {len(picked)} selected", type="primary", icon=":material/check:",
+                     disabled=picked.empty):
+            for g in picked.to_dict("records"):
+                places.decide(g["state"], g["place_key"], "confirmed",
+                              [c for c in g["counties"]], [f for f in g["fips"]], _who())
+            _done(f"Confirmed {len(picked)} county match(es).")
+        if st.button(f"Reject {len(picked)} selected", icon=":material/close:",
+                     disabled=picked.empty):
+            for g in picked.to_dict("records"):
+                places.decide(g["state"], g["place_key"], "rejected", decided_by=_who())
+            _done(f"Rejected {len(picked)}; those reports keep the state's numbers.")
+    st.stop()
+
+# --- the review queue -----------------------------------------------------------
+if mode == "queue":
+    st.caption("Reports the checks flagged. They stay in the archive and on Report text, but "
+               "aren't counted on Explore until you approve, fix or exclude them. Nothing is "
+               "ever deleted here.")
+    if queue_all.empty:
+        st.success("Nothing waiting for review.", icon=":material/task_alt:")
+        st.stop()
+
+    counts = {k: int(queue_all["review_flags"].map(lambda f, k=k: k in f).sum()) for k in SHORT}
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        kinds = st.pills("Checks", [k for k in SHORT if counts[k]], selection_mode="multi",
+                         format_func=lambda k: f"{SHORT[k]} ({counts[k]})", key="rev_kinds")
+        st.text_input("Reviewed by", placeholder="Your initials", key="rev_who", width=160)
+    queue = queue_all
+    if kinds:
+        queue = queue[queue["review_flags"].map(lambda f: bool(set(f) & set(kinds)))]
+    queue = queue.sort_values(["crop_year", "state", "location"], ascending=[False, True, True],
+                              na_position="last").reset_index(drop=True)
+
+    fixable = queue[queue["suggestion"].notna()
+                    & queue["review_flags"].map(
+                        lambda f: set(f) <= {"corn?", "reread", "incomplete", "entries"})]
+    if len(fixable):
+        with st.expander(f"Apply all {len(fixable)} suggested fixes in this list"):
+            st.caption("Only reports whose every flag comes with a fix (probably corn, parser "
+                       "re-reads, no crop named but a corn-sized yield, several fields or "
+                       "dryland and irrigated to split). Each gets its fix. "
+                       "Look the list over first. Two-crop splits aren't included: some read "
+                       "a rotation note or a second report as the other crop, so each one "
+                       "gets a look.")
+            ok = st.checkbox("I've checked the suggested fixes below", key="rev_bulk_ok")
+            if st.button(f"Apply {len(fixable)} fixes", icon=":material/done_all:",
+                         disabled=not ok):
+                for r in fixable.to_dict("records"):
+                    _fix(r, "suggested fix applied (bulk)")
+                _done(f"Applied {len(fixable)} suggested fixes.", reports_changed=True)
+
+    table = queue.assign(
+        place=queue.apply(_place, axis=1),
+        checks=queue["review_flags"].map(lambda f: ", ".join(SHORT[k] for k in f)),
+        fix=queue["suggestion"].map(checks.describe_fix),
+    )[["crop_year", "crop", "place", "yield_bpa", "field", "checks", "fix", "source", "raw_text"]]
+    event = st.dataframe(
+        table, hide_index=True, height=320, on_select="rerun", selection_mode="single-row",
+        key=_table_key("rev_queue", queue["dedup_hash"]),
+        column_config={
+            "crop_year": st.column_config.NumberColumn("Year", format="%d", width="small"),
+            "crop": st.column_config.TextColumn("Crop", width="small"),
+            "place": "Place",
+            "yield_bpa": st.column_config.NumberColumn("Yield", format="%.1f", width="small"),
+            "field": st.column_config.TextColumn(
+                "Field", width="medium",
+                help="When a report gives several fields, each is its own report: which one "
+                     "this is, in its own words. The report column shows the whole text."),
+            "checks": "Flagged for",
+            "fix": "Suggested fix",
+            "source": st.column_config.TextColumn(
+                "Source", width="small",
+                help="Ag Trader Talk or JSA. A JSA report sent to Ag Trader Talk can come "
+                     "back by email: a duplicate pair shows which copy came from where."),
+            "raw_text": st.column_config.TextColumn("Report", width="large"),
+        })
+    rows = _picked(event, len(queue))
+    if not rows:
+        st.caption(":material/arrow_upward: Select a report to review it.")
+        st.stop()
+
+    r = queue.iloc[rows[0]].to_dict()
+    y = f"{r['yield_bpa']:g} bpa" if r["yield_bpa"] == r["yield_bpa"] and r["yield_bpa"] is not None \
+        else "no yield"
+    with st.container(border=True):
+        st.markdown(f"**{r['crop_year']} {r['crop']} · {_place(r) or 'no place'} · {y}**")
+        for k in r["review_flags"]:
+            st.markdown(f":orange-badge[{SHORT[k]}] {checks.CHECKS[k]}")
+        if isinstance(r.get("field"), str):             # one of a report's fields
+            st.markdown(f"**Field {RT.md_escape(r['field'])}**")
+            fields = _fields_of(r)
+            st.caption(f"The report gives {len(fields)} fields, each stored as its own report: "
+                       + " · ".join(f"{n} → {y}" for n, y in fields) + ".")
+        st.markdown(RT.md_report(r["raw_text"], r["location"], r["state"]))
+        others = df[df["dedup_hash"].isin(r["dup_of"])]
+        if len(others):
+            st.caption(f"This one is from {r['source']}. The other report(s) with the same "
+                       "place, crop, year and yield:")
+            for o in others.to_dict("records"):
+                which = (f"**Field {RT.md_escape(o['field'])}** — "
+                         if isinstance(o.get("field"), str) else "")
+                st.markdown(f"> :gray-badge[{o['source']}] {which}"
+                            + RT.md_report(o["raw_text"], o["location"], o["state"]))
+        if r["suggestion"]:
+            st.markdown(f"**Suggested fix:** {checks.describe_fix(r['suggestion'])}")
+            for crop, text in (r["suggestion"].get("split") or {}).items():
+                st.markdown(f"> **{crop}:** " + RT.md_escape(text))
+            for part, _, _, text in (r["suggestion"].get("entries") or []):
+                st.markdown(f"> **{part.replace('|', ' ')}:** " + RT.md_escape(text))
+
+        with st.container(horizontal=True):
+            if r["suggestion"]:
+                if st.button("Apply fix", type="primary", icon=":material/auto_fix_high:"):
+                    _fix(r, "suggested fix applied")
+                    _done("Fix applied.", reports_changed=True)
+            if len(others):
+                if st.button("Keep both: different reports", icon=":material/call_split:"):
+                    for o in [r] + others.to_dict("records"):
+                        _approve(o, ["duplicate"], "kept: not the same report")
+                    _done("Kept both as separate reports.")
+            if st.button("Approve as it is", icon=":material/check:"):
+                _approve(r, r["review_flags"], "approved as it is")
+                _done("Approved.")
+            if st.button("Exclude", icon=":material/block:",
+                         help="Keeps the report in the archive (Report text) but out of "
+                              "every average and chart."):
+                db.set_decision(r["dedup_hash"], "excluded", r["review_flags"],
+                                "excluded in review", _who())
+                _done("Excluded from averages; still in the archive.")
+
+        with st.expander("Edit by hand"):
+            with st.form("rev_edit", border=False):
+                c1, c2, c3 = st.columns([1, 1, 2])
+                crop = c1.selectbox("Crop", data.CROPS, index=data.CROPS.index(r["crop"])
+                                    if r["crop"] in data.CROPS else 0)
+                state = c2.selectbox("State", STATES, index=STATES.index(r["state"])
+                                     if r["state"] in STATES else None)
+                location = c3.text_input("Place", value=r["location"] or "")
+                c4, c5, c6 = st.columns(3)
+
+                def _num(v):
+                    return None if v is None or v != v else float(v)
+                yld = c4.number_input("Yield (bpa)", value=_num(r["yield_bpa"]), step=1.0)
+                ly = c5.number_input("Prior year (bpa)", value=_num(r["ly_yield"]), step=1.0,
+                                     help="A like field's yield the prior year it grew this crop: with rotation, often two seasons back.")
+                aph = c6.number_input("APH (bpa)", value=_num(r["aph"]), step=1.0)
+                if st.form_submit_button("Save and approve", type="primary"):
+                    db.update_row(r["dedup_hash"], {"crop": crop, "state": state,
+                                                    "location": location or None,
+                                                    "yield_bpa": yld, "ly_yield": ly, "aph": aph})
+                    _approve(r, set(r["review_flags"]) | {"reread"}, "edited by hand in review")
+                    _done("Saved and approved.", reports_changed=True)
+    st.stop()
+
+# --- every report, for hand edits ---------------------------------------------------
+with st.container(horizontal=True, vertical_alignment="bottom"):
+    years = sorted(int(y) for y in df["crop_year"].dropna().unique())
+    year = st.selectbox("Crop year", ["All"] + years, key="rev_year")
+    crop = st.segmented_control("Crop", ["All"] + data.CROPS, default="All",
+                                key="rev_crop") or "All"
+    states = st.multiselect("States", sorted(df["state"].dropna().unique()),
+                            placeholder="All states", key="rev_states")
+    q = st.text_input("Search", placeholder="Any word", key="rev_q")
+
+f = df
+if year != "All":
+    f = f[f["crop_year"] == year]
+if crop != "All":
+    f = f[f["crop"] == crop]
+if states:
+    f = f[f["state"].isin(states)]
+if q:
+    f = f[f["location"].fillna("").str.contains(q, case=False, regex=False)
+          | f["raw_text"].fillna("").str.contains(q, case=False, regex=False)]
+
+f = f.sort_values(["crop_year", "state", "location"], ascending=[False, True, True],
+                  na_position="last").reset_index(drop=True)
+hashes = f["dedup_hash"].tolist()
+show = f[EDIT_COLS].copy()
+show.insert(show.columns.get_loc("yield_bpa") + 1, "field", f["field"])
+show.insert(0, "check", f["status"].map(STATUS))
+show.insert(0, "delete", False)
+
+st.caption(f"{len(show):,} reports. Edit cells and save before changing filters — "
+           "unsaved edits are dropped when the list changes. A hand edit counts as reviewed: "
+           "the parser won't suggest changing it back.")
+edited = st.data_editor(
+    show, key="rev_editor", hide_index=True, num_rows="fixed", height=540,
+    column_config={
+        "delete": st.column_config.CheckboxColumn("Delete", width="small"),
+        "check": st.column_config.TextColumn("Check", disabled=True, width="small"),
+        "crop_year": st.column_config.NumberColumn("Year", format="%d", step=1),
+        "date_reported": st.column_config.DateColumn("Reported", format="MMM D, YYYY"),
+        "crop": st.column_config.SelectboxColumn("Crop", options=data.CROPS, required=True),
+        "state": st.column_config.SelectboxColumn("State", options=STATES),
+        "location": "Location",
+        "yield_bpa": st.column_config.NumberColumn("Yield", format="%.1f"),
+        "field": st.column_config.TextColumn(
+            "Field", disabled=True, width="medium",
+            help="When a report gives several fields, each is its own row: which one this "
+                 "is, in its own words."),
+        "yield_min": st.column_config.NumberColumn("Low", format="%.1f"),
+        "yield_max": st.column_config.NumberColumn("High", format="%.1f"),
+        "ly_yield": st.column_config.NumberColumn("Prior yr", format="%.1f", help="A like field's yield the prior year it grew this crop: with rotation, often two seasons back."),
+        "expected_yield": st.column_config.NumberColumn("Expected", format="%.1f"),
+        "aph": st.column_config.NumberColumn("APH", format="%.0f"),
+        "maturity": "Maturity",
+        "irrigation": st.column_config.SelectboxColumn("Irrigation", options=data.IRRIGATION),
+        "disease": st.column_config.TextColumn("Disease / damage",
+                                               help="Comma-separated, e.g. Tar spot, Hail"),
+        "is_silage": st.column_config.CheckboxColumn("Silage"),
+        "is_record": st.column_config.CheckboxColumn("Record"),
+        "raw_text": st.column_config.TextColumn("Report", width="large"),
+        "notes": st.column_config.TextColumn("Notes", width="medium"),
+    },
+)
+
+changes = st.session_state.get("rev_editor", {}).get("edited_rows", {})
+edits = {pos: {k: v for k, v in vals.items() if k not in ("delete", "check", "field")}
+         for pos, vals in changes.items()}
+edits = {pos: vals for pos, vals in edits.items() if vals}
+to_delete = [hashes[pos] for pos, vals in changes.items() if vals.get("delete")]
+
+with st.container(horizontal=True, vertical_alignment="center"):
+    save = st.button(f"Save {len(edits)} edited row(s)", type="primary",
+                     icon=":material/save:", disabled=not edits)
+    if to_delete:
+        confirm = st.checkbox(f"Yes, permanently delete {len(to_delete)} row(s)")
+        delete = st.button("Delete", icon=":material/delete:", disabled=not confirm)
+    else:
+        delete = False
+
+if save:
+    n = 0
+    for pos, vals in edits.items():
+        # empty cells come back as None; dates as ISO strings — both bind as-is
+        vals = {k: (None if isinstance(v, str) and not v.strip() else v)
+                for k, v in vals.items()}
+        n += db.update_row(hashes[pos], vals)
+        # a person set these values: the parser's re-read must not undo them
+        _approve(f.iloc[pos].to_dict(), ["reread"], "edited in the table")
+    data.invalidate()
+    st.session_state["rev_flash"] = f"Saved {n} row(s)."
+    st.rerun()
+
+if delete:
+    n = sum(db.delete_row(h) for h in to_delete)
+    data.invalidate()
+    st.session_state["rev_flash"] = f"Deleted {n} row(s)."
+    st.rerun()

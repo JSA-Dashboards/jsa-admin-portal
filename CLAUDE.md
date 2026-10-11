@@ -162,16 +162,18 @@ Where each bundled app reads Snowflake:
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
 | yield_portal (JSA Yield Observations tile) | `YIELD_REPORTS.PUBLIC` + `JSA.NASS_CACHE` | pinned in `apps/yield_portal/yp_db.py` |
 
-**JSA Yield Observations (`apps/yield_portal/`) is the yield portal's read pages, a synced mirror
-of `JSA-Dashboards/yield-portal`** (Explore, Report text, Reports vs normal, Field issues,
-Variety trials, Strip trials). The yield portal runs them under its own `st.navigation`,
-which can't nest inside this portal's, so `sync/templates/yield_portal.py` is copied in as
-`app.py`: a page switcher that runs each page script as-is. Add reports, Review & edit and
-Import PDF are excluded in `sync/apps.json` because they write, and `ADMIN_PORTAL_ROLE`
-only has SELECT on `YIELD_REPORTS.PUBLIC`; edit data in the standalone yield portal.
-`yp_db.py` pins `YIELD_REPORTS.PUBLIC` itself, so the shell's `SNOWFLAKE_DATABASE` doesn't
-matter. ISA states its copyright and no other terms, which is why the strip trials live only
-behind passwords. The old `apps/strip_trials/` copy is deleted.
+**JSA Yield Observations (`apps/yield_portal/`) is the whole yield portal, a synced mirror
+of `JSA-Dashboards/yield-portal`**: Explore, Report text, Reports vs normal, Field issues,
+Variety trials, Strip trials, and the entry screens Add reports, Review & edit and Import
+PDF. The yield portal runs them under its own `st.navigation`, which can't nest inside this
+portal's, so `sync/templates/yield_portal.py` is copied in as `app.py`: a page switcher that
+runs each page script as-is. Internal only (this portal is password-gated; the yield portal's
+own `?view=1` client link is a separate app). The entry screens write to `YIELD_REPORTS.PUBLIC`,
+so `ADMIN_PORTAL_ROLE` needs INSERT/UPDATE/DELETE on `YIELD_OBSERVATIONS` and
+`REVIEW_DECISIONS` plus CREATE TABLE on the schema (granted 2026-10-11), on top of the
+SELECT it already had. `yp_db.py` pins `YIELD_REPORTS.PUBLIC` itself, so the shell's
+`SNOWFLAKE_DATABASE` doesn't matter. ISA states its copyright and no other terms, which is
+why the strip trials live only behind passwords. The old `apps/strip_trials/` copy is deleted.
 
 The local `.streamlit/secrets.toml` still holds the old `GNC89034` personal key,
 which Snowflake refuses ("JWT token is invalid"); the deployed Secrets are the
