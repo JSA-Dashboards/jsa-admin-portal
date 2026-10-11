@@ -1,0 +1,12 @@
+{
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/beef_weight",
+ "branch": "master",
+ "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "83b099d402f8dd4c09df0881d0bc6930aa238ce649a885eb7d9ad73f42c97d9a",
+  "daily_slaughter.py": "5eb3366fffea1f67747cabb2008301b8a9da05e81c6fd7e9e93ece31998fad8b",
+  "nass_cache_client.py": "17583d06120cb5fdac554e6b8bc10d2c5fa1022611227eac656aeabae5459eb7"
+ }
+}

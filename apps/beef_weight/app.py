@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -8,11 +9,24 @@ import requests
 import io
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
 # local nass_cache_client import below raises ModuleNotFoundError.
+# `wasde` is SHARED and lives at the repo root -- the convention
+# apps/weekly_reports/app.py uses to reach `letter`. It exists ONCE in this
+# repo and must stay that way: Python caches modules by NAME, so a copy
+# beside this page would mean whichever page loaded first decided which one
+# every other page got. US Beef Trade and Cash Cattle Trade import the same
+# file.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import daily_slaughter
+import wasde  # noqa: E402
 
 # ── JSA Brand Colors ───────────────────────────────────────────────────────────
 # Extracted from jpsi.com logo: sage green #5e7164, charcoal #333132
@@ -150,6 +164,22 @@ st.markdown(f"""
     letter-spacing:.1em; margin:14px 0 6px;
   }}
   div[data-testid="stDataFrame"] {{ background:{DM_SURFACE}; border-radius:8px; }}
+
+  .sat-call {{
+    background:{DM_SURFACE}; border:1px solid {DM_BORDER};
+    border-left:4px solid {JSA_GREEN}; border-radius:8px;
+    padding:16px 20px 14px; margin:2px 0 14px;
+  }}
+  .sat-call-lead {{ color:{DM_TEXT}; font-size:1.05rem; line-height:1.5; }}
+  .sat-call-sub  {{ color:{DM_MUTED}; font-size:0.82rem; margin-top:8px; line-height:1.55; }}
+  .sat-table {{ width:100%; border-collapse:collapse; font-size:0.82rem; }}
+  .sat-table th {{
+    text-align:left; color:{DM_MUTED}; font-weight:600; font-size:0.7rem;
+    text-transform:uppercase; letter-spacing:.06em;
+    padding:6px 10px; border-bottom:1px solid {DM_BORDER};
+  }}
+  .sat-table td {{ padding:6px 10px; border-bottom:1px solid {DM_BORDER}; color:{DM_TEXT}; }}
+  .sat-table td.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -257,6 +287,112 @@ def _fetch_ams_raw() -> dict:
     return res
 
 
+# ── USDA AMS MARS — report 3658, Actual Slaughter Under Federal Inspection ────
+# Weekly FIS dressed weights by class, published THURSDAY, covering the week
+# that ended ~12 days earlier (published 09/17/2026 for w/e 09/05/2026).
+# NASS publishes the SAME series, but only inside its MONTHLY Livestock
+# Slaughter release -- which is why the NASS weight tiles sit ~3 weeks stale
+# between releases. That staleness is the pipeline working, not failing.
+# Verified equal to the pound on all 8 overlapping weeks 2026-07-11..2026-08-29
+# (NASS GE 500 LBS dressed == AMS class Cattle dressed).
+MARS_BASE     = "https://marsapi.ams.usda.gov/services/v1.2/reports"
+FIS_REPORT_ID = 3658
+# SECTION IS A PATH SEGMENT, NOT A QUERY PARAM. `?section=...` is accepted and
+# silently ignored -- you get the report header, zero rows, HTTP 200, no error,
+# which looks exactly like a report that publishes nothing.
+FIS_SECTION   = "Report FIS Meat Production"
+# AMS class -> NASS class_desc. Exact keys only: never endswith/substring, and
+# never loosen it -- calves live under commodity "Slaughter Calves" and a fuzzy
+# match would pull a different animal into a cattle tile.
+FIS_CLASS_MAP = {"Cattle": "GE 500 LBS", "Steers": "STEERS",
+                 "Heifers": "HEIFERS", "Cows": "COWS", "Bulls": "BULLS"}
+FIS_UNIT_DESC = "LB / HEAD, DRESSED BASIS"   # the NASS spelling, on purpose
+
+try:
+    MARS_KEY = st.secrets.get("MARS_API_KEY", "")
+except Exception:
+    # No secrets.toml locally -- st.secrets raises rather than returning {}.
+    MARS_KEY = ""
+MARS_KEY = (MARS_KEY or os.environ.get("MARS_API_KEY", "")).strip()
+
+
+def _mars_date(s):
+    """MM/DD/YYYY, sometimes with a trailing clock time, -> datetime.date."""
+    if not s:
+        return None
+    try:
+        m, d, y = str(s).split()[0].split("/")   # .split()[0] drops "10:00:01"
+        return datetime(int(y), int(m), int(d)).date()
+    except Exception:
+        return None
+
+
+def _mars_num(v):
+    """AMS sends numbers as strings — `volume` arrives as "973", not 973."""
+    if v is None:
+        return None
+    t = str(v).strip().replace(",", "").replace("$", "")
+    if not t or t.upper() in ("NA", "N/A", "NULL", "-"):
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_fis_weights() -> dict:
+    """AMS MARS report 3658 — weekly FIS dressed weights by cattle class."""
+    if not MARS_KEY:
+        return {"error": "MARS_API_KEY not configured"}
+    # No q= date filter on purpose. Guessing a date field name on a report
+    # family that has no report_date is the documented way to get zero rows and
+    # no error, and the full pull is what gives WoW/YoY/4-week their history.
+    try:
+        r = requests.get(f"{MARS_BASE}/{FIS_REPORT_ID}/{quote(FIS_SECTION)}",
+                         auth=(MARS_KEY, ""), timeout=(5, 120))
+        if r.status_code in (204, 404):
+            return {"error": f"AMS returned HTTP {r.status_code}"}
+        r.raise_for_status()
+        results = r.json().get("results", [])
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+    rows, bad_unit, published = [], 0, None
+    for x in results:
+        if str(x.get("commodity", "")).strip()   != "Slaughter Cattle": continue
+        if str(x.get("description", "")).strip() != "Dressed Weight":   continue
+        cls = FIS_CLASS_MAP.get(str(x.get("class", "")).strip())
+        if cls is None:
+            continue
+        # Unit guard: the tiles say "lb". A silent unit rename is exactly the
+        # kind of layout change that has bitten these AMS feeds before, and it
+        # would land as a plausible-looking wrong number, not an error.
+        if str(x.get("unit", "")).strip().lower() != "lbs":
+            bad_unit += 1
+            continue
+        # 3658 HAS NO report_date FIELD -- only report_begin_date /
+        # report_end_date / published_date. Asking for report_date returns None
+        # and skips every row with no error. The END date is the week ending.
+        wk  = _mars_date(x.get("report_end_date") or x.get("report_begin_date"))
+        val = _mars_num(x.get("volume"))
+        if wk is None or val is None:
+            continue
+        rows.append({"year": wk.year, "week_ending": wk.isoformat(),
+                     "class_desc": cls, "unit_desc": FIS_UNIT_DESC,
+                     "Value": val})
+        p = _mars_date(x.get("published_date"))
+        if p and (published is None or p > published):
+            published = p
+
+    if bad_unit:
+        return {"error": f"{bad_unit} rows carried a unit other than 'lbs' "
+                         f"— report 3658 layout may have changed"}
+    if not rows:
+        return {"error": "no Slaughter Cattle / Dressed Weight rows in report 3658"}
+    return {"rows": rows, "published": published, "n_results": len(results)}
+
+
 def _build_df(frames: list) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
@@ -327,7 +463,7 @@ def _nearest_week(df: pd.DataFrame, year: int, iso_week: int) -> float:
     return sub.loc[idx, "Value"]
 
 
-def olympic_avg(df: pd.DataFrame, ref_year: int, iso_week: int, n: int = 5) -> float:
+def prior_years_avg(df: pd.DataFrame, ref_year: int, iso_week: int, n: int = 5) -> float:
     """Simple average of the n prior years for the same ISO week."""
     vals = [_nearest_week(df, ref_year - i, iso_week) for i in range(1, n + 1)]
     vals = [v for v in vals if not pd.isna(v)]
@@ -336,12 +472,12 @@ def olympic_avg(df: pd.DataFrame, ref_year: int, iso_week: int, n: int = 5) -> f
     return sum(vals) / len(vals)
 
 
-def olympic_series(df: pd.DataFrame, ref_year: int, n: int = 5) -> pd.Series:
-    """Olympic avg for every ISO week, returned as Series indexed by iso_week."""
+def prior_years_series(df: pd.DataFrame, ref_year: int, n: int = 5) -> pd.Series:
+    """Plain average of the prior n years, per ISO week, indexed by iso_week."""
     weeks = sorted(df["iso_week"].unique())
     return pd.Series(
-        {w: olympic_avg(df, ref_year, w, n) for w in weeks},
-        name="olympic_avg",
+        {w: prior_years_avg(df, ref_year, w, n) for w in weeks},
+        name="prior_years_avg",
     )
 
 
@@ -354,11 +490,97 @@ def trailing_4wk(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _fis_frame(raw: dict) -> pd.DataFrame:
+    """AMS rows -> the exact frame shape NASS produces (schema parity by reuse)."""
+    if raw.get("error") or not raw.get("rows"):
+        return pd.DataFrame()
+    # Routed through _build_df so week_ending is a pandas Timestamp like every
+    # other frame here. datetime.date objects would compare unequal to the NASS
+    # Timestamps, which would silently produce an empty overlap and duplicate
+    # class/week pairs instead of a splice.
+    return _build_df([pd.DataFrame(raw["rows"])])
+
+
+def _ams_nass_agree(nass_df: pd.DataFrame, ams_df: pd.DataFrame,
+                    tol: float = 5.0, weeks: int = 26):
+    """Prove AMS and NASS are the same measure on the overlap — never assume it.
+
+    This is the number-against-an-independently-derived-number check. On the
+    latest common week the two agree to the pound (w/e 2026-08-29 reads
+    891/969/877/640/930 from both feeds). If AMS ever redefines the series, or a
+    week-ending convention drifts by a day, this refuses the splice rather than
+    publishing two different measures under one heading.
+
+    Scoped to the RECENT overlap, and that is the load-bearing part. AMS prints
+    a preliminary figure and NASS confirms it weeks later, so individual old
+    weeks get revised by a pound or three. Across the full archive -- 990
+    class/week pairs back to 2022 -- the worst single gap is 3.0 lb, or 0.34%.
+    That is revision noise, not a different measure. The first version of this
+    check took a max over every pair ever published against a 2.0 lb tolerance,
+    so one historical revision refused the splice permanently and the page went
+    on quietly showing the stale NASS week this change exists to replace. A
+    check that fails closed forever is no more use than one that cannot fail.
+    """
+    j = (nass_df[["class_desc", "week_ending", "Value"]]
+         .merge(ams_df[["class_desc", "week_ending", "Value"]],
+                on=["class_desc", "week_ending"], suffixes=("_nass", "_ams")))
+    if j.empty:                      # also catches a week-ending convention drift
+        return False, float("nan"), 0
+    cutoff = j["week_ending"].max() - pd.Timedelta(weeks=weeks)
+    recent = j[j["week_ending"] >= cutoff]
+    if recent.empty:                 # archive shorter than the window
+        recent = j
+    d = (recent["Value_nass"] - recent["Value_ams"]).abs()
+    return bool(d.max() <= tol), float(d.max()), int(len(recent))
+
+
+def _ams_first(nass_df, ams_df, unit_filter, err):
+    """Lead with AMS where it is present and provably the same series.
+
+    Returns (frame, source, note, maxdiff, n_overlap). Every failure path
+    returns the NASS frame plus a note -- the page degrades to exactly what it
+    renders today, with a banner saying why.
+    """
+    nass_only = nass_df.assign(source="NASS")
+    if unit_filter != "DRESSED":
+        return (nass_only, "NASS",
+                "AMS report 3658 publishes DRESSED weight by class only — "
+                "live-basis tiles are NASS, which updates monthly.",
+                float("nan"), 0)
+    if ams_df.empty:
+        return (nass_only, "NASS",
+                f"AMS weekly weights unavailable ({err or 'no rows returned'}) — "
+                f"showing NASS, which publishes weights only in its MONTHLY "
+                f"Livestock Slaughter release.", float("nan"), 0)
+    ok, maxdiff, n_ovl = _ams_nass_agree(nass_df, ams_df)
+    if not ok:
+        why = ("no overlapping weeks" if n_ovl == 0
+               else f"they differ by up to {maxdiff:,.1f} lb over {n_ovl} weeks")
+        return (nass_only, "NASS",
+                f"AMS and NASS dressed weights no longer line up ({why}) — "
+                f"refusing to splice, showing NASS only.", maxdiff, n_ovl)
+    merged = pd.concat([ams_df.assign(source="AMS"), nass_only],
+                       ignore_index=True)
+    # AMS is concatenated first, so keep="first" makes AMS win every week it
+    # covers and NASS supply everything older.
+    merged = merged.drop_duplicates(subset=["class_desc", "week_ending"],
+                                    keep="first")
+    return trailing_4wk(merged), "AMS", None, maxdiff, n_ovl
+
+
+def _row_source(df: pd.DataFrame, cls: str, when) -> str:
+    """Which feed produced the value a card is about to show."""
+    if when is None or df.empty:
+        return "—"
+    m = df[(df["class_desc"] == cls) & (df["week_ending"] == when)]
+    return str(m["source"].iloc[0]) if not m.empty else "—"
+
+
 def week_kpis(wt: pd.DataFrame, cls: str) -> dict:
     """Compute all snapshot KPIs for one class."""
     nan = dict(current=float("nan"), wow=float("nan"), wow_pct=float("nan"),
                yoy=float("nan"), yoy_pct=float("nan"), t4w=float("nan"),
-               olympic=float("nan"), vs_olympic=float("nan"), vs_olympic_pct=float("nan"),
+               prior_avg=float("nan"), vs_prior_avg=float("nan"), vs_prior_avg_pct=float("nan"),
                latest_date=None, latest_year=None, iso_week=None)
 
     sub = wt[wt["class_desc"] == cls].sort_values("week_ending")
@@ -388,13 +610,13 @@ def week_kpis(wt: pd.DataFrame, cls: str) -> dict:
     recent4 = sub.tail(4)["Value"]
     t4w = float(recent4.mean()) if len(recent4) >= 1 else float("nan")
 
-    # Olympic avg
-    olym = olympic_avg(sub, latest_year, iso_week)
-    vs_olympic = current - olym if not pd.isna(olym) else float("nan")
-    vs_olympic_pct = vs_olympic / olym * 100 if (not pd.isna(olym) and olym) else float("nan")
+    # Plain average of the prior 5 years for this ISO week
+    prior_val = prior_years_avg(sub, latest_year, iso_week)
+    vs_prior_avg = current - prior_val if not pd.isna(prior_val) else float("nan")
+    vs_prior_avg_pct = vs_prior_avg / prior_val * 100 if (not pd.isna(prior_val) and prior_val) else float("nan")
 
     return dict(current=current, wow=wow, wow_pct=wow_pct, yoy=yoy, yoy_pct=yoy_pct,
-                t4w=t4w, olympic=olym, vs_olympic=vs_olympic, vs_olympic_pct=vs_olympic_pct,
+                t4w=t4w, prior_avg=prior_val, vs_prior_avg=vs_prior_avg, vs_prior_avg_pct=vs_prior_avg_pct,
                 latest_date=latest_date, latest_year=latest_year, iso_week=iso_week)
 
 
@@ -413,11 +635,18 @@ def _snap_item(label: str, delta_html: str) -> str:
     return f'<div class="snap-item"><span class="snap-lbl">{label}</span>{delta_html}</div>'
 
 
-def _snap_card(cls: str, kpi: dict, unit_label: str) -> str:
+def _snap_card(cls: str, kpi: dict, unit_label: str, src: str = "NASS") -> str:
     val_str = f'{kpi["current"]:,.1f}' if not pd.isna(kpi["current"]) else "—"
     t4w_str = f'{kpi["t4w"]:,.1f}' if not pd.isna(kpi["t4w"]) else "—"
-    olym_str = f'{kpi["olympic"]:,.1f}' if not pd.isna(kpi["olympic"]) else "—"
+    prior_str = f'{kpi["prior_avg"]:,.1f}' if not pd.isna(kpi["prior_avg"]) else "—"
     color = CLASS_COLORS.get(cls, DM_MUTED)
+    # Every card names its own feed and its own week. A mixed row (four AMS
+    # tiles, one NASS) has to be self-describing -- a tile quietly holding last
+    # month's number under an AMS heading is the failure this change exists to
+    # fix, so it must never be possible to read one without its provenance.
+    wk_s    = kpi["latest_date"].strftime("%b %d, %Y") if kpi["latest_date"] is not None else "—"
+    src_col = "#6fa8c4" if src == "AMS" else JSA_GREEN_LT
+    src_txt = "AMS FIS weekly" if src == "AMS" else ("NASS monthly" if src == "NASS" else "no data")
     return f"""
     <div class="snap-card">
       <div class="snap-class" style="color:{color}">{CLASS_DISPLAY.get(cls, cls.title())}</div>
@@ -426,10 +655,13 @@ def _snap_card(cls: str, kpi: dict, unit_label: str) -> str:
         {_snap_item("WoW", _dc(kpi['wow'], '+.1f', ' lb') + ' ' + _dc(kpi['wow_pct'], '+.1f', '%'))}
         {_snap_item("YoY", _dc(kpi['yoy'], '+.1f', ' lb') + ' ' + _dc(kpi['yoy_pct'], '+.1f', '%'))}
         {_snap_item("4-Wk Avg", f'<span class="snap-neu">{t4w_str} lb</span>')}
-        {_snap_item("vs 5yr Avg", _dc(kpi['vs_olympic'], '+.1f', ' lb') + ' ' + _dc(kpi['vs_olympic_pct'], '+.1f', '%'))}
+        {_snap_item("vs 5yr Avg", _dc(kpi['vs_prior_avg'], '+.1f', ' lb') + ' ' + _dc(kpi['vs_prior_avg_pct'], '+.1f', '%'))}
       </div>
       <div style="margin-top:8px;font-size:0.7rem;color:{DM_MUTED}">
-        5yr avg: {olym_str} lb &nbsp;·&nbsp; {unit_label}
+        5yr avg: {prior_str} lb &nbsp;·&nbsp; {unit_label}
+      </div>
+      <div style="margin-top:3px;font-size:0.68rem;color:{src_col};font-weight:600">
+        {src_txt} &nbsp;·&nbsp; w/e {wk_s}
       </div>
     </div>"""
 
@@ -476,6 +708,175 @@ def _to_excel(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+# ── Saturday slaughter view ────────────────────────────────────────────────────
+# Data and arithmetic live in daily_slaughter.py; the layout is here next to the
+# brand helpers it needs. Same split as cof_recap and cold_storage on the Cattle
+# on Feed page.
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _sat_load() -> dict:
+    return daily_slaughter.fetch(MARS_KEY)
+
+
+def render_saturday_slaughter() -> None:
+    with st.spinner("Loading USDA AMS daily slaughter…"):
+        raw = _sat_load()
+
+    # Header banner, in the compact in-tab style the AMS Weekly tab uses --
+    # the page already has its logo masthead above the tab strip, so repeating
+    # it here would print the letterhead twice.
+    _pub = raw["published"].strftime("%b %d, %Y") if raw.get("published") else "N/A"
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      background:{DM_SURFACE2};border:1px solid {DM_BORDER};
+      border-left:4px solid {JSA_GREEN};border-radius:6px;padding:14px 20px;margin-bottom:18px">
+      <div>
+        <div style="color:{DM_TEXT};font-size:1.1rem;font-weight:700">
+          Saturday Slaughter — Daily Estimates
+        </div>
+        <div style="color:{DM_MUTED};font-size:0.78rem;margin-top:3px">
+          USDA Agricultural Marketing Service · report 3208 · Federally Inspected ·
+          the only JSA source with a day-of-week breakdown
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="color:{DM_MUTED};font-size:0.68rem;text-transform:uppercase;letter-spacing:.06em">AMS 3208 Published</div>
+        <div style="color:{JSA_GREEN_LT};font-size:1.15rem;font-weight:700">{_pub}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if raw.get("error"):
+        st.error(
+            f"AMS daily slaughter unavailable — {raw['error']}. This view reads "
+            f"MARS report 3208 and needs MARS_API_KEY, the same secret the "
+            f"carcass-weight tiles use. The published report is at "
+            f"{daily_slaughter.REPORT_PDF}"
+        )
+        return
+
+    df   = daily_slaughter.daily_frame(raw)
+    sats = daily_slaughter.saturday_frame(df)
+    if sats.empty:
+        st.warning("No complete Saturday weeks in report 3208.")
+        return
+
+    # ── Controls, in the tab body rather than the sidebar ─────────────────────
+    # This renderer runs on every page load now that it is a tab (a hidden tab
+    # is hidden, not skipped), so a st.sidebar widget here would sit in the
+    # weights sidebar permanently, whichever tab the reader was actually on.
+    yrs = sorted({d.year for d in sats["day"]})
+    pick = st.multiselect("Years", yrs, default=yrs, key="sat_years")
+    if not pick:
+        pick = yrs
+    st.caption(
+        f"MARS keeps this slug back to {daily_slaughter.FIRST_YEAR} and no "
+        f'further, so "the last time" is always read against that window. '
+        f"The newest Saturday is a projection until the next business day "
+        f"restates it, and Saturdays revise up far more often than down."
+    )
+
+    shown = sats[sats["day"].map(lambda d: d.year in pick)]
+
+    # ── Headline: the newest Saturday, and the last one that matched it ───────
+    latest = sats.iloc[-1]
+    prior  = daily_slaughter.at_or_above(sats, int(latest["head"]), before=latest["day"])
+    when   = "Tomorrow" if latest["is_projection"] else "Latest Saturday"
+
+    if prior.empty:
+        answer = (f"No Saturday since {daily_slaughter.FIRST_YEAR} has matched it.")
+    else:
+        p = prior.iloc[-1]
+        gap = (latest["day"] - p["day"]).days // 7
+        answer = (f"Last matched on <b>{p['day'].strftime('%b %d, %Y')}</b> at "
+                  f"<b>{int(p['head']):,}</b> head — {gap} weeks ago, and "
+                  + ("that was a holiday week." if p["lost_day"] else "that was a full week."))
+
+    note = ("This is a full Mon–Fri week, so the Saturday is additive rather "
+            "than a holiday make-up — which is what makes it unusual."
+            if not latest["lost_day"] else
+            f"This week gave up a weekday ({int(latest['week_low']):,} head on its "
+            f"weakest), so the Saturday is buying back a lost day rather than "
+            f"adding one.")
+
+    st.markdown(
+        f'<div class="sat-call">'
+        f'<div class="sat-call-lead">{when} — <b>{latest["day"].strftime("%A, %b %d, %Y")}</b>: '
+        f'<b>{int(latest["head"]):,} head</b>'
+        + ('  <span style="color:#b07d2b">(projection)</span>' if latest["is_projection"] else '')
+        + f'. {answer}</div>'
+        f'<div class="sat-call-sub">Week to date {int(latest["week_total"]):,} head · '
+        f'Saturday is {latest["sat_share"]*100:.1f}% of the week. {note}</div>'
+        f'</div>', unsafe_allow_html=True)
+
+    # ── Chart ──────────────────────────────────────────────────────────────────
+    # Holiday weeks are coloured apart rather than filtered out: they are most
+    # of the big Saturdays, and hiding them would make the series look like it
+    # trends when it mostly just reflects the calendar.
+    fig = go.Figure()
+    for flag, name, colour in ((False, "Full week", JSA_GREEN),
+                               (True,  "Holiday / short week", "#b07d2b")):
+        sub = shown[shown["lost_day"] == flag]
+        if sub.empty:
+            continue
+        fig.add_trace(go.Bar(
+            x=sub["day"], y=sub["head"], name=name,
+            marker_color=colour,
+            customdata=sub[["week_total", "week_low"]],
+            hovertemplate=("%{x|%b %-d, %Y}<br>%{y:,.0f} head"
+                           "<br>week %{customdata[0]:,.0f}"
+                           "<br>weakest weekday %{customdata[1]:,.0f}<extra></extra>"),
+        ))
+    _apply(fig, "Saturday Cattle Slaughter — Head", 430, "Head")
+    fig.update_layout(barmode="overlay", legend=dict(orientation="h", y=1.02, x=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Biggest Saturdays, with the week each sat in ───────────────────────────
+    st.markdown('<div class="sec-hdr">Biggest Saturdays on file</div>', unsafe_allow_html=True)
+    top = shown.sort_values("head", ascending=False).head(15)
+    rows_html = "".join(
+        f'<tr><td>{r.day.strftime("%a %b %d, %Y")}</td>'
+        f'<td class="num">{int(r.head):,}</td>'
+        f'<td class="num">{int(r.week_total):,}</td>'
+        f'<td class="num">{r.sat_share*100:.1f}%</td>'
+        f'<td>{daily_slaughter.context_line(r._asdict())}</td></tr>'
+        for r in top.itertuples()
+    )
+    st.markdown(
+        f'<table class="sat-table"><thead><tr>'
+        f'<th>Saturday</th><th style="text-align:right">Head</th>'
+        f'<th style="text-align:right">Week total</th>'
+        f'<th style="text-align:right">Sat share</th><th>Context</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>',
+        unsafe_allow_html=True)
+
+    # ── Audit + provenance ─────────────────────────────────────────────────────
+    bad = daily_slaughter.reconcile(df, raw)
+    if bad:
+        st.warning(
+            f"{len(bad)} week(s) do not sum to the report's own week-to-date — "
+            f"first: week of {bad[0][0]}, Mon–Sat {bad[0][1]:,} vs AMS {bad[0][2]:,}. "
+            f"Treat those weeks as suspect."
+        )
+
+    st.caption(
+        f"USDA AMS report 3208, *Daily Livestock and Poultry Slaughter* "
+        f"([report]({daily_slaughter.REPORT_PDF}) · "
+        f"[viewer]({daily_slaughter.REPORT_VIEW})), read through MARS. "
+        f"Estimated federally inspected head, {daily_slaughter.FIRST_YEAR}–present — "
+        f"that is the whole history MARS retains for this slug. "
+        f"{len(sats)} complete weeks, all of which reconcile to the report's own "
+        f"week-to-date. Cached 1 hr."
+    )
+
+    st.download_button(
+        "Download Saturday series (Excel)",
+        _to_excel(shown.assign(day=shown["day"].astype(str))),
+        file_name="saturday_slaughter.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 st.sidebar.markdown(
@@ -486,7 +887,7 @@ st.sidebar.markdown(
 st.sidebar.markdown(
     f'<div style="background:{JSA_GREEN};border-radius:4px;padding:5px 10px;'
     f'font-size:.7rem;color:#fff;font-weight:600;letter-spacing:.08em;'
-    f'text-transform:uppercase;margin-bottom:10px">Beef Weight Dashboard</div>',
+    f'text-transform:uppercase;margin-bottom:10px">Cattle Weights Dashboard</div>',
     unsafe_allow_html=True,
 )
 st.sidebar.markdown(
@@ -496,7 +897,7 @@ st.sidebar.markdown(
 st.sidebar.divider()
 
 current_year = datetime.now().year
-# Always load enough history for 5-yr olympic avg + trend charts
+# Always load enough history for the 5-yr average + trend charts
 LOAD_YEARS = tuple(range(current_year - 7, current_year + 1))
 
 weight_unit = st.sidebar.radio("Weight basis", ["Dressed Weight", "Live Weight"])
@@ -522,18 +923,248 @@ trend_class = st.sidebar.selectbox("Trend class", CLASS_ORDER, format_func=_fmt_
 
 # ── Load data ──────────────────────────────────────────────────────────────────
 
+# DEFINED HERE, ABOVE THE NASS GUARD THAT CALLS IT, and that placement is
+# load-bearing. It was originally next to _render_beef_production, far below;
+# the outage branch a few lines down then raised
+# `NameError: name '_render_wasde_production' is not defined` the moment NASS
+# was unavailable. py_compile passed and all 1,103 tests passed -- only
+# loading the page with no Snowflake credentials showed it. Same lesson as
+# AXIS in apps/beef_cutout/app.py.
+# ── USDA WASDE beef production forecast ─────────────────────────────────────
+#
+# WHAT THIS PAGE MEASURES, FORECAST A YEAR AHEAD. The tiles above are weekly
+# slaughter and carcass weight, and those two multiply into production --
+# the one cattle quantity WASDE publishes. So the panel says what USDA
+# thinks this page's own arithmetic comes to for the year.
+#
+# IT IS COMMERCIAL PRODUCTION AND THE WEEKLY TILES ARE FEDERALLY INSPECTED.
+# Not the same series: commercial adds state-inspected and custom plants on
+# top of FI, and WASDE's OTHER table (meats supply and use, page 32) adds
+# farm slaughter on top of that again -- 24,877 against 24,945 for 2026, a
+# 68 million lb gap identical in both years on file.
+#
+# SO THERE IS DELIBERATELY NO YEAR-TO-DATE PACE HERE, unlike the US Beef
+# Trade page, where ERS and WASDE are provably the same series. Dividing an
+# FI year-to-date by a commercial forecast would print a percentage that
+# looks like progress and measures a definitional gap, and nothing would
+# raise. tests/test_beef_trade.py pins the 68.
+
+
+@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+def _fetch_wasde_beef(schema: int = wasde.SCHEMA) -> dict:
+    """Shared arithmetic -- see wasde.summary.
+
+    `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed).
+    """
+    return wasde.summary(wasde.load_quarterly_production(), "beef")
+
+
+def _wasde_delta(value, percent, suffix, digits=0, base=None, base_label=""):
+    # THE LEVEL THE MOVE IS MEASURED FROM, printed under it. A tile reading
+    # "▼ 90 · 0.4% vs last month" over 24,877 does not say what USDA forecast
+    # last month -- the reader subtracts to find 24,967, which is the whole
+    # of Ross's complaint about the beef cutout tiles on 2026-10-07 and the
+    # Cash Cattle Trade WASDE tiles the day after. Same defect, same fix.
+    #
+    # IT GOES HERE AND NOT IN `sub` BECAUSE sub ALREADY CARRIES THE UNIT, and
+    # on this page the unit is load-bearing: WASDE is COMMERCIAL production
+    # while the weekly tiles above are FEDERALLY INSPECTED, and the word is
+    # what stops a reader setting one against the other. The year-on-year
+    # tile is the one place sub was spent on a level instead, which is why
+    # that tile was never part of this defect and is left alone.
+    _b = ""
+    if base is not None:
+        _b = ('<div style="color:%s;font-size:0.72rem;margin-top:3px">'
+              '%s %s</div>' % (DM_MUTED, base_label, format(base, ",.%df" % digits)))
+    if value is None and percent is None:
+        return ('<div style="color:%s;font-size:0.8rem">&mdash;</div>'
+                % DM_MUTED) + _b
+    if value == 0 or (value is None and percent == 0):
+        return ('<div style="color:%s;font-size:0.8rem">unchanged%s</div>'
+                % (DM_MUTED, suffix)) + _b
+    ref = value if value is not None else percent
+    arrow = "▲" if ref > 0 else "▼"
+    bits = []
+    if value is not None:
+        bits.append(format(abs(value), ",.%df" % digits))
+    if percent is not None:
+        bits.append(format(abs(percent), ",.1f") + "%")
+    # NO PARENTHESES: in USDA's own reports they mean negative.
+    return ('<div style="color:%s;font-size:0.8rem;font-weight:600;'
+            'margin-top:4px">%s %s%s</div>'
+            % (DM_MUTED, arrow, " · ".join(bits), suffix)) + _b
+
+
+def _wasde_tile(label, value, delta="", sub=""):
+    sub_html = ""
+    if sub:
+        sub_html = ('<div style="color:%s;font-size:0.7rem;margin-top:5px">'
+                    '%s</div>' % (DM_MUTED, sub))
+    return ('<div style="background:%s;border:1px solid %s;'
+            'border-top:3px solid #c4b456;border-radius:10px;'
+            'padding:16px 20px;text-align:center;height:100%%">'
+            '<div style="color:%s;font-size:0.68rem;text-transform:uppercase;'
+            'letter-spacing:0.09em;margin-bottom:6px">%s</div>'
+            '<div style="color:%s;font-size:1.5rem;font-weight:700;'
+            'line-height:1.1">%s</div>%s%s</div>'
+            % (DM_SURFACE, DM_BORDER, DM_MUTED, label, DM_TEXT, value,
+               delta, sub_html))
+
+
+def _render_wasde_production():
+    try:
+        w = _fetch_wasde_beef(wasde.SCHEMA)
+    except Exception as exc:  # noqa: BLE001
+        st.caption("WASDE beef production forecast unavailable — %s" % exc)
+        return
+    if not w or w.get("value") is None:
+        return
+
+    year = w["year"]
+    dash = "—"
+
+    st.markdown('<div class="sec-hdr">USDA WASDE expectation — beef '
+                'production</div>', unsafe_allow_html=True)
+    st.caption(
+        "USDA's projection of total US **commercial** beef production for "
+        "the **%d calendar year**, updated every WASDE. Report: **%s**. "
+        "Commercial is federally inspected plus state-inspected and custom "
+        "plants, so it runs above the federally-inspected weekly figures on "
+        "this page — the two are not the same series and should not be "
+        "set against each other." % (year, w["report_month"]))
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(_wasde_tile(
+            "USDA %d production forecast" % year,
+            format(w["value"], ",.0f"),
+            _wasde_delta(w["revision"], w["revision_pct"], " vs last month",
+                         base=w["prior"], base_label="last month"),
+            "calendar year · million lb, commercial"),
+            unsafe_allow_html=True)
+    with c2:
+        st.markdown(_wasde_tile(
+            "USDA %d forecast vs %d" % (year, w["base_year"]),
+            (format(w["yoy_pct"], "+,.1f") + "%"
+             if w["yoy_pct"] is not None else dash),
+            _wasde_delta(w["yoy_abs"], None, " million lb"),
+            ("%d actual %s" % (w["base_year"], format(w["base"], ",.0f"))
+             if w["base"] else "million lb, commercial")),
+            unsafe_allow_html=True)
+    with c3:
+        qs = [q for q in w["quarters"] if q["value"] is not None]
+        left = [q for q in qs if q["projected"]]
+        st.markdown(_wasde_tile(
+            "%d quarters still forecast" % year,
+            ("%d of %d" % (len(left), len(qs))) if qs else dash,
+            ('<div style="color:%s;font-size:0.8rem;margin-top:4px">%s to '
+             'come</div>' % (DM_MUTED,
+                             ", ".join(q["period"] for q in left) or "none"))
+            if qs else ""), unsafe_allow_html=True)
+    with c4:
+        nxt_pct, nxt_prior = None, None
+        if w["next_revision"] is not None and w["next_value"] is not None:
+            nxt_prior = w["next_value"] - w["next_revision"]
+            nxt_pct = ((w["next_revision"] / nxt_prior * 100.0)
+                       if nxt_prior else None)
+        st.markdown(_wasde_tile(
+            "USDA %d production forecast" % w["next_year"],
+            (format(w["next_value"], ",.0f")
+             if w["next_value"] is not None else dash),
+            _wasde_delta(w["next_revision"], nxt_pct, " vs last month",
+                         base=nxt_prior, base_label="last month"),
+            "million lb, commercial"), unsafe_allow_html=True)
+
+    qs = [q for q in w["quarters"] if q["value"] is not None]
+    if qs:
+        st.markdown('<div class="sec-hdr" style="margin-top:12px">By '
+                    'quarter</div>', unsafe_allow_html=True)
+        cols = st.columns(len(qs))
+        for col, q in zip(cols, qs):
+            with col:
+                name = ("Q%d" % q["number"]) if q["number"] else q["period"]
+                state = "proj" if q["projected"] else "actual"
+                st.markdown(_wasde_tile(
+                    "%s %d · %s" % (name, year, state),
+                    format(q["value"], ",.0f"), "", "million lb"),
+                    unsafe_allow_html=True)
+
+    audit = w["audit"]
+    if audit.get("ok") is False:
+        st.caption(
+            "⚠️ WASDE's annual figure (%s) no longer equals the %s "
+            "of its four quarters (%s). The table layout has probably "
+            "changed and these figures should not be relied on until that is "
+            "checked." % (format(audit["annual"], ",.0f"), audit["how"],
+                          format(audit["expected"], ",.0f")))
+
+
 with st.spinner("Loading USDA NASS data…"):
     raw     = fetch_data(LOAD_YEARS)
     raw_vol = fetch_vol_data(LOAD_YEARS)
 
 if raw.empty:
-    st.error("No data returned from USDA NASS. Check your API key in st.secrets.")
+    st.error("No data returned from the shared NASS cache (usda-nass-etl). "
+             "Weight history and 5-yr averages are unavailable.")
+    # Saturday Slaughter reads USDA AMS report 3208 and touches neither NASS
+    # nor the cache, so it is still good. Rendering it here, before the guard
+    # stops the rest of the page, is what keeps a NASS outage from taking down
+    # a view that has no NASS in it -- the property the old top-level switch
+    # had by sitting above this line.
+    # Same argument for the WASDE forecast: it comes from ESMIS and touches
+    # neither NASS nor the cache, so a NASS outage must not take it down. It
+    # normally lives inside the Beef Production tab, which sits BELOW this
+    # guard -- caught while rendering the page locally with no Snowflake
+    # credentials, which is exactly the outage this block exists for. Without
+    # these two lines the panel's own comment ("an AMS outage must not take
+    # the forecast down with it") was true inside the tab and false about the
+    # page.
+    _sat, _wasde_tab = st.tabs(["📅  Saturday Slaughter",
+                                "🥩  USDA WASDE forecast"])
+    with _sat:
+        render_saturday_slaughter()
+    with _wasde_tab:
+        _render_wasde_production()
     st.stop()
 
 wt  = raw[raw["unit_desc"].str.contains(unit_filter, case=False, na=False)].copy()
 # Use dedicated volume fetch; fall back to weight dataset if empty
 vol = raw_vol if not raw_vol.empty else raw[raw["unit_desc"].str.upper() == "HEAD"].copy()
 wt  = trailing_4wk(wt)
+
+# ── AMS FIS weekly weights, spliced over NASS for the tiles only ─────────────
+# `wt` stays pure NASS below this point: every chart, the 5-yr seasonal, the
+# YoY overlays, all head counts, beef production and the Data tab read it and
+# their provenance labels stay honest. Only `wt_tiles` leads with AMS.
+with st.spinner("Loading USDA AMS weekly carcass weights…"):
+    _fis_raw = _fetch_fis_weights()
+_fis_df  = _fis_frame(_fis_raw)
+_fis_err = _fis_raw.get("error")
+_fis_pub = _fis_raw.get("published")
+
+wt_tiles, _tile_src, _tile_note, _agree_max, _agree_n = _ams_first(
+    wt, _fis_df, unit_filter, _fis_err)
+
+_ams_rows = wt_tiles[wt_tiles["source"] == "AMS"] if "source" in wt_tiles else wt_tiles.iloc[0:0]
+_fis_wk_date = _ams_rows["week_ending"].max() if not _ams_rows.empty else None
+# Every mapped class must be present in the newest AMS week. A class that goes
+# missing falls back to NASS and its own card says so -- it must never sit
+# there holding last month's number under an AMS heading.
+_fis_missing = []
+if _fis_wk_date is not None:
+    _have = set(_ams_rows.loc[_ams_rows["week_ending"] == _fis_wk_date, "class_desc"])
+    _fis_missing = [c for c in FIS_CLASS_MAP.values() if c not in _have]
+
+# Freshness. Report 3658 publishes on a Thursday covering the week that ended
+# about twelve days earlier, so the newest AMS week is normally 12-19 days old.
+# A fetch SUCCEEDING is not evidence the data moved: against a frozen report it
+# returns 200 with the same rows forever, and the tiles would sit under a
+# confident "USDA AMS" heading looking current. SJ_LS711 froze in exactly this
+# way and stayed frozen for years. Past four weeks, say so out loud.
+FIS_MAX_AGE_DAYS = 28
+_fis_age_days = ((datetime.now().date() - _fis_wk_date.date()).days
+                 if _fis_wk_date is not None else None)
+_fis_stale = _fis_age_days is not None and _fis_age_days > FIS_MAX_AGE_DAYS
 
 latest_date = wt["week_ending"].max()
 latest_year = int(wt.loc[wt["week_ending"] == latest_date, "year"].iloc[0])
@@ -565,6 +1196,10 @@ _ams_wk_date    = _ams_dated_keys[0] if _ams_dated_keys else None
 _today      = datetime.now().date()
 _days_ahead = (4 - _today.weekday()) % 7   # 4 = Friday; 0 means today IS Friday
 _next_friday = _today + __import__("datetime").timedelta(days=_days_ahead)
+# Report 3658 publishes THURSDAY, not Friday like SJ_LS712 — three feeds on
+# this page, three different cadences, and only one of them is Fridays.
+_days_thu     = (3 - _today.weekday()) % 7   # 3 = Thursday
+_next_thursday = _today + __import__("datetime").timedelta(days=_days_thu)
 
 # ── Sidebar data info panel ────────────────────────────────────────────────────
 st.sidebar.divider()
@@ -573,13 +1208,31 @@ _ams_rpt_str = _ams_rpt_date.strftime('%b %d, %Y') if _ams_rpt_date else "N/A"
 _vol_color   = '#fbbf24' if vol_latest_date is not None and vol_latest_date != latest_date else DM_TEXT
 _vol_date_s  = vol_latest_date.strftime('%b %d, %Y') if vol_latest_date is not None else 'N/A'
 _vol_iso_s   = f"Wk {int(vol_latest_date.isocalendar()[1])}, {vol_latest_date.year}" if vol_latest_date is not None else 'N/A'
+_fis_wk_s    = _fis_wk_date.strftime('%b %d, %Y') if _fis_wk_date is not None else 'N/A'
+_fis_pub_s   = _fis_pub.strftime('%b %d, %Y') if _fis_pub else 'N/A'
+_fis_stat    = 'Live' if _tile_src == 'AMS' else ('Unavailable — ' + (_fis_err or 'not used on live basis'))
+_fis_stat_c  = '#6fa8c4' if _tile_src == 'AMS' else '#fbbf24'
 st.sidebar.markdown(f"""
 <div style="background:{DM_SURFACE2};border:1px solid {DM_BORDER};
   border-left:3px solid {JSA_GREEN};border-radius:6px;padding:12px 14px;font-size:0.78rem">
   <div style="color:{DM_MUTED};font-size:0.65rem;text-transform:uppercase;
     letter-spacing:.08em;margin-bottom:8px">Data Status</div>
 
-  <div style="color:{JSA_GREEN_LT};font-size:0.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">📊 NASS — Weights</div>
+  <div style="color:#6fa8c4;font-size:0.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">🗓️ AMS FIS — Carcass Weights (tiles)</div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+    <span style="color:{DM_MUTED}">Week ending</span>
+    <span style="color:{DM_TEXT};font-weight:600">{_fis_wk_s}</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+    <span style="color:{DM_MUTED}">Published</span>
+    <span style="color:{DM_TEXT};font-weight:600">{_fis_pub_s}</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+    <span style="color:{DM_MUTED}">Status</span>
+    <span style="color:{_fis_stat_c};font-weight:600">{_fis_stat}</span>
+  </div>
+
+  <div style="color:{JSA_GREEN_LT};font-size:0.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">📊 NASS — Weights (history / 5-yr)</div>
   <div style="display:flex;justify-content:space-between;margin-bottom:2px">
     <span style="color:{DM_MUTED}">Report date</span>
     <span style="color:{DM_TEXT};font-weight:600">{latest_date.strftime('%b %d, %Y')}</span>
@@ -614,19 +1267,25 @@ st.sidebar.markdown(f"""
   <div style="border-top:1px solid {DM_BORDER};margin:8px 0"></div>
 
   <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-    <span style="color:{DM_MUTED}">Next update</span>
-    <span style="color:{DM_TEXT};font-weight:600">{_next_friday.strftime('%b %d, %Y')}</span>
+    <span style="color:{DM_MUTED}">AMS FIS (weights)</span>
+    <span style="color:{DM_TEXT};font-weight:600">Thursdays ({_next_thursday.strftime('%b %d')})</span>
   </div>
 
   <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-    <span style="color:{DM_MUTED}">Update day</span>
-    <span style="color:{DM_TEXT};font-weight:600">Fridays</span>
+    <span style="color:{DM_MUTED}">AMS SJ_LS712 (slaughter)</span>
+    <span style="color:{DM_TEXT};font-weight:600">Fridays ({_next_friday.strftime('%b %d')})</span>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+    <span style="color:{DM_MUTED}">NASS Livestock Slaughter</span>
+    <span style="color:{DM_TEXT};font-weight:600">Monthly</span>
   </div>
 
   <div style="border-top:1px solid {DM_BORDER};margin:8px 0"></div>
 
   <div style="color:{DM_MUTED};font-size:0.68rem;line-height:1.5">
     NASS: USDA Livestock Slaughter report<br>
+    AMS: MARS report 3658 (FIS carcass weights)<br>
     AMS: LPGMN report SJ_LS712<br>
     Cache refreshes every hour
   </div>
@@ -643,10 +1302,10 @@ with hdr_l:
       <img src="{JSA_LOGO_FULL}" style="height:68px" />
       <div>
         <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
-          JSA - USDA Beef Slaughter Weights
+          JSA - USDA Cattle Slaughter Weights
         </div>
         <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
-          Weekly snapshot &nbsp;·&nbsp; USDA NASS QuickStats &nbsp;·&nbsp; Federally Inspected &nbsp;·&nbsp; Commercial Slaughter
+          Weekly snapshot &nbsp;·&nbsp; USDA AMS FIS + NASS QuickStats &nbsp;·&nbsp; Federally Inspected &nbsp;·&nbsp; Commercial Slaughter
         </div>
       </div>
     </div>
@@ -656,11 +1315,17 @@ with hdr_r:
     _wt_str      = latest_date.strftime('%b %d, %Y')
     _dates_match = vol_latest_date is not None and vol_latest_date == latest_date
     _ams_hdr_str = _ams_wk_date.strftime('%b %d, %Y') if _ams_wk_date else "N/A"
+    _fis_hdr_s   = _fis_wk_date.strftime('%b %d, %Y') if _fis_wk_date is not None else "N/A"
     st.markdown(f"""
     <div style="text-align:right;padding-top:6px;font-size:0.75rem">
+      <div style="color:#6fa8c4;font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">AMS FIS — CARCASS WEIGHTS</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
+        <span style="color:{DM_MUTED}">Week ending</span>
+        <span style="color:#6fa8c4;font-weight:700;font-size:0.9rem">{_fis_hdr_s}</span>
+      </div>
       <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">NASS</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:2px">
-        <span style="color:{DM_MUTED}">Weights as of</span>
+        <span style="color:{DM_MUTED}">Weights (history) as of</span>
         <span style="color:{DM_TEXT};font-weight:700;font-size:0.9rem">{_wt_str}</span>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
@@ -681,10 +1346,11 @@ with hdr_r:
 st.divider()
 
 # ── Top-level page tabs ────────────────────────────────────────────────────────
-_page_summary, _page_nass, _page_ams, _page_prod = st.tabs([
+_page_summary, _page_nass, _page_ams, _page_sat, _page_prod = st.tabs([
     "⭐  Summary",
-    "📊  NASS Beef Weights & Slaughter",
+    "📊  NASS Cattle Weights & Slaughter",
     "🗓️  AMS Weekly Slaughter",
+    "📅  Saturday Slaughter",
     "🥩  Beef Production",
 ])
 
@@ -693,10 +1359,19 @@ def _render_nass():
     """All NASS dashboard content — called inside the NASS tab."""
         # ── Weekly Snapshot cards ────────────────────────────────────────────────
 
+    # Deliberately `wt`, not `wt_tiles` — this tab stays single-source NASS so
+    # its charts and its headline can never disagree with each other.
     cols = st.columns(len(snap_classes))
     for col, cls in zip(cols, snap_classes):
         kpi = week_kpis(wt, cls)
-        col.markdown(_snap_card(cls, kpi, unit_label), unsafe_allow_html=True)
+        col.markdown(_snap_card(cls, kpi, unit_label, src="NASS"), unsafe_allow_html=True)
+
+    st.caption(
+        f"USDA NASS weekly weights, week ending {latest_date.strftime('%b %d, %Y')}. "
+        f"NASS accumulates weeks into a MONTHLY Livestock Slaughter release, so this "
+        f"page can sit several weeks behind. The Summary tab leads with the AMS FIS "
+        f"weekly figure (report 3658) for the same measure."
+    )
 
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
@@ -706,7 +1381,7 @@ def _render_nass():
     def vol_kpis(vol_df: pd.DataFrame, cls: str) -> dict:
         nan = dict(current=float("nan"), wow=float("nan"), wow_pct=float("nan"),
                    yoy=float("nan"), yoy_pct=float("nan"), t4w=float("nan"),
-                   olympic=float("nan"), vs_olympic=float("nan"), vs_olympic_pct=float("nan"))
+                   prior_avg=float("nan"), vs_prior_avg=float("nan"), vs_prior_avg_pct=float("nan"))
         sub = vol_df[vol_df["class_desc"] == cls].sort_values("week_ending")
         if sub.empty:
             return nan
@@ -728,17 +1403,17 @@ def _render_nass():
         yoy_pct = yoy / ly_val * 100 if (not pd.isna(ly_val) and ly_val) else float("nan")
 
         t4w   = float(sub.tail(4)["Value"].mean())
-        olym  = olympic_avg(sub, latest_y, iso_w)
-        vs_ol = current - olym if not pd.isna(olym) else float("nan")
-        vs_ol_pct = vs_ol / olym * 100 if (not pd.isna(olym) and olym) else float("nan")
+        prior_val  = prior_years_avg(sub, latest_y, iso_w)
+        vs_prior = current - prior_val if not pd.isna(prior_val) else float("nan")
+        vs_prior_pct = vs_prior / prior_val * 100 if (not pd.isna(prior_val) and prior_val) else float("nan")
         return dict(current=current, wow=wow, wow_pct=wow_pct, yoy=yoy, yoy_pct=yoy_pct,
-                    t4w=t4w, olympic=olym, vs_olympic=vs_ol, vs_olympic_pct=vs_ol_pct)
+                    t4w=t4w, prior_avg=prior_val, vs_prior_avg=vs_prior, vs_prior_avg_pct=vs_prior_pct)
 
 
     def _vol_card(cls: str, kpi: dict) -> str:
         val_str  = f'{kpi["current"]:,.0f}' if not pd.isna(kpi["current"]) else "—"
         t4w_str  = f'{kpi["t4w"]:,.0f}' if not pd.isna(kpi["t4w"]) else "—"
-        olym_str = f'{kpi["olympic"]:,.0f}' if not pd.isna(kpi["olympic"]) else "—"
+        prior_str = f'{kpi["prior_avg"]:,.0f}' if not pd.isna(kpi["prior_avg"]) else "—"
         color = CLASS_COLORS.get(cls, DM_MUTED)
         return f"""
         <div class="snap-card">
@@ -748,10 +1423,10 @@ def _render_nass():
             {_snap_item("WoW", _dc(kpi['wow'], '+.0f', ' hd') + ' ' + _dc(kpi['wow_pct'], '+.1f', '%'))}
             {_snap_item("YoY", _dc(kpi['yoy'], '+.0f', ' hd') + ' ' + _dc(kpi['yoy_pct'], '+.1f', '%'))}
             {_snap_item("4-Wk Avg", f'<span class="snap-neu">{t4w_str} hd</span>')}
-            {_snap_item("vs 5yr Avg", _dc(kpi['vs_olympic'], '+.0f', ' hd') + ' ' + _dc(kpi['vs_olympic_pct'], '+.1f', '%'))}
+            {_snap_item("vs 5yr Avg", _dc(kpi['vs_prior_avg'], '+.0f', ' hd') + ' ' + _dc(kpi['vs_prior_avg_pct'], '+.1f', '%'))}
           </div>
           <div style="margin-top:8px;font-size:0.7rem;color:{DM_MUTED}">
-            5yr avg: {olym_str} head
+            5yr avg: {prior_str} head
           </div>
         </div>"""
 
@@ -789,7 +1464,7 @@ def _render_nass():
               <td>{_fmt_delta(kpi['wow'], kpi['wow_pct'])}</td>
               <td>{t4} lb</td>
               <td>{_fmt_delta(kpi['yoy'], kpi['yoy_pct'])}</td>
-              <td>{_fmt_delta(kpi['vs_olympic'], kpi['vs_olympic_pct'])}</td>
+              <td>{_fmt_delta(kpi['vs_prior_avg'], kpi['vs_prior_avg_pct'])}</td>
             </tr>"""
         return f"""
         <table class="sum-table">
@@ -817,7 +1492,7 @@ def _render_nass():
               <td>{_fmt_delta(kpi['wow'], kpi['wow_pct'], ' hd')}</td>
               <td>{t4} hd</td>
               <td>{_fmt_delta(kpi['yoy'], kpi['yoy_pct'], ' hd')}</td>
-              <td>{_fmt_delta(kpi['vs_olympic'], kpi['vs_olympic_pct'], ' hd')}</td>
+              <td>{_fmt_delta(kpi['vs_prior_avg'], kpi['vs_prior_avg_pct'], ' hd')}</td>
             </tr>"""
         return f"""
         <table class="sum-table">
@@ -888,14 +1563,14 @@ def _render_nass():
             prev_y = [prev_lookup.get(w, float("nan")) for w in iso_weeks]
 
             # 5yr avg and range — mapped to current year dates
-            olym_map = olympic_series(sub, latest_year)
-            olym_y    = [olym_map.get(w, float("nan")) for w in iso_weeks]
-            olym_highs, olym_lows = [], []
+            prior_map = prior_years_series(sub, latest_year)
+            prior_y    = [prior_map.get(w, float("nan")) for w in iso_weeks]
+            prior_highs, prior_lows = [], []
             for w in iso_weeks:
                 yr_vals = [_nearest_week(sub, latest_year - i, w) for i in range(1, 6)]
                 yr_vals = [v for v in yr_vals if not pd.isna(v)]
-                olym_highs.append(max(yr_vals) if yr_vals else float("nan"))
-                olym_lows.append(min(yr_vals) if yr_vals else float("nan"))
+                prior_highs.append(max(yr_vals) if yr_vals else float("nan"))
+                prior_lows.append(min(yr_vals) if yr_vals else float("nan"))
 
             # 4-week rolling avg for current year
             sub_roll = sub[sub["year"] == latest_year].sort_values("week_ending").copy()
@@ -908,7 +1583,7 @@ def _render_nass():
             # 5yr range band
             fig.add_trace(go.Scatter(
                 x=list(x_dates) + list(x_dates)[::-1],
-                y=olym_highs + olym_lows[::-1],
+                y=prior_highs + prior_lows[::-1],
                 fill="toself", fillcolor="rgba(122,153,144,0.12)",
                 line=dict(color="rgba(0,0,0,0)"),
                 name="5yr Range", hoverinfo="skip", showlegend=True,
@@ -916,7 +1591,7 @@ def _render_nass():
 
             # 5yr avg line
             fig.add_trace(go.Scatter(
-                x=x_dates, y=olym_y,
+                x=x_dates, y=prior_y,
                 name="5yr Avg", mode="lines",
                 line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
                 hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
@@ -947,7 +1622,7 @@ def _render_nass():
                 hovertemplate="4-wk avg: %{y:,.1f} lb<extra></extra>",
             ))
 
-            _wt_vals = list(curr_yr["Value"]) + [v for v in prev_y if not pd.isna(v)] + [v for v in olym_y if not pd.isna(v)]
+            _wt_vals = list(curr_yr["Value"]) + [v for v in prev_y if not pd.isna(v)] + [v for v in prior_y if not pd.isna(v)]
             _apply(fig, f"{cls.title()} — {weight_unit} · Last {trend_weeks} Weeks", 440, "lb / head",
                    y_range=_tight_range(_wt_vals))
             st.plotly_chart(fig, use_container_width=True)
@@ -994,30 +1669,30 @@ def _render_nass():
             # ── Multi-year overlay ────────────────────────────────────────────────
             fig3 = go.Figure()
 
-            # Olympic avg band
-            olym_all = olympic_series(yoy_sub, ly_max, n=5)
+            # 5yr average band
+            prior_all = prior_years_series(yoy_sub, ly_max, n=5)
             all_doys = sorted(yoy_sub["day_of_year"].unique())
             doy_to_iso = yoy_sub.groupby("day_of_year")["iso_week"].first().to_dict()
-            olym_y_all = [olym_all.get(doy_to_iso.get(d, 0), float("nan")) for d in all_doys]
+            prior_y_all = [prior_all.get(doy_to_iso.get(d, 0), float("nan")) for d in all_doys]
 
             # Range band
-            olym_high_all, olym_low_all = [], []
+            prior_high_all, prior_low_all = [], []
             for d in all_doys:
                 iw = doy_to_iso.get(d, 0)
                 yr_vals = [_nearest_week(yoy_sub, ly_max - i, iw) for i in range(1, 6)]
                 yr_vals = [v for v in yr_vals if not pd.isna(v)]
-                olym_high_all.append(max(yr_vals) if yr_vals else float("nan"))
-                olym_low_all.append(min(yr_vals) if yr_vals else float("nan"))
+                prior_high_all.append(max(yr_vals) if yr_vals else float("nan"))
+                prior_low_all.append(min(yr_vals) if yr_vals else float("nan"))
 
             fig3.add_trace(go.Scatter(
                 x=all_doys + all_doys[::-1],
-                y=olym_high_all + olym_low_all[::-1],
+                y=prior_high_all + prior_low_all[::-1],
                 fill="toself", fillcolor="rgba(122,153,144,0.10)",
                 line=dict(color="rgba(0,0,0,0)"),
                 name="5yr Range", hoverinfo="skip",
             ))
             fig3.add_trace(go.Scatter(
-                x=all_doys, y=olym_y_all,
+                x=all_doys, y=prior_y_all,
                 name="5yr Avg",
                 mode="lines",
                 line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
@@ -1048,8 +1723,8 @@ def _render_nass():
             wk_vals = []
             for yr in range(ly_max - n_years + 1, ly_max + 1):
                 v = _nearest_week(yoy_sub, yr, latest_iso)
-                olym = olympic_avg(yoy_sub, yr, latest_iso)
-                wk_vals.append({"Year": yr, "Value": v, "Olympic": olym})
+                prior_val = prior_years_avg(yoy_sub, yr, latest_iso)
+                wk_vals.append({"Year": yr, "Value": v, "PriorAvg": prior_val})
             wk_df = pd.DataFrame(wk_vals).dropna(subset=["Value"])
 
             fig4 = go.Figure()
@@ -1061,7 +1736,7 @@ def _render_nass():
                 hovertemplate="%{x}: %{y:,.1f} lb<extra></extra>",
             ))
             fig4.add_trace(go.Scatter(
-                x=wk_df["Year"], y=wk_df["Olympic"],
+                x=wk_df["Year"], y=wk_df["PriorAvg"],
                 name="5yr Avg",
                 mode="lines+markers",
                 line=dict(color=DM_MUTED, dash="dash", width=1.5),
@@ -1071,18 +1746,18 @@ def _render_nass():
             fig4.update_xaxes(tickmode="linear", dtick=1)
             st.plotly_chart(fig4, use_container_width=True)
 
-            # ── YoY delta vs Olympic avg ──────────────────────────────────────────
+            # ── YoY delta vs 5yr avg ──────────────────────────────────────────────
             st.markdown('<div class="sec-hdr">Current Year vs 5yr Avg — Weekly Delta</div>', unsafe_allow_html=True)
             curr_full = yoy_sub[yoy_sub["year"] == ly_max].sort_values("iso_week")
-            olym_curr = [olympic_avg(yoy_sub, ly_max, w) for w in curr_full["iso_week"]]
+            prior_curr = [prior_years_avg(yoy_sub, ly_max, w) for w in curr_full["iso_week"]]
             curr_full = curr_full.copy()
-            curr_full["vs_olympic"] = curr_full["Value"].values - pd.array(olym_curr)
+            curr_full["vs_prior_avg"] = curr_full["Value"].values - pd.array(prior_curr)
 
             fig5 = go.Figure(go.Bar(
                 x=curr_full["week_ending"],
-                y=curr_full["vs_olympic"],
-                marker_color=[COL_POS if v >= 0 else COL_NEG for v in curr_full["vs_olympic"]],
-                hovertemplate="%{x|%b %d}: %{y:+.1f} lb vs Olympic avg<extra></extra>",
+                y=curr_full["vs_prior_avg"],
+                marker_color=[COL_POS if v >= 0 else COL_NEG for v in curr_full["vs_prior_avg"]],
+                hovertemplate="%{x|%b %d}: %{y:+.1f} lb vs 5yr avg<extra></extra>",
             ))
             fig5.add_hline(y=0, line_color=DM_BORDER)
             _apply(fig5, f"{ly_max} vs 5yr Avg — Weekly \u0394", 260, "\u0394 lb / head")
@@ -1238,7 +1913,7 @@ def _render_ams_page():
         </div>
         <div style="color:{DM_MUTED};font-size:0.78rem;margin-top:3px">
           USDA Agricultural Marketing Service · Livestock, Poultry &amp; Grain Market News ·
-          More current than NASS (updates Fridays)
+          SJ_LS712 · More current than NASS (updates Fridays)
         </div>
       </div>
       <div style="text-align:right">
@@ -1455,18 +2130,53 @@ def _render_ams_page():
 # ── Summary tab ───────────────────────────────────────────────────────────────
 
 def _render_summary():
-    """Summary tab — NASS weight tiles + AMS slaughter tiles + seasonal chart."""
+    """Summary tab — AMS-led weight tiles + AMS slaughter tiles + seasonal chart."""
 
-    # ── NASS Weight tiles ────────────────────────────────────────────────────
+    # ── Headline carcass-weight tiles — AMS first, NASS underneath ───────────
+    _hdr_col = "#6fa8c4" if _tile_src == "AMS" else JSA_GREEN_LT
+    _hdr_wk  = wt_tiles["week_ending"].max()
+    _hdr_src = ("USDA AMS — Actual Slaughter Under Federal Inspection (report 3658)"
+                if _tile_src == "AMS" else "USDA NASS — Livestock Slaughter (monthly)")
+    _pub_s   = (f' &nbsp;·&nbsp; published {_fis_pub.strftime("%b %d, %Y")}'
+                if (_tile_src == "AMS" and _fis_pub) else "")
     st.markdown(
-        f'<div class="sec-hdr" style="font-size:0.8rem;color:{JSA_GREEN_LT}">'
-        f'📊 NASS Beef Weights — Week Ending {latest_date.strftime("%b %d, %Y")}</div>',
+        f'<div class="sec-hdr" style="font-size:0.8rem;color:{_hdr_col}">'
+        f'🗓️ Cattle Carcass Weights — {_hdr_src} &nbsp;·&nbsp; '
+        f'Week Ending {_hdr_wk.strftime("%b %d, %Y")}{_pub_s}</div>',
         unsafe_allow_html=True,
     )
+    if _tile_note:
+        st.warning(_tile_note, icon="⚠️")
+    if _fis_missing:
+        st.warning(
+            "AMS returned no " + ", ".join(CLASS_DISPLAY.get(c, c) for c in _fis_missing)
+            + f" for week ending {_fis_wk_date.strftime('%b %d, %Y')} — "
+              "those tiles fall back to NASS and are labelled NASS.", icon="⚠️")
+    if _tile_src == "AMS" and _fis_stale:
+        st.warning(
+            f"These AMS figures are {_fis_age_days} days old (week ending "
+            f"{_fis_wk_date.strftime('%b %d, %Y')}). Report 3658 normally runs "
+            f"12–19 days behind, so it has probably stopped updating — the fetch "
+            f"still succeeds, which is why nothing else here would flag it.",
+            icon="⚠️")
     wt_cols = st.columns(len(snap_classes))
     for col, cls in zip(wt_cols, snap_classes):
-        kpi = week_kpis(wt, cls)
-        col.markdown(_snap_card(cls, kpi, unit_label), unsafe_allow_html=True)
+        kpi = week_kpis(wt_tiles, cls)
+        col.markdown(
+            _snap_card(cls, kpi, unit_label,
+                       src=_row_source(wt_tiles, cls, kpi["latest_date"])),
+            unsafe_allow_html=True,
+        )
+    _cap_src = ("Tiles: USDA AMS MARS report 3658, published Thursdays, ~12 days "
+                "after the week it covers." if _tile_src == "AMS" else
+                "Tiles: USDA NASS Livestock Slaughter — weekly figures are only "
+                "released monthly, so they can run ~3 weeks behind.")
+    _cap_chk = (f" AMS and NASS dressed weight are the same measure: verified equal "
+                f"within {_agree_max:,.1f} lb across {_agree_n} overlapping weeks "
+                f"before splicing." if _tile_src == "AMS" else "")
+    st.caption(_cap_src + " WoW / YoY / 4-week come from the same spliced series; "
+               "the 5-year average and every chart below come from NASS history."
+               + _cap_chk)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
@@ -1648,16 +2358,16 @@ def _render_summary():
     # 5yr range + avg
     all_doys    = sorted(chart_df["day_of_year"].unique())
     doy_to_iso  = chart_df.groupby("day_of_year")["iso_week"].first().to_dict()
-    olym_map    = olympic_series(chart_df, ly_max, n=5)
+    prior_map    = prior_years_series(chart_df, ly_max, n=5)
 
-    olym_hi, olym_lo, olym_avg = [], [], []
+    prior_hi, prior_lo, prior_avg_vals = [], [], []
     for d in all_doys:
         iw = doy_to_iso.get(d, 0)
         yr_vals = [_nearest_week(chart_df, ly_max - i, iw) for i in range(1, 6)]
         yr_vals = [v for v in yr_vals if not pd.isna(v)]
-        olym_hi.append(max(yr_vals)  if yr_vals else float("nan"))
-        olym_lo.append(min(yr_vals)  if yr_vals else float("nan"))
-        olym_avg.append(olym_map.get(iw, float("nan")))
+        prior_hi.append(max(yr_vals)  if yr_vals else float("nan"))
+        prior_lo.append(min(yr_vals)  if yr_vals else float("nan"))
+        prior_avg_vals.append(prior_map.get(iw, float("nan")))
 
     # Year color palette — current year gets JSA green, others cycle through muted tones
     _yr_palette = [
@@ -1669,13 +2379,13 @@ def _render_summary():
 
     fig.add_trace(go.Scatter(
         x=all_doys + all_doys[::-1],
-        y=olym_hi + olym_lo[::-1],
+        y=prior_hi + prior_lo[::-1],
         fill="toself", fillcolor="rgba(122,153,144,0.10)",
         line=dict(color="rgba(0,0,0,0)"),
         name="5yr Range", hoverinfo="skip",
     ))
     fig.add_trace(go.Scatter(
-        x=all_doys, y=olym_avg,
+        x=all_doys, y=prior_avg_vals,
         name="5yr Avg", mode="lines",
         line=dict(color="rgba(122,153,144,0.75)", width=1.8, dash="dash"),
         hovertemplate=f"5yr avg: %{{y:{val_fmt}}}<extra></extra>",
@@ -1712,6 +2422,13 @@ def _render_summary():
 
 def _render_beef_production():
     """Beef Production tab — AMS weekly tile + NASS-computed seasonal chart."""
+
+    # ABOVE THE AMS FETCH, DELIBERATELY. WASDE comes from ESMIS over a
+    # different host, so an AMS outage must not take the forecast down with
+    # it -- the same shape as the Saturday Slaughter view and the morning
+    # cutout panel.
+    _render_wasde_production()
+    st.markdown("<hr style='margin:18px 0;'>", unsafe_allow_html=True)
 
     ams       = _fetch_ams_raw()
     meat_prod = ams.get("meat_prod", {})
@@ -1820,7 +2537,7 @@ def _render_beef_production():
     doy_to_iso = beef_prod_nass.groupby("day_of_year")["iso_week"].first().to_dict()
 
     # 5yr range + avg
-    olym_hi, olym_lo, olym_avg = [], [], []
+    prior_hi, prior_lo, prior_avg_vals = [], [], []
     for d in all_doys:
         iw = doy_to_iso.get(d, 0)
         yr_vals = []
@@ -1828,9 +2545,9 @@ def _render_beef_production():
             sub = beef_prod_nass[(beef_prod_nass["year"] == ly-i) & (beef_prod_nass["iso_week"] == iw)]
             if not sub.empty:
                 yr_vals.append(float(sub["prod_mlbs"].iloc[0]))
-        olym_hi.append(max(yr_vals)  if yr_vals else float("nan"))
-        olym_lo.append(min(yr_vals)  if yr_vals else float("nan"))
-        olym_avg.append(sum(yr_vals)/len(yr_vals) if yr_vals else float("nan"))
+        prior_hi.append(max(yr_vals)  if yr_vals else float("nan"))
+        prior_lo.append(min(yr_vals)  if yr_vals else float("nan"))
+        prior_avg_vals.append(sum(yr_vals)/len(yr_vals) if yr_vals else float("nan"))
 
     _prod_palette = ["#6fa8c4","#c98a56","#9b89c4","#c4b456","#e07070","#c8d4ca","#7a9485","#fbbf24"]
     month_ticks   = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
@@ -1838,13 +2555,13 @@ def _render_beef_production():
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=all_doys + all_doys[::-1], y=olym_hi + olym_lo[::-1],
+        x=all_doys + all_doys[::-1], y=prior_hi + prior_lo[::-1],
         fill="toself", fillcolor="rgba(201,138,86,0.10)",
         line=dict(color="rgba(0,0,0,0)"),
         name="5yr Range", hoverinfo="skip",
     ))
     fig.add_trace(go.Scatter(
-        x=all_doys, y=olym_avg, name="5yr Avg", mode="lines",
+        x=all_doys, y=prior_avg_vals, name="5yr Avg", mode="lines",
         line=dict(color="rgba(201,138,86,0.75)", width=1.8, dash="dash"),
         hovertemplate="5yr avg: %{y:,.1f} M lbs<extra></extra>",
     ))
@@ -1910,6 +2627,9 @@ with _page_nass:
 
 with _page_ams:
     _render_ams_page()
+
+with _page_sat:
+    render_saturday_slaughter()
 
 with _page_prod:
     _render_beef_production()
