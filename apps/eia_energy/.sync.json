@@ -1,0 +1,12 @@
+{
+ "repo": "JSA-Dashboards/eia-energy-dashboard",
+ "subdir": null,
+ "branch": "master",
+ "commit": "044c75386c07cd08f3d5cee069680d234ce5dc37",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "78abb905ab1e7a74e9fe939fe2272b0a2c6476432058359d42ea598f5e983259",
+  "assets/jsa_50yr.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
+  "eia_ethanol_cache_client.py": "f3b1314f670a2dbf04eef6559ff80c46bea3ecb016bba55f11d8a1c04313a61c"
+ }
+}

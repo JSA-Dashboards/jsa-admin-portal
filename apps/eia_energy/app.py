@@ -6,6 +6,9 @@ biodiesel/renewable diesel capacity and feedstock usage.
 John Stewart & Associates
 Data source: U.S. EIA Open Data API v2 (https://api.eia.gov/v2)
 """
+import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 
 import base64
 import os
@@ -20,13 +23,15 @@ import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ── Theme ─────────────────────────────────────────────────────────────────────
-DM_BG        = "#0c1116"
-DM_SURFACE   = "#141c24"
-DM_SURFACE2  = "#1b2530"
-DM_BORDER    = "#2a3846"
-DM_TEXT      = "#e7edf3"
-DM_MUTED     = "#84939f"
+from eia_ethanol_cache_client import fetch_ethanol_cached, cache_freshness as ethanol_cache_freshness
+
+# ── Theme (light, matching the other JSA dashboards) ──────────────────────────
+DM_BG        = "#f7f9fa"
+DM_SURFACE   = "#ffffff"
+DM_SURFACE2  = "#f0f2f4"
+DM_BORDER    = "#dde3e8"
+DM_TEXT      = "#1f2328"
+DM_MUTED     = "#6b7280"
 
 JSA_BLUE     = "#0693e3"
 COL_NATGAS   = "#3fa9f5"
@@ -63,7 +68,7 @@ PLANT_FUEL_COLORS = {
     "Natural Gas for Hydrogen Feedstock": "#1f6fb2",
 }
 
-JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+JSA_LOGO_FULL = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 
 
 @st.cache_data
@@ -78,8 +83,25 @@ def _asset_uri(filename: str) -> str:
 
 WATERMARK = _asset_uri("jsa_50yr.png")
 
-# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+
+st.markdown("""<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+</style>""", unsafe_allow_html=True)
+
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+# The Streamlit Cloud badge (creator avatar + logo) is drawn by Cloud's outer page,
+# outside this iframe, so CSS here can't reach it; add the rule to the parent
+# document instead (same-origin). No-op when run locally.
+_BADGE_JS = """<script>(function(){try{var w=window;while(w.parent&&w.parent!==w){try{void w.parent.document;w=w.parent;}catch(e){break;}}var d=w.document;if(d.getElementById('jsa-hide-cloud-badge'))return;var s=d.createElement('style');s.id='jsa-hide-cloud-badge';s.textContent="[class*='_profileContainer_'],[class*='_viewerBadge_']{display:none !important;}";d.head.appendChild(s);}catch(e){}})();</script>"""
+try:
+    st.html(_BADGE_JS, unsafe_allow_javascript=True)
+except TypeError:  # older Streamlit without st.html JS support
+    import streamlit.components.v1 as _stc
+    _stc.html(_BADGE_JS, height=0)
 
 st.markdown(f"""
 <style>
@@ -139,19 +161,22 @@ st.markdown(f"""
   }}
   .note-text {{ color: {DM_MUTED}; font-size: 0.78rem; }}
 
-  /* JSA watermark on charts and snapshot tables */
+  /* JSA watermark on charts and snapshot tables. Plotly draws an opaque
+     background rect in its own SVG, which paints over anything placed
+     behind it (a ::before at z-index:0) — so, same as the tables below,
+     the watermark has to sit ON TOP via ::after at low opacity rather
+     than behind the chart. */
   [data-testid="stPlotlyChart"] {{ position: relative; }}
-  [data-testid="stPlotlyChart"]::before {{
+  [data-testid="stPlotlyChart"]::after {{
       content: ""; position: absolute; inset: 0;
-      background: url('{WATERMARK}') center 50% / 26% auto no-repeat;
-      opacity: 0.10; pointer-events: none; z-index: 0;
+      background: url('{WATERMARK}') center 50% / 28% auto no-repeat;
+      opacity: 0.12; pointer-events: none; z-index: 5;
   }}
-  [data-testid="stPlotlyChart"] .main-svg {{ position: relative; z-index: 1; }}
   table[id^="snap_"] {{ position: relative; }}
   table[id^="snap_"]::after {{
       content: ""; position: absolute; inset: 0;
-      background: url('{WATERMARK}') center 50% / 22% auto no-repeat;
-      opacity: 0.07; pointer-events: none; z-index: 5;
+      background: url('{WATERMARK}') center 50% / 24% auto no-repeat;
+      opacity: 0.09; pointer-events: none; z-index: 5;
   }}
 </style>
 """, unsafe_allow_html=True)
@@ -373,9 +398,17 @@ def _snap_toolbar(snap_id: str, filename: str):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image(JSA_LOGO_WHITE, width=180)
+    st.image(JSA_LOGO_FULL, width=180)
     st.markdown("### EIA Energy Dashboard")
-    section = st.radio("Section", ["Weekly EIA Report", "Natural Gas", "Ethanol & Biofuels"], index=0)
+    section = st.radio("Section", ["Weekly EIA Report", "Natural Gas", "Ethanol (Weekly)",
+                                    "Biofuel Feedstocks (Monthly)"], index=0)
+    st.markdown("---")
+    if st.button("🔄 Refresh Data Now", width='stretch'):
+        eia_get.clear()
+        st.rerun()
+    st.caption("Forces a fresh pull from EIA, bypassing the 30-min cache, for natural gas / "
+               "feedstocks / capacity. Ethanol data comes from the Droplet's own scheduled "
+               "pull instead (see the 'as of' line below) — this button doesn't affect it.")
     st.markdown("---")
     LOOKBACK_OPTIONS = {
         "Since Jan 2021": "2021-01-01",
@@ -383,11 +416,11 @@ with st.sidebar:
     }
     lookback = st.selectbox("Chart lookback", list(LOOKBACK_OPTIONS.keys()), index=0)
     st.markdown("---")
-    st.markdown(
-        f"<div class='note-text'>Source: U.S. Energy Information Administration<br>"
-        f"api.eia.gov/v2 — cached 30 min</div>",
-        unsafe_allow_html=True,
-    )
+    _ethanol_freshness = ethanol_cache_freshness()
+    _source_note = "Source: U.S. Energy Information Administration<br>api.eia.gov/v2 — cached 30 min"
+    if _ethanol_freshness:
+        _source_note += f"<br>Ethanol data as of {_ethanol_freshness} UTC (Droplet ETL)"
+    st.markdown(f"<div class='note-text'>{_source_note}</div>", unsafe_allow_html=True)
 
 start_date = LOOKBACK_OPTIONS[lookback]
 if start_date is None and lookback != "Max":
@@ -407,17 +440,23 @@ if section == "Weekly EIA Report":
     PADD_MOVE_CODES = {"R10": "R10-Z00", "R20": "R20-Z00", "R30": "R30-Z00",
                         "R40": "R40-Z00", "R50": "R50-Z00"}
 
-    eth_prod_padd = eia_get("petroleum/sum/sndw",
-                             {"duoarea": PADD_CODES + ["NUS"], "product": "EPOOXE", "process": "YOP"})
-    eth_stock_padd = eia_get("petroleum/sum/sndw",
-                              {"duoarea": PADD_CODES + ["NUS"], "product": "EPOOXE", "process": "SAE"})
-    eth_blend_padd = eia_get("petroleum/sum/sndw",
-                              {"duoarea": PADD_CODES + ["NUS"], "product": "EPOOXE", "process": "YIR"})
-    eth_imports_padd = eia_get("petroleum/move/wkly",
-                                {"duoarea": list(PADD_MOVE_CODES.values()) + ["NUS-Z00"],
-                                 "product": "EPOOXE", "process": "IM0"})
-    eth_exports_nat = eia_get("petroleum/move/wkly",
-                               {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"})
+    _sndw_padd_facets = {"duoarea": PADD_CODES + ["NUS"], "product": "EPOOXE"}
+    eth_prod_padd = fetch_ethanol_cached(
+        "petroleum/sum/sndw", {**_sndw_padd_facets, "process": "YOP"},
+        lambda: eia_get("petroleum/sum/sndw", {**_sndw_padd_facets, "process": "YOP"}))
+    eth_stock_padd = fetch_ethanol_cached(
+        "petroleum/sum/sndw", {**_sndw_padd_facets, "process": "SAE"},
+        lambda: eia_get("petroleum/sum/sndw", {**_sndw_padd_facets, "process": "SAE"}))
+    eth_blend_padd = fetch_ethanol_cached(
+        "petroleum/sum/sndw", {**_sndw_padd_facets, "process": "YIR"},
+        lambda: eia_get("petroleum/sum/sndw", {**_sndw_padd_facets, "process": "YIR"}))
+    _move_padd_facets = {"duoarea": list(PADD_MOVE_CODES.values()) + ["NUS-Z00"], "product": "EPOOXE"}
+    eth_imports_padd = fetch_ethanol_cached(
+        "petroleum/move/wkly", {**_move_padd_facets, "process": "IM0"},
+        lambda: eia_get("petroleum/move/wkly", {**_move_padd_facets, "process": "IM0"}))
+    eth_exports_nat = fetch_ethanol_cached(
+        "petroleum/move/wkly", {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"},
+        lambda: eia_get("petroleum/move/wkly", {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"}))
     gas_demand = eia_get("petroleum/cons/wpsup", {"duoarea": "NUS", "product": "EPM0F"})
 
     crude_stock = eia_get("petroleum/sum/sndw", {"duoarea": "NUS", "product": "EPC0", "process": "SAX"})
@@ -932,26 +971,33 @@ elif section == "Natural Gas":
 # ══════════════════════════════════════════════════════════════════════════════
 # ETHANOL & BIOFUELS
 # ══════════════════════════════════════════════════════════════════════════════
-else:
-    eth_weekly = eia_get("petroleum/sum/sndw",
-                          {"duoarea": "NUS", "product": "EPOOXE",
-                           "process": ["YOP", "SAE", "YIR"]}, start=start_date)
-    eth_padd = eia_get("petroleum/pnp/wprode", {"product": "EPOOXE"}, start=start_date)
-    eth_exports = eia_get("petroleum/move/wkly", {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"},
-                           start=start_date)
-    capbio = eia_get("petroleum/pnp/capbio", start=start_date)
-    feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
-    plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
+elif section == "Ethanol (Weekly)":
+    def _since(df):
+        """Apply the sidebar's chart lookback after a full-history cache read
+        (the cache itself always holds full history, same as feedstocks_hist)."""
+        if df.empty or not start_date:
+            return df
+        return df[df["period"] >= start_date].reset_index(drop=True)
+
+    _weekly_facets = {"duoarea": "NUS", "product": "EPOOXE", "process": ["YOP", "SAE", "YIR"]}
+    eth_weekly = _since(fetch_ethanol_cached(
+        "petroleum/sum/sndw", _weekly_facets,
+        lambda: eia_get("petroleum/sum/sndw", _weekly_facets, start=start_date)))
+    eth_padd = _since(fetch_ethanol_cached(
+        "petroleum/pnp/wprode", {"product": "EPOOXE"},
+        lambda: eia_get("petroleum/pnp/wprode", {"product": "EPOOXE"}, start=start_date)))
+    _exports_facets = {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"}
+    eth_exports = _since(fetch_ethanol_cached(
+        "petroleum/move/wkly", _exports_facets,
+        lambda: eia_get("petroleum/move/wkly", _exports_facets, start=start_date)))
 
     prod = eth_weekly[eth_weekly["process"] == "YOP"] if not eth_weekly.empty else pd.DataFrame()
     stocks = eth_weekly[eth_weekly["process"] == "SAE"] if not eth_weekly.empty else pd.DataFrame()
-    cap_latest_month = capbio["period"].max() if not capbio.empty else None
-    cap_snap = capbio[capbio["period"] == cap_latest_month] if cap_latest_month is not None else pd.DataFrame()
-    total_cap = cap_snap["value"].sum() if not cap_snap.empty else None
 
-    ng_at_biofuel = plant_fuel[plant_fuel["process"] == "819NG0"] if not plant_fuel.empty else pd.DataFrame()
+    st.caption("EIA's weekly petroleum status report — production, stocks, and exports "
+               "typically lag only about a week.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3 = st.columns(3)
     with c1:
         v, d, pct = latest_and_delta(prod)
         st.metric("Ethanol Production (kb/d)", fmt_num(v, 0),
@@ -964,14 +1010,6 @@ else:
         v, d, pct = latest_and_delta(eth_exports)
         st.metric("Ethanol Exports (kb/d)", fmt_num(v, 0),
                    f"{d:+,.0f} kb/d WoW" if d is not None else None)
-    with c4:
-        st.metric("Ethanol + Biodiesel + RD Capacity (MMgal/yr)", fmt_num(total_cap, 0),
-                   cap_latest_month.strftime("%b %Y") if cap_latest_month is not None else None)
-    with c5:
-        v, d, pct = latest_and_delta(ng_at_biofuel)
-        v_bcf = v / 1000 if v is not None else None
-        st.metric("Nat Gas Used at Biofuel Plants (Bcf/yr)", fmt_num(v_bcf, 0),
-                   f"{pct:+.1f}% YoY" if pct is not None else None)
 
     # ── Weekly ethanol production, stocks & exports ──────────────────────────
     section_header("Weekly U.S. Fuel Ethanol Production, Stocks & Exports")
@@ -1026,6 +1064,48 @@ else:
         _snap_toolbar("snap_eth_padd", "Weekly Ethanol Production by PADD")
     else:
         st.info("No PADD-level ethanol data returned.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BIOFUEL FEEDSTOCKS (MONTHLY)
+# ══════════════════════════════════════════════════════════════════════════════
+else:
+    capbio = eia_get("petroleum/pnp/capbio", start=start_date)
+    feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
+    plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
+    # Full, unfiltered history for the comparison tables below — YoY, YTD, and the
+    # 3-yr seasonal average all need years of lookback regardless of the sidebar's
+    # chart-display lookback setting.
+    feedstocks_hist = eia_get("petroleum/pnp/feedbiofuel")
+
+    cap_latest_month = capbio["period"].max() if not capbio.empty else None
+    cap_snap = capbio[capbio["period"] == cap_latest_month] if cap_latest_month is not None else pd.DataFrame()
+    total_cap = cap_snap["value"].sum() if not cap_snap.empty else None
+
+    feed_latest_month = feedstocks["period"].max() if not feedstocks.empty else None
+    ng_at_biofuel = plant_fuel[plant_fuel["process"] == "819NG0"] if not plant_fuel.empty else pd.DataFrame()
+
+    if feed_latest_month is not None:
+        today = pd.Timestamp.today()
+        lag_months = (today.year - feed_latest_month.year) * 12 + (today.month - feed_latest_month.month)
+        st.info(
+            f"📅 EIA's biofuels feedstock survey is monthly and published with a lag — the "
+            f"latest available month is **{feed_latest_month.strftime('%B %Y')}**, "
+            f"{lag_months} month{'s' if lag_months != 1 else ''} behind today "
+            f"({today.strftime('%B %Y')}). Capacity data lags similarly "
+            f"({cap_latest_month.strftime('%B %Y') if cap_latest_month is not None else '—'}). "
+            f"Use **🔄 Refresh Data Now** in the sidebar after a new report has published to "
+            f"bypass the 30-minute cache."
+        )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Ethanol + Biodiesel + RD Capacity (MMgal/yr)", fmt_num(total_cap, 0),
+                   cap_latest_month.strftime("%b %Y") if cap_latest_month is not None else None)
+    with c2:
+        v, d, pct = latest_and_delta(ng_at_biofuel)
+        v_bcf = v / 1000 if v is not None else None
+        st.metric("Nat Gas Used at Biofuel Plants (Bcf/yr)", fmt_num(v_bcf, 0),
+                   f"{pct:+.1f}% YoY" if pct is not None else None)
 
     # ── Biofuels production capacity ────────────────────────────────────────
     section_header("Biofuels Operable Production Capacity")
@@ -1086,41 +1166,184 @@ else:
         "EPOOBDAFPO": ("Other Ag/Forestry Products", "Other Feedstocks"),
         "EPOOBDOB": ("Other Biofuel Feedstocks", "Other Feedstocks"),
     }
+    FEED8_MAP = {
+        "Soybean Oil": "Soybean Oil", "Corn Oil": "Corn Oil", "Canola Oil": "Canola Oil",
+        "Yellow Grease": "Yellow Grease", "Tallow": "Tallow", "White Grease": "White Grease",
+        "Poultry Fat": "Poultry",
+    }
+    FEED8_ORDER = ["Soybean Oil", "Corn Oil", "Canola Oil", "Yellow Grease",
+                   "Tallow", "White Grease", "Poultry", "Other"]
+    FEED8_COLORS = {
+        "Soybean Oil": "#b5651d", "Corn Oil": "#2f4f2f", "Canola Oil": "#deb887",
+        "Yellow Grease": "#6a5acd", "Tallow": "#c0392b", "White Grease": "#9acd32",
+        "Poultry": "#4169e1", "Other": "#87ceeb",
+    }
+
+    def build_feedstock_compare_table(df, cat_col, categories, snap_id, decimals=0,
+                                       value_divisor=1.0, ytd_mode="calendar"):
+        """Monthly comparison table: last 4 months, same month LY, M/M %, Y/Y %,
+        3-yr seasonal average (same calendar month, prior 3 years), vs-3yr %,
+        and a YTD vs YTD-LY comparison. `df` must have a `period`, `cat_col`, and
+        `value` column and carry full (unfiltered) history. `value_divisor` rescales
+        the raw value (e.g. 56 to convert million lbs to million bushels).
+        `ytd_mode` is "calendar" (Jan-Dec) or "marketing" (Sep-Aug, corn/sorghum
+        marketing year)."""
+        if df.empty:
+            return None
+        df = df.assign(value=df["value"] / value_divisor)
+        latest_m = df["period"].max()
+        month_cols = [latest_m - pd.DateOffset(months=n) for n in (3, 2, 1, 0)]
+        ly_month = latest_m - pd.DateOffset(months=12)
+        seasonal_months = [pd.Timestamp(year=latest_m.year - n, month=latest_m.month, day=1)
+                           for n in (1, 2, 3)]
+        if ytd_mode == "marketing":
+            my_start_year = latest_m.year if latest_m.month >= 9 else latest_m.year - 1
+            ytd_start = pd.Timestamp(my_start_year, 9, 1)
+            ytd_start_ly = pd.Timestamp(my_start_year - 1, 9, 1)
+            ytd_label = f"MYTD '{str(my_start_year)[-2:]}-{str(my_start_year + 1)[-2:]}"
+            ytd_label_ly = f"MYTD '{str(my_start_year - 1)[-2:]}-{str(my_start_year)[-2:]}"
+            ytd_caption = (f"Marketing YTD = {ytd_start.strftime('%b %Y')}–{latest_m.strftime('%b %Y')} "
+                           f"vs. {ytd_start_ly.strftime('%b %Y')}–{ly_month.strftime('%b %Y')} "
+                           f"(Sep 1–Aug 31 marketing year).")
+        else:
+            ytd_start = pd.Timestamp(latest_m.year, 1, 1)
+            ytd_start_ly = pd.Timestamp(latest_m.year - 1, 1, 1)
+            ytd_label = f"YTD '{str(latest_m.year)[-2:]}"
+            ytd_label_ly = f"YTD '{str(latest_m.year - 1)[-2:]}"
+            ytd_caption = (f"YTD = Jan–{latest_m.strftime('%b %Y')} vs. "
+                           f"Jan–{ly_month.strftime('%b %Y')}.")
+
+        def val_at(cat, period):
+            sub = df[(df[cat_col] == cat) & (df["period"] == period)] if cat is not None \
+                else df[df["period"] == period]
+            return sub["value"].sum() if not sub.empty else None
+
+        def sum_range(cat, start, end):
+            mask = (df["period"] >= start) & (df["period"] <= end)
+            if cat is not None:
+                mask &= df[cat_col] == cat
+            sub = df[mask]
+            return sub["value"].sum() if not sub.empty else None
+
+        def pct(a, b):
+            if a is None or b is None or b == 0:
+                return None
+            return (a / b - 1) * 100
+
+        def fmt_val(v):
+            return f"{v:,.{decimals}f}" if v is not None else "—"
+
+        def fmt_pct(v):
+            if v is None:
+                return "<span style='color:{}'>—</span>".format(DM_MUTED)
+            return f"<span style='color:{POS if v >= 0 else NEG}'>{v:+.1f}%</span>"
+
+        headers = (["Feedstock"] + [m.strftime("%b '%y") for m in month_cols] +
+                   [f"{ly_month.strftime('%b')} '{str(ly_month.year)[-2:]} (LY)", "M/M %", "Y/Y %",
+                    "3-Yr Avg", "vs 3-Yr", ytd_label, ytd_label_ly, "YTD %"])
+        header_html = "".join(
+            f"<th style='padding:4px 8px;text-align:{'left' if i == 0 else 'right'};"
+            f"color:{DM_MUTED};font-size:0.68rem;text-transform:uppercase;white-space:nowrap'>"
+            f"{h}</th>" for i, h in enumerate(headers))
+
+        rows_html = ""
+        row_specs = [(c, c) for c in categories]
+        if len(categories) > 1:
+            row_specs.append(("__TOTAL__", "Total"))
+        for cat_key, label in row_specs:
+            cat = None if cat_key == "__TOTAL__" else cat_key
+            vals = [val_at(cat, m) for m in month_cols]
+            ly_val = val_at(cat, ly_month)
+            mom = pct(vals[-1], vals[-2])
+            yoy = pct(vals[-1], ly_val)
+            seasonal_vals = [v for v in (val_at(cat, m) for m in seasonal_months) if v is not None]
+            seasonal_avg = sum(seasonal_vals) / len(seasonal_vals) if seasonal_vals else None
+            vs_seasonal = pct(vals[-1], seasonal_avg)
+            ytd = sum_range(cat, ytd_start, latest_m)
+            ytd_ly = sum_range(cat, ytd_start_ly, ly_month)
+            ytd_chg = pct(ytd, ytd_ly)
+
+            bold = "font-weight:700;border-top:1px solid " + DM_BORDER if cat_key == "__TOTAL__" else ""
+            cells = [f"<td style='padding:4px 8px;{bold}'>{label}</td>"]
+            for v in vals:
+                cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(v)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(ly_val)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(mom)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(yoy)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(seasonal_avg)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(vs_seasonal)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(ytd)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(ytd_ly)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(ytd_chg)}</td>")
+            rows_html += f"<tr>{''.join(cells)}</tr>"
+
+        table_html = (
+            f"<div style='overflow-x:auto'>"
+            f"<table id='{snap_id}' style='width:100%;border-collapse:collapse;background:{DM_SURFACE};"
+            f"border:1px solid {DM_BORDER};border-radius:6px;font-size:0.82rem'>"
+            f"<tr>{header_html}</tr>{rows_html}</table></div>"
+            f"<div class='note-text' style='margin:4px 0 16px 0'>"
+            f"{ytd_caption} "
+            f"3-Yr Avg = average {latest_m.strftime('%B')} across "
+            f"{seasonal_months[-1].year}–{seasonal_months[0].year}.</div>"
+        )
+        return table_html
+
     if not feedstocks.empty:
         fs = feedstocks[feedstocks["product"].isin(FEEDSTOCK_GROUPS.keys())].copy()
         fs["feedstock"] = fs["product"].map(lambda p: FEEDSTOCK_GROUPS[p][0])
         fs["family"] = fs["product"].map(lambda p: FEEDSTOCK_GROUPS[p][1])
         latest_m = fs["period"].max()
 
+        fs_hist = feedstocks_hist[feedstocks_hist["product"].isin(FEEDSTOCK_GROUPS.keys())].copy()
+        fs_hist["feedstock"] = fs_hist["product"].map(lambda p: FEEDSTOCK_GROUPS[p][0])
+        fs_hist["family"] = fs_hist["product"].map(lambda p: FEEDSTOCK_GROUPS[p][1])
+        bd_hist = fs_hist[fs_hist["family"] != "Grains (Ethanol)"].copy()
+        bd_hist["bucket8"] = bd_hist["feedstock"].map(FEED8_MAP).fillna("Other")
+
         st.markdown("**Corn & Grain Sorghum Inputs to Ethanol Production**")
+        GRAIN_BUSHEL_LBS = 56.0  # standard test weight for both corn and grain sorghum
+        ctrl_a, ctrl_b, ctrl_c = st.columns(3)
+        with ctrl_a:
+            grain_unit = st.segmented_control("Units", ["Million lbs", "Million bushels"],
+                                              default="Million lbs", required=True, key="grain_unit")
+        with ctrl_b:
+            grain_series = st.segmented_control("Series", ["Both", "Corn Only", "Grain Sorghum Only"],
+                                                default="Both", required=True, key="grain_series")
+        with ctrl_c:
+            grain_ytd_basis = st.segmented_control(
+                "YTD basis", ["Calendar (Jan–Dec)", "Marketing Year (Sep–Aug)"],
+                default="Calendar (Jan–Dec)", required=True, key="grain_ytd_basis")
+        grain_divisor = GRAIN_BUSHEL_LBS if grain_unit == "Million bushels" else 1.0
+        grain_ytd_mode = "marketing" if grain_ytd_basis == "Marketing Year (Sep–Aug)" else "calendar"
+        grain_feeds = {"Both": ["Corn", "Grain Sorghum"], "Corn Only": ["Corn"],
+                       "Grain Sorghum Only": ["Grain Sorghum"]}[grain_series]
+
         grains = fs[fs["family"] == "Grains (Ethanol)"]
         by_grain = grains.groupby(["period", "feedstock"])["value"].sum().reset_index()
         fig = go.Figure()
         for feed, color in [("Corn", "#c9a24b"), ("Grain Sorghum", "#8a7233")]:
+            if feed not in grain_feeds:
+                continue
             sub = by_grain[by_grain["feedstock"] == feed]
             if not sub.empty:
-                fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / 1000, mode="lines",
+                fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / grain_divisor, mode="lines",
                                           stackgroup="one", name=feed, line=dict(color=color)))
-        style_fig(fig, yaxis_title="Billion lbs / month")
+        style_fig(fig, yaxis_title=f"{grain_unit} / month")
         _snap_anchor("snap_feed_grains")
         st.plotly_chart(fig, width='stretch')
         _snap_toolbar("snap_feed_grains", "Corn & Grain Sorghum Inputs to Ethanol Production")
 
+        grains_table = build_feedstock_compare_table(
+            fs_hist[fs_hist["family"] == "Grains (Ethanol)"], "feedstock", grain_feeds,
+            "snap_grains_table", decimals=(1 if grain_divisor != 1 else 0),
+            value_divisor=grain_divisor, ytd_mode=grain_ytd_mode)
+        if grains_table:
+            st.markdown(grains_table, unsafe_allow_html=True)
+            _snap_toolbar("snap_grains_table", f"Corn & Grain Sorghum — Monthly Comparison ({grain_unit})")
+
         st.markdown("**Feedstocks for Biodiesel & Renewable Diesel Production**")
         bd = fs[fs["family"] != "Grains (Ethanol)"]
-
-        FEED8_MAP = {
-            "Soybean Oil": "Soybean Oil", "Corn Oil": "Corn Oil", "Canola Oil": "Canola Oil",
-            "Yellow Grease": "Yellow Grease", "Tallow": "Tallow", "White Grease": "White Grease",
-            "Poultry Fat": "Poultry",
-        }
-        FEED8_ORDER = ["Soybean Oil", "Corn Oil", "Canola Oil", "Yellow Grease",
-                       "Tallow", "White Grease", "Poultry", "Other"]
-        FEED8_COLORS = {
-            "Soybean Oil": "#b5651d", "Corn Oil": "#2f4f2f", "Canola Oil": "#deb887",
-            "Yellow Grease": "#6a5acd", "Tallow": "#c0392b", "White Grease": "#9acd32",
-            "Poultry": "#4169e1", "Other": "#87ceeb",
-        }
         bd = bd.copy()
         bd["bucket8"] = bd["feedstock"].map(FEED8_MAP).fillna("Other")
 
@@ -1150,6 +1373,11 @@ else:
             st.plotly_chart(fig, width='stretch')
             st.caption(f"Top biodiesel/RD feedstocks, {latest_m.strftime('%b %Y')}")
             _snap_toolbar("snap_feed_top10", f"Top Biodiesel-RD Feedstocks {latest_m.strftime('%b %Y')}")
+
+        bd_table = build_feedstock_compare_table(bd_hist, "bucket8", FEED8_ORDER, "snap_bd_table")
+        if bd_table:
+            st.markdown(bd_table, unsafe_allow_html=True)
+            _snap_toolbar("snap_bd_table", "Biodiesel-RD Feedstocks — Monthly Comparison (Million lbs)")
 
         # ── Market share (% of the 8-bucket total) ────────────────────────────
         st.markdown("**Feedstocks Demand Market Share for Biofuel Production**")
@@ -1249,5 +1477,18 @@ st.markdown("---")
 st.markdown(
     f"<div class='note-text'>Data: U.S. Energy Information Administration, api.eia.gov/v2 "
     f"&nbsp;|&nbsp; John Stewart & Associates</div>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f"<div class='note-text' style='margin-top:8px;font-size:0.7rem;line-height:1.4'>"
+    f"Trading commodity futures, options on futures, cash commodities and over-the-counter "
+    f"derivative products involve substantial risk of loss and may not be suitable for all "
+    f"investors. John Stewart & Associates, Inc. does not accept orders to buy or sell by "
+    f"e-mail. The information contained in this message has been obtained from sources "
+    f"believed to be reliable, but is not guaranteed as to its accuracy or completeness. "
+    f"Opinions are solely those of the author, subject to change at any time, and do not "
+    f"constitute a solicitation to buy or sell commodity futures, options, or "
+    f"over-the-counter derivative products. Past performance is not indicative of future "
+    f"results. © John Stewart & Associates, Inc. {pd.Timestamp.today().year}.</div>",
     unsafe_allow_html=True,
 )
