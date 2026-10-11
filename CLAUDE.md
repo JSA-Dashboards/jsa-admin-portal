@@ -28,9 +28,11 @@ which left 13 of 16 bundled apps behind their source by October 2026.
   portal doesn't have.** `plan` lists new secret names; compare `requirements.txt`
   too. Secrets stay per deployment (see "Apps sharing code do not share secrets").
 - **Themes:** the portal's `.streamlit/config.toml` applies to every page; a
-  source's own `.streamlit/config.toml` is ignored. A source whose inline palette
-  is dark (`vessel_lineup` at the time of writing) can't be synced until it is
-  made light upstream, because the portal is light-only.
+  source's own `.streamlit/config.toml` is ignored. The portal is light-only, so a
+  source with a dark inline palette needs a light option upstream: `vessel_lineup`
+  reads `VESSEL_THEME` (dark by default) and the sync pins it to `light` (`pin_env`).
+  Its data files (`*.db`, `*.xlsx`) are not mirrored: on Cloud the app downloads
+  them from the public repo at runtime (`data_sync.py`, because `/mount/src`).
 - `.github/workflows/sync-apps.yml` runs the sync daily and opens one pull request.
   Merging it is the update; the portal still needs Manage app > Reboot app.
 

@@ -100,8 +100,19 @@
   },
   "vessel_lineup": {
    "repo": "JSA-Dashboards/jsa-vessel-lineup-dashboard",
-   "sync": false,
-   "why": "upstream palette is dark (BG #0d1210) and the portal is light-only; this copy is a light fork 24 commits behind. Make the source light, then sync."
+   "prefix_modules": "vl_",
+   "pin_env": {
+    "VESSEL_THEME": "light"
+   },
+   "exclude": [
+    "*.db",
+    "*.xlsx",
+    "southport_poller.py",
+    "setup_poller_auth.py",
+    "fetch_southport_email.py",
+    "convert_southport.py",
+    "update_data.*"
+   ]
   },
   "teams_broadcast": {
    "repo": "JSA-Dashboards/teams-broadcast",
