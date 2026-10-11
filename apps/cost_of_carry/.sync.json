@@ -1,0 +1,28 @@
+{
+ "repo": "JSA-Dashboards/cost-of-carry-calculator",
+ "subdir": null,
+ "branch": "main",
+ "commit": "1070b4ddff528f5af368aad05b265fef3c25fe2c",
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "files": {
+  "app.py": "d4dda0193acd8d237485f17512b10a2f338e1cd0f660953d2d159b6065d4314f",
+  "assets/jsa_favicon.png": "f894128daaf0884918bb1bed00c69bc8de6a07cb945d136247e63088d97e702d",
+  "assets/logo-50yr.png": "a3eadfab9db6854936464b2b63e956ec39fcc533b57610faded40c2877fbc8a4",
+  "assets/logo-full.png": "83b5bc0a845ca66a45e11f9b181a9fde6618172d8569752a31d5c4c9c110a3bf",
+  "data/ams_ethanol_weekly.csv": "cc8d968eef2ac65894b9a24153bc4febd1db481e79a73b24e57f2acd0d3dab8b",
+  "data/ams_plant_corn.csv": "e95f7f2558b931c13acf57206316cd638655307ecab54266a1b535fea0fc1186",
+  "data/fed_funds_dff.csv": "c11ddd89df9688025ce813bbe77b86493545f55932e02904195a2cf948e5958b",
+  "data/futures_history_archive.csv": "21580b0cf02b53aea45fb51dcebfbe35a9a72b1f9e38fbd9e495b7445b6d8017",
+  "coc_ethanol_grind.py": "92c2f17b520d72e51b74c52a35106bf3f9dd6f0cf4c08574e4429bde5caa30e9",
+  "coc_history_archive.py": "9d4176bc8ba61b3970f6748682302757fc8aa591290a079f915e5891a2afd31b",
+  "coc_interest_rates.py": "a9f5d3dae11b43200828d10794cff40212f5591209ce4ecb0bbe8a6aa62b106b",
+  "coc_massive_api.py": "1fe52a2a0e201b5d594d4da1fa4108534cb45a6d3c65ccd5a0c0c8c1bd352ce4",
+  "coc_seasonal_pattern.py": "8e4b43a07a6756f923359b567fced85a30be52aeeca7ddab1cf683e7340f906b",
+  "coc_settlement_archive.py": "7004b3ca389b13f3434863a4004ffa26501b009822e0ccc8adbb84d4610a5a51",
+  "coc_snapshot_copy.py": "f13e0f9dfb6a9965c3920cbccb7173ab641a4983decd85a8acbc7adbb46c3961",
+  "coc_snowflake_db.py": "671df42394ac5419d3eced7438535f7db85f57c4bfd156ceae1ff0bb45ce1043",
+  "coc_stocks_use.py": "0c2eee94fd14650632499b31e5621d768962ee3823d39fe7a54a4b6c163217ba",
+  "coc_storage_rates.py": "c1348369369d219665d2adec0e06bd9c8b17c64c2686665c8c708fe0893443ba",
+  "coc_vsr_tracker.py": "a9532903e586b71924f813e13974a0e5acaf77e5d189c4bee3d97b8fe19fe23c"
+ }
+}
