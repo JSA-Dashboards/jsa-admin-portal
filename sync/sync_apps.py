@@ -403,7 +403,7 @@ def cmd_apply(names):
             "repo": s["repo"], "subdir": s.get("subdir"), "branch": s["branch"], "commit": commit,
             "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
             "files": {k: hashlib.sha256(norm(v)).hexdigest() for k, v in want.items()},  # line-ending neutral
-        }, indent=1).encode("utf-8"))
+        }, indent=1, sort_keys=True).encode("utf-8"))
         print(f"synced {n} @ {commit[:8]} ({len(want)} files)")
     if not names:
         failed += sync_root_files(write=True)

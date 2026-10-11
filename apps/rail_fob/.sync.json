@@ -1,9 +1,6 @@
 {
- "repo": "JSA-Dashboards/rail-fob-portal",
- "subdir": null,
  "branch": "master",
  "commit": "957affbcc9a25063be221ebae251914c71c8b3dd",
- "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
   "app.py": "d0588760f4f9c0d58d52d6b7ecd6796fa204c12a7b17513dcd5ab393c446521d",
   "assets/bnsf_logo.svg": "bd80d9a840b51727b873ae7aaadbb3f1b2619e5db5612da2eb5a215d74a21c52",
@@ -39,5 +36,8 @@
   "river_data.py": "b3ad643184f69c0fc861c7d1a633c0f00442173daca9382ac2d1652dcf1d93ca",
   "shipment_data.py": "05f8ce8edccea7c401b30943dd477a14dffd005d9300d9df4142ad89508e2b9d",
   "snowflake_setup.sql": "10e7e0e50fdddf1aa52d79a93e0bbd80f8aa9244a329fb7cff7a84958913e97f"
- }
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/rail-fob-portal",
+ "subdir": null
 }

@@ -1,9 +1,6 @@
 {
- "repo": "JSA-Dashboards/livestock-portal",
- "subdir": "apps/cme_feeder_cattle",
  "branch": "master",
  "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
- "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
   "app.py": "7cbb38809e447fd4d27e8547932419932138b210ccbc0802be94e0455f78d030",
   "barn_basis.py": "493d3f79380b98a99e2c83fbbe62a70dd4c2e8dfd7bc47400a686775590134aa",
@@ -19,5 +16,8 @@
   "snapshots.py": "a4a8fce90b3077264a1beb1375332695b0097f703b12bee2fda91c47c490f57d",
   "snowflake_db.py": "5daa187f3147e3f8872beb7dee2094a236403f0d35f5780f1af0684228c9c580",
   "volumes.py": "8b331ef278ff67f42778638faa4c07401d88df00b24ee61f5531b72670212da7"
- }
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/cme_feeder_cattle"
 }

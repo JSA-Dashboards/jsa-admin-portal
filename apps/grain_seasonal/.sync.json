@@ -1,9 +1,6 @@
 {
- "repo": "JSA-Dashboards/grain-seasonal-dashboard",
- "subdir": null,
  "branch": "master",
  "commit": "9a33d35249a2e2b8e3e160187feaf95ccb285e05",
- "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
   "ai_chat.py": "ce709346974c7de8b116e5b7cf707cbd56f5043c9fb1cda5cd36e09b8e171957",
   "app.py": "a85a688c55e2b37e93fd0bcabbd6720a3894d8bca3f899d99a2489eec6506f1c",
@@ -15,5 +12,8 @@
   "legacy_history.py": "c678ec9c6d122eb82ddf962296e1245a992693f9005fef911c5a8ea9cfac2107",
   "massive_api.py": "c0ab8691d5e1e58f5e0e7fdce80cfc946cae54622dc2e08e10ccfa551a4548b8",
   "report_dates.py": "d434c81f00062d5a4df9886f02c00e6029fd9404fd4cee051d6e899c9c5cbeb3"
- }
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/grain-seasonal-dashboard",
+ "subdir": null
 }

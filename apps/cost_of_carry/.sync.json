@@ -1,18 +1,11 @@
 {
- "repo": "JSA-Dashboards/cost-of-carry-calculator",
- "subdir": null,
  "branch": "main",
  "commit": "69049bee4d4980ac3b9a894a303098a36d87d0ae",
- "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "files": {
   "app.py": "6d2582180b83f8dcaa956e4620e3357ab2c785608947e2d9ae7ca6ca6594e835",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/logo-full.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
-  "data/ams_ethanol_weekly.csv": "f584a8b01ca36fd2f9c9fdbb54eb0c5a077362366c944c9b063ba3b1b2b9eff7",
-  "data/ams_plant_corn.csv": "a0fe82542ce4d7f2bb370cedf390d643d39521df3e5923d0c9ffd2812cf0537f",
-  "data/fed_funds_dff.csv": "1727fd3ae54582104cdc13173b90c466ae9e1465b953c2a5b390ad78d6257cf0",
-  "data/futures_history_archive.csv": "91d8fea8fd4650cd7c1ebb06ae1327ae7d3438b04fe55ab594b219246ace189f",
   "coc_ethanol_grind.py": "af26fd90f7743344bf919fa34ce18fe65e53ce672f6bb4ecae3be29788b1c245",
   "coc_history_archive.py": "a96ebef68ebedc2510978c291780f87bc5ee89f3126b4b3ad92c94fa3b65b66a",
   "coc_interest_rates.py": "93169d52a921b440cbbd9dc7313cc8bbdd625c93ea1434961ad5bb3faa0e02a7",
@@ -23,6 +16,13 @@
   "coc_snowflake_db.py": "9746b6add9d78234ee8475669abb8c72ebbb7baff5c4c8b373216fd1dcb8f199",
   "coc_stocks_use.py": "5f6f96f3a9af81fdfcd1bc59ab6443f702d1c9644db7b39a9b803cbc3f4e172a",
   "coc_storage_rates.py": "2953ec8971b19fad286e515a674edf2e08150ca64962a2f152a289fd4ead7a1e",
-  "coc_vsr_tracker.py": "b785eca0487434dd245fbb44e322dca013c63445e734e8b848c04a53659634e6"
- }
+  "coc_vsr_tracker.py": "b785eca0487434dd245fbb44e322dca013c63445e734e8b848c04a53659634e6",
+  "data/ams_ethanol_weekly.csv": "f584a8b01ca36fd2f9c9fdbb54eb0c5a077362366c944c9b063ba3b1b2b9eff7",
+  "data/ams_plant_corn.csv": "a0fe82542ce4d7f2bb370cedf390d643d39521df3e5923d0c9ffd2812cf0537f",
+  "data/fed_funds_dff.csv": "1727fd3ae54582104cdc13173b90c466ae9e1465b953c2a5b390ad78d6257cf0",
+  "data/futures_history_archive.csv": "91d8fea8fd4650cd7c1ebb06ae1327ae7d3438b04fe55ab594b219246ace189f"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/cost-of-carry-calculator",
+ "subdir": null
 }
