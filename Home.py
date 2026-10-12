@@ -263,6 +263,28 @@ div[class*="st-key-soon_"] p {
     font-size: 10px; color: #0693e3; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.06em; margin-bottom: 4px;
 }
+
+/* Tablet widths only (an iPad held upright): four across leaves each tile too narrow
+   for its title, so wrap to two across. Streamlit already stacks the columns on a
+   phone (under 640px) and a laptop or landscape iPad is wider than 1000px, so the
+   four-across desktop grid is not touched by this block. */
+@media (min-width: 641px) and (max-width: 1000px) {
+    div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-tile_"]),
+    div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-soon_"]) {
+        flex-wrap: wrap;
+    }
+    div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-tile_"]) > div[data-testid="stColumn"],
+    div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-soon_"]) > div[data-testid="stColumn"] {
+        /* no growing: a short last row keeps the same tile width as the rows above */
+        flex: 0 0 calc(50% - 0.5rem) !important;
+        width: calc(50% - 0.5rem) !important;
+        min-width: calc(50% - 0.5rem) !important;
+    }
+    /* the empty slots that pad a short last row would only add blank gaps */
+    div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-tile_"]) > div[data-testid="stColumn"]:not(:has(div[data-testid="stElementContainer"])) {
+        display: none;
+    }
+}
 </style>
 """
 
