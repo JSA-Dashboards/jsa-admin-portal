@@ -140,7 +140,7 @@ LIVE_DASHBOARDS = [
      "desc": "Natural gas production/storage/prices + ethanol & biofuels capacity.",
      "page": "apps/eia_energy/app.py", "url_path": "eia-energy"},
     {"title": "WASDE Dashboard", "category": "Supply & Demand",
-     "desc": "USDA FAS PSD balance sheets, revision history, WASDE tendencies, and country-level supply & demand for corn, soybeans, wheat, cotton, rice, and soy oil.",
+     "desc": "Monthly USDA balance sheets, revision progression, WASDE tendencies by release month, and top-country breakdowns for corn, soybeans, wheat, cotton, rice, and soy oil.",
      "page": "https://jsa-wasde-dashboard.streamlit.app/", "url_path": "wasde"},
 
     # Mirror of global-exports-dashboard (reads a daily Snowflake cache + live USDA
