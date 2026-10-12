@@ -34,7 +34,7 @@ which left 13 of 16 bundled apps behind their source by October 2026.
   Its data files (`*.db`, `*.xlsx`) are not mirrored: on Cloud the app downloads
   them from the public repo at runtime (`data_sync.py`, because `/mount/src`).
 - `.github/workflows/sync-apps.yml` runs the sync daily and opens one pull request.
-  Merging it is the update; the portal still needs Manage app > Reboot app.
+  Merging it is the update; the push deploys itself.
 
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
@@ -75,15 +75,27 @@ data instead of erroring. The deployed Secrets turned out to have no
 fallback (Cost of Carry) and a "No NASS cache backend" error (every NASS page)
 for an unknown stretch. With the URLs gone, a missing flag now fails loudly.
 
-## Pushing to GitHub does not deploy
+## Pushing to GitHub deploys (fixed 2026-10-11)
 
-This repo moved from a personal account into the `JSA-Dashboards` org. Streamlit
-still has the app registered under the old owner path, so its webhook fires,
-returns `200 OK`, and does nothing. There is no error.
+A push to `master` redeploys the portal within about a minute, no reboot. It did
+nothing from the org move until 2026-10-11: the Streamlit app was registered in a
+personal workspace under the old owner path (`koltenpostin93-blip/jsa-admin-portal`),
+so its webhook fired, returned `200 OK` and matched no app. It was recreated in the
+**jsa-dashboards** workspace as `JSA-Dashboards/jsa-admin-portal` / `master` /
+`Home.py`, and proved by a page-title change that flipped after a push.
 
-To ship: push, then open the app URL → **Manage app → ⋮ → Reboot app**. The
-reboot re-clones from GitHub. Allow 2–5 minutes; it shows a "not found" page
-partway through provisioning, which is not a failure.
+Merging the daily sync pull request is therefore the whole update. Reboot (Manage
+app > Reboot app) only after a change to `requirements.txt` or the Python version.
+`drop_changed_modules()` already reloads changed app modules on hot reload.
+
+To check the hook again: change `page_title` in `Home.py`, push, reload the live
+URL and read `iframe.contentDocument.title`. A delivery showing `200` on GitHub
+proves nothing; the same `200` came back for weeks while nothing deployed.
+
+If the app ever has to be recreated: copy Settings > Secrets out first, delete it,
+switch to the **jsa-dashboards** workspace, then Create app from
+`JSA-Dashboards/jsa-admin-portal`, branch `master`, main file `Home.py`, URL
+`jsatools-corporate`, Python 3.14, and paste the Secrets (no `SNOWFLAKE_SCHEMA`).
 
 ## Apps sharing code do not share secrets
 

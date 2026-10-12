@@ -3,8 +3,8 @@ name: Sync apps from their standalone repos
 # Each dashboard under apps/ is a generated mirror of the repo that owns it
 # (sync/apps.json). This opens or updates ONE pull request with whatever changed
 # upstream since the last sync, after the collision check and a load test of every
-# page. Merging it is the update; the portal still needs Manage app > Reboot app
-# afterwards (see CLAUDE.md "Pushing to GitHub does not deploy").
+# page. Merging it is the update: the push deploys itself (see CLAUDE.md "Pushing to
+# GitHub deploys").
 on:
   schedule:
     - cron: "30 11 * * *"
