@@ -45,7 +45,7 @@ jobs:
           title: "Sync apps from their standalone repos"
           commit-message: "Sync apps from their standalone repos"
           body: |
-            Automated mirror of upstream changes. Review the diff per app, merge, then
-            **Manage app > Reboot app** on the portal.
+            Automated mirror of upstream changes. Review the diff per app and merge:
+            the portal redeploys itself within about a minute.
 
             New secrets an app now reads are listed by `python sync/sync_apps.py plan`.
