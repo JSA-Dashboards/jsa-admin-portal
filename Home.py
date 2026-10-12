@@ -370,4 +370,35 @@ if pg.title != "Home":
         "</style>",
         unsafe_allow_html=True,
     )
+
+# Narrow screens only (tablet and phone). The dashboards pad their content 2rem a
+# side, which on a phone leaves about 17% of the width unused, and a few draw plain
+# HTML tables that would push the page sideways. Nothing here applies above 1000px,
+# so the desktop layout is untouched. Measured on Vessel Lineup: content 311px of 375.
+_NARROW_CSS = """
+<style>
+@media (max-width: 1000px) {
+    html body [data-testid="stMainBlockContainer"],
+    html body .block-container {
+        padding-left: 1.25rem !important;
+        padding-right: 1.25rem !important;
+    }
+}
+@media (max-width: 640px) {
+    html body [data-testid="stMainBlockContainer"],
+    html body .block-container {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+    }
+    /* a wide hand-built table scrolls inside its own box instead of widening the page */
+    html body [data-testid="stMarkdownContainer"] table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    html body .vega-embed { max-width: 100%; overflow-x: auto; }
+}
+</style>
+"""
+st.markdown(_NARROW_CSS, unsafe_allow_html=True)
 pg.run()
