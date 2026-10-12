@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "20d83a38117c2febe4ea269e031898e258033659",
+ "commit": "07c6a60818d7a3a6225229442269e17b83dc0cb3",
  "files": {
-  "app.py": "e115c5b7b12a51d90026205bc1b00a07765962dfd47191c5d8ddb4316801a4bd",
+  "app.py": "c437875729214010dc618ec0b22e4e204c8a8a85ad201b277c9f4e243d85a429",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "bt_adm_futures.py": "2aa954298b8a4aa2f19f4ed8f1e4504565476c1b1c54d9ec60d2930cc808ba8c",
   "bt_adm_names.py": "753f3bebbaf1dbc54f4e0b60e9eeb3d80f39462b03a8d5da0bffbff80942f178",
@@ -79,6 +79,7 @@
   "bt_rail_email_watch.py": "c28b5292daea50f2caa781bcef84d9afd28d3da6b0cecf11002a6910c8f49629",
   "bt_rail_paste.py": "1bf30344eb61b71d6459b1f6f8cca543d0640fe30297c317cf0c68b5f9e1cf87",
   "bt_rail_report.py": "9338e255f855548d3e93359fd81c38debe32fba52c9021b3a48cffc54ceb00e6",
+  "bt_rail_spread.py": "71a0459a2ab9c0cba9dc2ceadbee23406483e41446e37c697ce2255de4ccc0ea",
   "bt_regions.py": "1dd8ed91e68abc6784d572f834ae88b5786619ecd4e27e164529a3252750b47c",
   "bt_return_to_carry.py": "d54e0d00d63ab53588d435dd7ee71230fbf07a5b34e2e2f19811f95657b52e01",
   "bt_return_to_carry_block.py": "54fedf5aa14c0127f6bb9ffa075d3159252767a98bf1f731d7b94dba35a7007a",

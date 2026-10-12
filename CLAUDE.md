@@ -36,6 +36,17 @@ which left 13 of 16 bundled apps behind their source by October 2026.
 - `.github/workflows/sync-apps.yml` runs the sync daily and opens one pull request.
   Merging it is the update; the push deploys itself.
 
+## Lazy tabs: only the open tab runs (2026-10-12)
+
+`st.tabs()` builds every tab on every run. Basis Tracker (13 tabs) and River FOB (11) now use
+`st.tabs(..., on_change="rerun")` with each body behind `if <tab>.open:`, so a first open or a
+tab click runs only the tab being viewed. The rewrite is done by `sync/lazy_tabs.py` (run it
+on the source repo's `app.py`, never on `apps/`): `check` lists any name a tab sets that another
+reads (that would be a NameError once the setter is skipped) and `apply` refuses until there
+are none. Both apps also had every tab body run alone with the rest skipped. Cost: widgets in
+a tab are discarded when you leave it, so its dropdowns reset on return.
+
+
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
 Several bundled dashboards read Snowflake, and each defaults
