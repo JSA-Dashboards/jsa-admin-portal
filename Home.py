@@ -66,6 +66,9 @@ _ENV_SECRET_KEYS = (
     "VIEW_ONLY",
     "MASSIVE_API_KEY",           # cost_of_carry's + grain_seasonal's Massive futures feed
     "ANTHROPIC_API_KEY",         # grain_seasonal's Ask AI tab
+    # Microsoft Graph app-only mail (basis_tracker's rail rundown / client reports read these
+    # from st.secrets themselves; rail_shipments' email report reads os.environ).
+    "GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "GRAPH_SENDER",
     # crop_conditions reads NASS_API_KEY straight from st.secrets (with a
     # working hardcoded fallback) — no os.environ bridge needed for it.
 )
