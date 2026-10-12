@@ -27,7 +27,7 @@ def _asset(name: str) -> str:
 
 
 st.set_page_config(
-    page_title="JSA Admin Portal (hook test)",
+    page_title="JSA Admin Portal",
     page_icon=_asset("jsa_favicon.png"),
     layout="wide",
 )
