@@ -81,6 +81,17 @@ st.markdown("""<style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
+
+/* Tablet and narrow windows (up to 1200px, which takes in an iPad held either way):
+   the Summary table sits beside a narrow rates column and has 12 columns, so beside it
+   the last ones (Full Carry, % Full Carry) are scrolled out of view. Stack the rates
+   above the table so it gets the full width. Wider windows are untouched. */
+@media (max-width: 1200px) {
+  div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-tablewrap_sum_"]) { flex-wrap: wrap; }
+  div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-tablewrap_sum_"]) > div[data-testid="stColumn"] {
+    flex: 1 1 100% !important; min-width: 100% !important;
+  }
+}
 </style>""", unsafe_allow_html=True)
 
 # Hide the Streamlit Community Cloud viewer badge (the profile avatar that links

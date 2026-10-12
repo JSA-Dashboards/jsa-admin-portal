@@ -68,7 +68,11 @@
   "cost_of_carry": {
    "repo": "JSA-Dashboards/cost-of-carry-calculator",
    "branch": "main",
-   "prefix_modules": "coc_"
+   "prefix_modules": "coc_",
+   "exclude": [
+    "ams_crush.py",
+    "canola_cash.py"
+   ]
   },
   "crop_conditions": {
    "repo": "JSA-Dashboards/crop-conditions-dashboard",
