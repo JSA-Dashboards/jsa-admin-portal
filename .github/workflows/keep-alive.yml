@@ -1,0 +1,21 @@
+name: Keep the portal awake
+
+# Streamlit Cloud sleeps an app after ~12 hours without a visitor; the next real user then
+# waits for it to wake. This visits it in a headless browser every 4 hours (see
+# sync/keep_alive.py). A failure here means the page didn't load: worth a look.
+on:
+  schedule:
+    - cron: "15 */4 * * *"
+  workflow_dispatch:
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && playwright install --with-deps chromium
+      - run: python sync/keep_alive.py
