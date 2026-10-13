@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "35faa53b27477818396ec1345e8fe02314e5ee97",
+ "commit": "e9e8c2cd1c9c3cef9866094fdb34611b40ab0e6f",
  "files": {
   "app.py": "8883862a508a6ddb43dfe8e19522f38bd8b6404c15bdd7e35af2297855a64094",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
@@ -44,7 +44,7 @@
   "bt_fob_model.py": "5f0ce450ce2dcbe0d46287b74487497420a63e02116c3a33c408b3cbafc29cfc",
   "bt_fse_scraper.py": "929c5f5708e47fc31b8be4f0f93808bb71db018de7c0d8060f7ea6f275b3a242",
   "bt_futures_capture.py": "4c8500626f3a85d9b835119b2388eff3e6bc5fbd9f2d064e6a0973b760951973",
-  "bt_futures_curve.py": "cf2cad63b8099f1d862e1cdf16c95c76cfc4e8cb1403bca0321290e4ae75eceb",
+  "bt_futures_curve.py": "e072306859a30780f165c749dd0206a5fed0415000921a3c0810a1ef622d2e7e",
   "bt_futures_spread.py": "47ab030a40a921bf0a0ff761a2706677947fd5df264e9db65b277c264834a545",
   "bt_geocode_locations.py": "06491a361fc0ad9b236bff5a6cbd82ed612cd2afad7f545a7bbf4e1009c24c73",
   "bt_georges_scraper.py": "9ad923c1cdf938e3aa73fc104a0772a502fe0f59a36a6d80b7c04be24d14c10a",
