@@ -674,95 +674,99 @@ def render_cold_storage() -> None:
 
     tab_over, tab_hist, tab_season, tab_data = st.tabs([
         "⭐  Overview", "📈  Full History", "📅  Seasonality", "📋  Data",
-    ])
+    ], on_change="rerun")
 
     with tab_over:
-        cards = [label] + [k for k in CS_HEADLINE if k != label]
-        cols = st.columns(len(cards))
-        for col, name in zip(cols, cards):
-            with col:
-                f = frame if name == label else heads[name]
-                st.markdown(_cs_card(name, f, JSA_GREEN if name == label else JSA_GREEN_LT),
+        if tab_over.open:
+            cards = [label] + [k for k in CS_HEADLINE if k != label]
+            cols = st.columns(len(cards))
+            for col, name in zip(cols, cards):
+                with col:
+                    f = frame if name == label else heads[name]
+                    st.markdown(_cs_card(name, f, JSA_GREEN if name == label else JSA_GREEN_LT),
+                                unsafe_allow_html=True)
+
+            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+            st.markdown(_cs_callout(label, frame), unsafe_allow_html=True)
+
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.markdown('<div class="sec-hdr">Year-over-year change, last 10 years</div>',
                             unsafe_allow_html=True)
-
-        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-        st.markdown(_cs_callout(label, frame), unsafe_allow_html=True)
-
-        c1, c2 = st.columns([3, 2])
-        with c1:
-            st.markdown('<div class="sec-hdr">Year-over-year change, last 10 years</div>',
-                        unsafe_allow_html=True)
-            recent = frame[frame["date"] >= kpi["date"] - pd.DateOffset(years=10)]
-            st.plotly_chart(_cs_yoy_chart(recent), width="stretch")
-        with c2:
-            st.markdown('<div class="sec-hdr">Runs above year-ago</div>', unsafe_allow_html=True)
-            st.markdown(_cs_runs_table(frame), unsafe_allow_html=True)
+                recent = frame[frame["date"] >= kpi["date"] - pd.DateOffset(years=10)]
+                st.plotly_chart(_cs_yoy_chart(recent), width="stretch")
+            with c2:
+                st.markdown('<div class="sec-hdr">Runs above year-ago</div>', unsafe_allow_html=True)
+                st.markdown(_cs_runs_table(frame), unsafe_allow_html=True)
 
     with tab_hist:
-        span = st.radio("Window", ["10 years", "25 years", "50 years", "All"],
-                        index=1, horizontal=True, key="cs_span")
-        cut = {"10 years": 10, "25 years": 25, "50 years": 50}.get(span)
-        d = frame if cut is None else frame[frame["date"] >= kpi["date"] - pd.DateOffset(years=cut)]
-        st.plotly_chart(_cs_history_chart(d, label), width="stretch")
-        st.markdown('<div class="sec-hdr">Year-over-year change, same window</div>',
-                    unsafe_allow_html=True)
-        st.plotly_chart(_cs_yoy_chart(d, height=320), width="stretch")
-        st.caption(
-            f"{label} · {frame['date'].min():%b %Y} – {kpi['date']:%b %Y} · "
-            f"{int(frame['value'].notna().sum()):,} months published"
-            + (f", {int(frame['value'].isna().sum())} not reported"
-               if frame["value"].isna().any() else "")
-        )
+        if tab_hist.open:
+            span = st.radio("Window", ["10 years", "25 years", "50 years", "All"],
+                            index=1, horizontal=True, key="cs_span")
+            cut = {"10 years": 10, "25 years": 25, "50 years": 50}.get(span)
+            d = frame if cut is None else frame[frame["date"] >= kpi["date"] - pd.DateOffset(years=cut)]
+            st.plotly_chart(_cs_history_chart(d, label), width="stretch")
+            st.markdown('<div class="sec-hdr">Year-over-year change, same window</div>',
+                        unsafe_allow_html=True)
+            st.plotly_chart(_cs_yoy_chart(d, height=320), width="stretch")
+            st.caption(
+                f"{label} · {frame['date'].min():%b %Y} – {kpi['date']:%b %Y} · "
+                f"{int(frame['value'].notna().sum()):,} months published"
+                + (f", {int(frame['value'].isna().sum())} not reported"
+                   if frame["value"].isna().any() else "")
+            )
 
     with tab_season:
-        n_years = st.slider("Years overlaid", 3, 8, 7, key="cs_years")
-        st.plotly_chart(_cs_season_chart(frame, n_years), width="stretch")
-        st.caption("Each line is one calendar year of end-of-month stocks. The build "
-                   "from late summer into winter is the seasonal pattern that makes "
-                   "month-over-month a poor read on its own.")
+        if tab_season.open:
+            n_years = st.slider("Years overlaid", 3, 8, 7, key="cs_years")
+            st.plotly_chart(_cs_season_chart(frame, n_years), width="stretch")
+            st.caption("Each line is one calendar year of end-of-month stocks. The build "
+                       "from late summer into winter is the seasonal pattern that makes "
+                       "month-over-month a poor read on its own.")
 
     with tab_data:
-        out = frame.dropna(subset=["value"]).copy()
-        out = out.sort_values("date", ascending=False)
-        # Thousand pounds, which is the unit USDA's own tables print, so a row
-        # here can be checked against the PDF without arithmetic.
-        table = pd.DataFrame({
-            "Month":         out["date"].dt.strftime("%Y-%m"),
-            "Stocks (1,000 lb)": (out["value"] / 1e3).round(0),
-            "MoM (1,000 lb)":    (out["mom_abs"] / 1e3).round(0),
-            "MoM %":             out["mom"].round(2),
-            "YoY (1,000 lb)":    (out["yoy_abs"] / 1e3).round(0),
-            "YoY %":             out["yoy"].round(2),
-        })
-        _lb_col  = st.column_config.NumberColumn(format="%,.0f")
-        _pct_col = st.column_config.NumberColumn(format="%.2f%%")
-        st.dataframe(
-            table, width="stretch", hide_index=True, height=520,
-            column_config={
-                "Stocks (1,000 lb)": _lb_col, "MoM (1,000 lb)": _lb_col,
-                "YoY (1,000 lb)": _lb_col, "MoM %": _pct_col, "YoY %": _pct_col,
-            },
-        )
-        d1, d2 = st.columns(2)
-        stem = label.lower().replace(", ", "_").replace(" ", "_").replace("(", "").replace(")", "")
-        with d1:
-            st.download_button("⬇  CSV", table.to_csv(index=False).encode(),
-                               f"cold_storage_{stem}.csv", "text/csv",
-                               width="stretch")
-        with d2:
-            st.download_button("⬇  Excel", _to_excel({"Cold Storage": table}),
-                               f"cold_storage_{stem}.xlsx",
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               width="stretch")
-        # The report that carries a month's stocks is published the FOLLOWING
-        # month, so August stocks live in cost0926.pdf — hence the roll, and
-        # the year roll with it for a December figure.
-        _rep = kpi["date"] + pd.DateOffset(months=1)
-        st.caption(
-            "Source: USDA NASS QuickStats — "
-            f"`{cold_storage.SERIES.get(label, 'sum of ' + ', '.join(cold_storage.RED_MEAT_PARTS))}`. "
-            f"Released report: {cold_storage.report_url(_rep.year, _rep.month)}"
-        )
+        if tab_data.open:
+            out = frame.dropna(subset=["value"]).copy()
+            out = out.sort_values("date", ascending=False)
+            # Thousand pounds, which is the unit USDA's own tables print, so a row
+            # here can be checked against the PDF without arithmetic.
+            table = pd.DataFrame({
+                "Month":         out["date"].dt.strftime("%Y-%m"),
+                "Stocks (1,000 lb)": (out["value"] / 1e3).round(0),
+                "MoM (1,000 lb)":    (out["mom_abs"] / 1e3).round(0),
+                "MoM %":             out["mom"].round(2),
+                "YoY (1,000 lb)":    (out["yoy_abs"] / 1e3).round(0),
+                "YoY %":             out["yoy"].round(2),
+            })
+            _lb_col  = st.column_config.NumberColumn(format="%,.0f")
+            _pct_col = st.column_config.NumberColumn(format="%.2f%%")
+            st.dataframe(
+                table, width="stretch", hide_index=True, height=520,
+                column_config={
+                    "Stocks (1,000 lb)": _lb_col, "MoM (1,000 lb)": _lb_col,
+                    "YoY (1,000 lb)": _lb_col, "MoM %": _pct_col, "YoY %": _pct_col,
+                },
+            )
+            d1, d2 = st.columns(2)
+            stem = label.lower().replace(", ", "_").replace(" ", "_").replace("(", "").replace(")", "")
+            with d1:
+                st.download_button("⬇  CSV", table.to_csv(index=False).encode(),
+                                   f"cold_storage_{stem}.csv", "text/csv",
+                                   width="stretch")
+            with d2:
+                st.download_button("⬇  Excel", _to_excel({"Cold Storage": table}),
+                                   f"cold_storage_{stem}.xlsx",
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   width="stretch")
+            # The report that carries a month's stocks is published the FOLLOWING
+            # month, so August stocks live in cost0926.pdf — hence the roll, and
+            # the year roll with it for a December figure.
+            _rep = kpi["date"] + pd.DateOffset(months=1)
+            st.caption(
+                "Source: USDA NASS QuickStats — "
+                f"`{cold_storage.SERIES.get(label, 'sum of ' + ', '.join(cold_storage.RED_MEAT_PARTS))}`. "
+                f"Released report: {cold_storage.report_url(_rep.year, _rep.month)}"
+            )
 
 
 # ── Report switch ────────────────────────────────────────────────────────────
@@ -840,7 +844,7 @@ header_slot = st.container()
 
 tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
     "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
-])
+], on_change="rerun")
 
 # ── COF Recap ─────────────────────────────────────────────────────────────────
 # The client one-pager, drawn BEFORE the QuickStats load on purpose: it reads
@@ -898,77 +902,78 @@ def _recap_image(fig_json: str, fmt: str) -> bytes | None:
 
 
 with tab_recap:
-    recap, err = _latest_recap()
-    if err:
-        st.error(err)
-    else:
-        st.markdown('<div class="sec-hdr">Pre-report analyst estimates</div>',
-                    unsafe_allow_html=True)
-        st.caption("The only figures USDA does not publish — type in whatever survey "
-                   "you quote to clients. Everything else is read from the release.")
-        g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
-        # value= seeds the widget from the URL on first render only; after that
-        # the explicit key owns the state and the write-back below keeps the URL
-        # in step.
-        guesses = {
-            "on_feed":  g1.number_input("On-Feed guess",  value=_qp_float("g_onfeed"),
-                                        step=0.1, format="%.1f", placeholder="101.8",
-                                        key="cof_g_onfeed"),
-            "placed":   g2.number_input("Placed guess",   value=_qp_float("g_placed"),
-                                        step=0.1, format="%.1f", placeholder="96.8",
-                                        key="cof_g_placed"),
-            "marketed": g3.number_input("Marketed guess", value=_qp_float("g_mkt"),
-                                        step=0.1, format="%.1f", placeholder="96.1",
-                                        key="cof_g_mkt"),
-        }
-        guess_source = g4.text_input("Source label (footer)",
-                                     value=st.query_params.get("g_src", ""),
-                                     key="cof_g_src")
-        show_footer = st.checkbox("Show source footer on the page", value=True)
+    if tab_recap.open:
+        recap, err = _latest_recap()
+        if err:
+            st.error(err)
+        else:
+            st.markdown('<div class="sec-hdr">Pre-report analyst estimates</div>',
+                        unsafe_allow_html=True)
+            st.caption("The only figures USDA does not publish — type in whatever survey "
+                       "you quote to clients. Everything else is read from the release.")
+            g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
+            # value= seeds the widget from the URL on first render only; after that
+            # the explicit key owns the state and the write-back below keeps the URL
+            # in step.
+            guesses = {
+                "on_feed":  g1.number_input("On-Feed guess",  value=_qp_float("g_onfeed"),
+                                            step=0.1, format="%.1f", placeholder="101.8",
+                                            key="cof_g_onfeed"),
+                "placed":   g2.number_input("Placed guess",   value=_qp_float("g_placed"),
+                                            step=0.1, format="%.1f", placeholder="96.8",
+                                            key="cof_g_placed"),
+                "marketed": g3.number_input("Marketed guess", value=_qp_float("g_mkt"),
+                                            step=0.1, format="%.1f", placeholder="96.1",
+                                            key="cof_g_mkt"),
+            }
+            guess_source = g4.text_input("Source label (footer)",
+                                         value=st.query_params.get("g_src", ""),
+                                         key="cof_g_src")
+            show_footer = st.checkbox("Show source footer on the page", value=True)
 
-        for _key, _param in _QP_GUESS.items():
-            _val = guesses[_key]
-            _qp_write(_param, "" if _val is None else f"{_val:.1f}")
-        _qp_write("g_src", guess_source.strip())
-        if any(v is not None for v in guesses.values()):
-            st.caption("Your guesses are in the page URL — bookmark it, or send it on, "
-                       "and it reopens filled in.")
+            for _key, _param in _QP_GUESS.items():
+                _val = guesses[_key]
+                _qp_write(_param, "" if _val is None else f"{_val:.1f}")
+            _qp_write("g_src", guess_source.strip())
+            if any(v is not None for v in guesses.values()):
+                st.caption("Your guesses are in the page URL — bookmark it, or send it on, "
+                           "and it reopens filled in.")
 
-        st.divider()
-        fig = cof_recap.build_figure(recap, guesses=guesses, footer=show_footer,
-                                     guess_source=guess_source)
-        left, right = st.columns([3, 2])
-        with left:
-            st.plotly_chart(fig, config={"displayModeBar": False})
-        with right:
-            released = recap["release_date"]
-            st.markdown(
-                f'<div class="sec-hdr">{recap["title"]}</div>'
-                f'<p style="color:{DM_MUTED};font-size:.82rem;line-height:1.5">'
-                f'Released {released:%B %d, %Y}.<br>'
-                f'On-feed as of the 1st; placements and marketings for '
-                f'{recap["placement_month"]}.</p>', unsafe_allow_html=True)
-            stem = f"{cof_recap.MONTH_ABBR[recap['month'] - 1]}_{recap['year']}_COF_Report"
-            # Gated behind a button, like livestock_seasonal's export_row: a
-            # hidden tab still runs every rerun, and to_image spins up Chromium,
-            # so rendering eagerly would tax every widget on the whole page.
-            if st.button("Prepare download", width="stretch",
-                         help="Renders the page above as PNG and PDF."):
-                st.session_state["recap_export_ready"] = True
-            if st.session_state.get("recap_export_ready"):
-                fig_json = fig.to_json()
-                with st.spinner("Rendering…"):
-                    png, pdf = _recap_image(fig_json, "png"), _recap_image(fig_json, "pdf")
-                if png:
-                    st.download_button("Download PNG", png, file_name=f"{stem}.png",
-                                       mime="image/png", width="stretch")
-                if pdf:
-                    st.download_button("Download PDF", pdf, file_name=f"{stem}.pdf",
-                                       mime="application/pdf", width="stretch")
-                if not png and not pdf:
-                    st.warning("Image export failed on the host. The table above still "
-                               "renders — use the camera icon on its toolbar.")
-            st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
+            st.divider()
+            fig = cof_recap.build_figure(recap, guesses=guesses, footer=show_footer,
+                                         guess_source=guess_source)
+            left, right = st.columns([3, 2])
+            with left:
+                st.plotly_chart(fig, config={"displayModeBar": False})
+            with right:
+                released = recap["release_date"]
+                st.markdown(
+                    f'<div class="sec-hdr">{recap["title"]}</div>'
+                    f'<p style="color:{DM_MUTED};font-size:.82rem;line-height:1.5">'
+                    f'Released {released:%B %d, %Y}.<br>'
+                    f'On-feed as of the 1st; placements and marketings for '
+                    f'{recap["placement_month"]}.</p>', unsafe_allow_html=True)
+                stem = f"{cof_recap.MONTH_ABBR[recap['month'] - 1]}_{recap['year']}_COF_Report"
+                # Gated behind a button, like livestock_seasonal's export_row: a
+                # hidden tab still runs every rerun, and to_image spins up Chromium,
+                # so rendering eagerly would tax every widget on the whole page.
+                if st.button("Prepare download", width="stretch",
+                             help="Renders the page above as PNG and PDF."):
+                    st.session_state["recap_export_ready"] = True
+                if st.session_state.get("recap_export_ready"):
+                    fig_json = fig.to_json()
+                    with st.spinner("Rendering…"):
+                        png, pdf = _recap_image(fig_json, "png"), _recap_image(fig_json, "pdf")
+                    if png:
+                        st.download_button("Download PNG", png, file_name=f"{stem}.png",
+                                           mime="image/png", width="stretch")
+                    if pdf:
+                        st.download_button("Download PDF", pdf, file_name=f"{stem}.pdf",
+                                           mime="application/pdf", width="stretch")
+                    if not png and not pdf:
+                        st.warning("Image export failed on the host. The table above still "
+                                   "renders — use the camera icon on its toolbar.")
+                st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
 
 
 # ── Load data ────────────────────────────────────────────────────────────────
@@ -1049,243 +1054,249 @@ header_slot.divider()
 
 # ── Summary ────────────────────────────────────────────────────────────────────
 with tab_summary:
-    cols = st.columns(4)
+    if tab_summary.open:
+        cols = st.columns(4)
 
-    with cols[0]:
-        st.markdown(_snap_card(
-            "On-Feed Inventory", f'{inv_kpi["current"]:,.0f}', "head",
-            _dc(inv_kpi["mom"], "+,.0f", " hd") + " " + _dc(inv_kpi["mom_pct"], "+.1f", "%"),
-            _dc(inv_kpi["yoy"], "+,.0f", " hd") + " " + _dc(inv_kpi["yoy_pct"], "+.1f", "%"),
-            foot=inv_kpi["date"].strftime("%b %Y") if inv_kpi["date"] is not None else "",
-        ), unsafe_allow_html=True)
-
-    with cols[1]:
-        st.markdown(_snap_card(
-            "Placements", f'{place_kpi["current"]:,.0f}', "head",
-            _dc(place_kpi["mom"], "+,.0f", " hd") + " " + _dc(place_kpi["mom_pct"], "+.1f", "%"),
-            _dc(place_kpi["yoy"], "+,.0f", " hd") + " " + _dc(place_kpi["yoy_pct"], "+.1f", "%"),
-            accent="#c98a56",
-            foot=place_kpi["date"].strftime("%b %Y") if place_kpi["date"] is not None else "",
-        ), unsafe_allow_html=True)
-
-    with cols[2]:
-        st.markdown(_snap_card(
-            "Marketings", f'{sales_kpi["current"]:,.0f}', "head",
-            _dc(sales_kpi["mom"], "+,.0f", " hd") + " " + _dc(sales_kpi["mom_pct"], "+.1f", "%"),
-            _dc(sales_kpi["yoy"], "+,.0f", " hd") + " " + _dc(sales_kpi["yoy_pct"], "+.1f", "%"),
-            accent="#9b89c4",
-            foot=sales_kpi["date"].strftime("%b %Y") if sales_kpi["date"] is not None else "",
-        ), unsafe_allow_html=True)
-
-    with cols[3]:
-        if latest_h_row is not None:
-            hp = float(latest_h_row["heifer_pct"])
-            qoq = hp - float(prior_h_row["heifer_pct"]) if prior_h_row is not None else float("nan")
-            yoy = hp - float(yoy_h_row["heifer_pct"]) if yoy_h_row is not None else float("nan")
+        with cols[0]:
             st.markdown(_snap_card(
-                "Heifers on Feed", f'{hp:,.1f}', "% of on-feed",
-                _dc(qoq, "+.1f", " pts"), _dc(yoy, "+.1f", " pts"),
-                mom_lbl="QoQ", yoy_lbl="YoY", accent=HEIFER_COLOR,
-                foot=latest_h_row["date"].strftime("%b %Y"),
+                "On-Feed Inventory", f'{inv_kpi["current"]:,.0f}', "head",
+                _dc(inv_kpi["mom"], "+,.0f", " hd") + " " + _dc(inv_kpi["mom_pct"], "+.1f", "%"),
+                _dc(inv_kpi["yoy"], "+,.0f", " hd") + " " + _dc(inv_kpi["yoy_pct"], "+.1f", "%"),
+                foot=inv_kpi["date"].strftime("%b %Y") if inv_kpi["date"] is not None else "",
             ), unsafe_allow_html=True)
-        else:
-            st.markdown(_snap_card("Heifers on Feed", "—", "% of on-feed", "—", "—",
-                                    accent=HEIFER_COLOR), unsafe_allow_html=True)
 
-    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        with cols[1]:
+            st.markdown(_snap_card(
+                "Placements", f'{place_kpi["current"]:,.0f}', "head",
+                _dc(place_kpi["mom"], "+,.0f", " hd") + " " + _dc(place_kpi["mom_pct"], "+.1f", "%"),
+                _dc(place_kpi["yoy"], "+,.0f", " hd") + " " + _dc(place_kpi["yoy_pct"], "+.1f", "%"),
+                accent="#c98a56",
+                foot=place_kpi["date"].strftime("%b %Y") if place_kpi["date"] is not None else "",
+            ), unsafe_allow_html=True)
 
-    st.markdown(f'<div class="sec-hdr">On-feed inventory — trend</div>', unsafe_allow_html=True)
-    cutoff = pd.Timestamp(latest_date) - pd.DateOffset(years=trend_years) if latest_date is not None else None
-    plot_df = inv_s[inv_s["date"] >= cutoff] if cutoff is not None else inv_s
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["Value"], mode="lines",
-                              line=dict(color=JSA_GREEN, width=2.2), name="On-feed inventory"))
-    _apply(fig, height=340, y_title="Head")
-    st.plotly_chart(fig, width="stretch")
+        with cols[2]:
+            st.markdown(_snap_card(
+                "Marketings", f'{sales_kpi["current"]:,.0f}', "head",
+                _dc(sales_kpi["mom"], "+,.0f", " hd") + " " + _dc(sales_kpi["mom_pct"], "+.1f", "%"),
+                _dc(sales_kpi["yoy"], "+,.0f", " hd") + " " + _dc(sales_kpi["yoy_pct"], "+.1f", "%"),
+                accent="#9b89c4",
+                foot=sales_kpi["date"].strftime("%b %Y") if sales_kpi["date"] is not None else "",
+            ), unsafe_allow_html=True)
 
-    st.markdown(f'<div class="sec-hdr">Heifer share of on-feed inventory — the herd-cycle signal</div>', unsafe_allow_html=True)
-    st.caption("A rising heifer share means fewer heifers are being held back for breeding — a sign herd liquidation is "
-               "continuing. A falling share signals more heifers being retained, i.e. herd rebuilding. "
-               f"Heifers & heifer calves ÷ total on-feed inventory, both from feedlots with 1,000+ head capacity, "
-               f"quarterly (Jan/Apr/Jul/Oct) since 1996. State: {STATE_NAMES.get(state, state)}.")
-    st.plotly_chart(heifer_share_bar_chart(hpct), width="stretch")
+        with cols[3]:
+            if latest_h_row is not None:
+                hp = float(latest_h_row["heifer_pct"])
+                qoq = hp - float(prior_h_row["heifer_pct"]) if prior_h_row is not None else float("nan")
+                yoy = hp - float(yoy_h_row["heifer_pct"]) if yoy_h_row is not None else float("nan")
+                st.markdown(_snap_card(
+                    "Heifers on Feed", f'{hp:,.1f}', "% of on-feed",
+                    _dc(qoq, "+.1f", " pts"), _dc(yoy, "+.1f", " pts"),
+                    mom_lbl="QoQ", yoy_lbl="YoY", accent=HEIFER_COLOR,
+                    foot=latest_h_row["date"].strftime("%b %Y"),
+                ), unsafe_allow_html=True)
+            else:
+                st.markdown(_snap_card("Heifers on Feed", "—", "% of on-feed", "—", "—",
+                                        accent=HEIFER_COLOR), unsafe_allow_html=True)
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+        st.markdown(f'<div class="sec-hdr">On-feed inventory — trend</div>', unsafe_allow_html=True)
+        cutoff = pd.Timestamp(latest_date) - pd.DateOffset(years=trend_years) if latest_date is not None else None
+        plot_df = inv_s[inv_s["date"] >= cutoff] if cutoff is not None else inv_s
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["Value"], mode="lines",
+                                  line=dict(color=JSA_GREEN, width=2.2), name="On-feed inventory"))
+        _apply(fig, height=340, y_title="Head")
+        st.plotly_chart(fig, width="stretch")
+
+        st.markdown(f'<div class="sec-hdr">Heifer share of on-feed inventory — the herd-cycle signal</div>', unsafe_allow_html=True)
+        st.caption("A rising heifer share means fewer heifers are being held back for breeding — a sign herd liquidation is "
+                   "continuing. A falling share signals more heifers being retained, i.e. herd rebuilding. "
+                   f"Heifers & heifer calves ÷ total on-feed inventory, both from feedlots with 1,000+ head capacity, "
+                   f"quarterly (Jan/Apr/Jul/Oct) since 1996. State: {STATE_NAMES.get(state, state)}.")
+        st.plotly_chart(heifer_share_bar_chart(hpct), width="stretch")
 
 # ── On-Feed & Flows ───────────────────────────────────────────────────────────
 with tab_flows:
-    st.markdown(f'<div class="sec-hdr">On-feed inventory</div>', unsafe_allow_html=True)
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(x=inv_s["date"], y=inv_s["Value"], mode="lines",
-                               line=dict(color=JSA_GREEN, width=2.2), name="Inventory"))
-    _apply(fig1, height=380, y_title="Head")
-    st.plotly_chart(fig1, width="stretch")
+    if tab_flows.open:
+        st.markdown(f'<div class="sec-hdr">On-feed inventory</div>', unsafe_allow_html=True)
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(x=inv_s["date"], y=inv_s["Value"], mode="lines",
+                                   line=dict(color=JSA_GREEN, width=2.2), name="Inventory"))
+        _apply(fig1, height=380, y_title="Head")
+        st.plotly_chart(fig1, width="stretch")
 
-    st.markdown(f'<div class="sec-hdr">Placements vs marketings vs other disappearance</div>', unsafe_allow_html=True)
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(x=place_s["date"], y=place_s["Value"], name="Placements", marker_color="#c98a56"))
-    fig2.add_trace(go.Bar(x=sales_s["date"], y=sales_s["Value"], name="Marketings", marker_color="#9b89c4"))
-    fig2.add_trace(go.Bar(x=other_s["date"], y=other_s["Value"], name="Other disappearance", marker_color="#c4b456"))
-    fig2.update_layout(barmode="group")
-    _apply(fig2, height=380, y_title="Head")
-    st.plotly_chart(fig2, width="stretch")
+        st.markdown(f'<div class="sec-hdr">Placements vs marketings vs other disappearance</div>', unsafe_allow_html=True)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(x=place_s["date"], y=place_s["Value"], name="Placements", marker_color="#c98a56"))
+        fig2.add_trace(go.Bar(x=sales_s["date"], y=sales_s["Value"], name="Marketings", marker_color="#9b89c4"))
+        fig2.add_trace(go.Bar(x=other_s["date"], y=other_s["Value"], name="Other disappearance", marker_color="#c4b456"))
+        fig2.update_layout(barmode="group")
+        _apply(fig2, height=380, y_title="Head")
+        st.plotly_chart(fig2, width="stretch")
 
-    st.markdown(f'<div class="sec-hdr">Monthly detail — last 18 months</div>', unsafe_allow_html=True)
-    merged = (inv_s[["date", "Value"]].rename(columns={"Value": "On-feed inventory"})
-              .merge(place_s[["date", "Value"]].rename(columns={"Value": "Placements"}), on="date", how="outer")
-              .merge(sales_s[["date", "Value"]].rename(columns={"Value": "Marketings"}), on="date", how="outer")
-              .merge(other_s[["date", "Value"]].rename(columns={"Value": "Other disappearance"}), on="date", how="outer")
-              .sort_values("date"))
-    merged = merged.tail(18).iloc[::-1].copy()
-    merged["date"] = merged["date"].dt.strftime("%b %Y")
-    st.dataframe(merged, hide_index=True, width="stretch")
+        st.markdown(f'<div class="sec-hdr">Monthly detail — last 18 months</div>', unsafe_allow_html=True)
+        merged = (inv_s[["date", "Value"]].rename(columns={"Value": "On-feed inventory"})
+                  .merge(place_s[["date", "Value"]].rename(columns={"Value": "Placements"}), on="date", how="outer")
+                  .merge(sales_s[["date", "Value"]].rename(columns={"Value": "Marketings"}), on="date", how="outer")
+                  .merge(other_s[["date", "Value"]].rename(columns={"Value": "Other disappearance"}), on="date", how="outer")
+                  .sort_values("date"))
+        merged = merged.tail(18).iloc[::-1].copy()
+        merged["date"] = merged["date"].dt.strftime("%b %Y")
+        st.dataframe(merged, hide_index=True, width="stretch")
 
 # ── Seasonality ────────────────────────────────────────────────────────────────
 with tab_season:
-    SEASON_METRICS = {
-        "On-feed inventory": {"df": inv_full, "verb": "on feed as of"},
-        "Placements":        {"df": place_full, "verb": "placed on feed in"},
-        "Marketings":        {"df": sales_full, "verb": "marketed in"},
-    }
-    season_metric = st.radio("Metric", list(SEASON_METRICS.keys()), horizontal=True, label_visibility="collapsed")
-    m = SEASON_METRICS[season_metric]
-    m_df = m["df"]
-    m_sub = series_for(m_df, state)
+    if tab_season.open:
+        SEASON_METRICS = {
+            "On-feed inventory": {"df": inv_full, "verb": "on feed as of"},
+            "Placements":        {"df": place_full, "verb": "placed on feed in"},
+            "Marketings":        {"df": sales_full, "verb": "marketed in"},
+        }
+        season_metric = st.radio("Metric", list(SEASON_METRICS.keys()), horizontal=True, label_visibility="collapsed")
+        m = SEASON_METRICS[season_metric]
+        m_df = m["df"]
+        m_sub = series_for(m_df, state)
 
-    if m_sub.empty:
-        st.info("No data available for this metric/state.")
-    else:
-        latest_month = int(m_sub["month"].iloc[-1])
-        month_label  = MONTH_ABBR[latest_month]
+        if m_sub.empty:
+            st.info("No data available for this metric/state.")
+        else:
+            latest_month = int(m_sub["month"].iloc[-1])
+            month_label  = MONTH_ABBR[latest_month]
 
-        st.markdown(f'<div class="sec-hdr">{season_metric} by year — seasonal pattern</div>', unsafe_allow_html=True)
-        st.caption(f"Each line is one year, Jan–Dec. Latest year ({int(m_sub['year'].iloc[-1])}) highlighted in red.")
-        st.plotly_chart(seasonal_by_year_chart(m_df, state, n_years=trend_years), width="stretch")
+            st.markdown(f'<div class="sec-hdr">{season_metric} by year — seasonal pattern</div>', unsafe_allow_html=True)
+            st.caption(f"Each line is one year, Jan–Dec. Latest year ({int(m_sub['year'].iloc[-1])}) highlighted in red.")
+            st.plotly_chart(seasonal_by_year_chart(m_df, state, n_years=trend_years), width="stretch")
 
-        st.markdown(f'<div class="sec-hdr">{season_metric} — year-over-year % change</div>', unsafe_allow_html=True)
-        st.plotly_chart(yoy_bar_chart(m_df, state), width="stretch")
+            st.markdown(f'<div class="sec-hdr">{season_metric} — year-over-year % change</div>', unsafe_allow_html=True)
+            st.plotly_chart(yoy_bar_chart(m_df, state), width="stretch")
 
-        st.markdown(f'<div class="sec-hdr">{STATE_NAMES.get(state, state)} cattle {m["verb"]} {month_label} — by year</div>',
-                    unsafe_allow_html=True)
-        st.caption("Same calendar month, every year back to 1996 — isolates the year-over-year trend from seasonality.")
-        st.plotly_chart(annual_snapshot_chart(m_df, state, latest_month), width="stretch")
+            st.markdown(f'<div class="sec-hdr">{STATE_NAMES.get(state, state)} cattle {m["verb"]} {month_label} — by year</div>',
+                        unsafe_allow_html=True)
+            st.caption("Same calendar month, every year back to 1996 — isolates the year-over-year trend from seasonality.")
+            st.plotly_chart(annual_snapshot_chart(m_df, state, latest_month), width="stretch")
 
 # ── Heifers on Feed ───────────────────────────────────────────────────────────
 with tab_heifer:
-    st.markdown(f'<div class="sec-hdr">Heifer share of cattle on feed — {STATE_NAMES.get(state, state)}</div>',
-                unsafe_allow_html=True)
-    st.caption("Heifers & Heifer Calves ÷ Total Cattle On Feed (Inventory), both filtered to feedlots with "
-               "1,000+ head capacity, quarterly since 1996 (USDA NASS QuickStats, SURVEY program).")
-    st.plotly_chart(heifer_share_bar_chart(hpct, height=440), width="stretch")
+    if tab_heifer.open:
+        st.markdown(f'<div class="sec-hdr">Heifer share of cattle on feed — {STATE_NAMES.get(state, state)}</div>',
+                    unsafe_allow_html=True)
+        st.caption("Heifers & Heifer Calves ÷ Total Cattle On Feed (Inventory), both filtered to feedlots with "
+                   "1,000+ head capacity, quarterly since 1996 (USDA NASS QuickStats, SURVEY program).")
+        st.plotly_chart(heifer_share_bar_chart(hpct, height=440), width="stretch")
 
-    st.markdown(f'<div class="sec-hdr">Heifer & steer counts on feed — {STATE_NAMES.get(state, state)}</div>',
-                unsafe_allow_html=True)
-    fig3 = go.Figure()
-    fig3.add_trace(go.Scatter(x=hpct["date"], y=hpct["heifers"], mode="lines+markers", name="Heifers & heifer calves",
-                               line=dict(color=HEIFER_COLOR, width=2.2)))
-    fig3.add_trace(go.Scatter(x=hpct["date"], y=hpct["steers"], mode="lines+markers", name="Steers & steer calves",
-                               line=dict(color=STEER_COLOR, width=2.2)))
-    _apply(fig3, height=380, y_title="Head")
-    st.plotly_chart(fig3, width="stretch")
+        st.markdown(f'<div class="sec-hdr">Heifer & steer counts on feed — {STATE_NAMES.get(state, state)}</div>',
+                    unsafe_allow_html=True)
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(x=hpct["date"], y=hpct["heifers"], mode="lines+markers", name="Heifers & heifer calves",
+                                   line=dict(color=HEIFER_COLOR, width=2.2)))
+        fig3.add_trace(go.Scatter(x=hpct["date"], y=hpct["steers"], mode="lines+markers", name="Steers & steer calves",
+                                   line=dict(color=STEER_COLOR, width=2.2)))
+        _apply(fig3, height=380, y_title="Head")
+        st.plotly_chart(fig3, width="stretch")
 
-    st.markdown(f'<div class="sec-hdr">Heifer vs steer share of on-feed inventory</div>', unsafe_allow_html=True)
-    fig4 = go.Figure()
-    fig4.add_trace(go.Scatter(x=hpct["date"], y=hpct["heifer_pct"], mode="lines+markers", name="Heifers %",
-                               line=dict(color=HEIFER_COLOR, width=2.2)))
-    fig4.add_trace(go.Scatter(x=hpct["date"], y=hpct["steer_pct"], mode="lines+markers", name="Steers %",
-                               line=dict(color=STEER_COLOR, width=2.2)))
-    _apply(fig4, height=340, y_title="% of on-feed inventory")
-    st.plotly_chart(fig4, width="stretch")
+        st.markdown(f'<div class="sec-hdr">Heifer vs steer share of on-feed inventory</div>', unsafe_allow_html=True)
+        fig4 = go.Figure()
+        fig4.add_trace(go.Scatter(x=hpct["date"], y=hpct["heifer_pct"], mode="lines+markers", name="Heifers %",
+                                   line=dict(color=HEIFER_COLOR, width=2.2)))
+        fig4.add_trace(go.Scatter(x=hpct["date"], y=hpct["steer_pct"], mode="lines+markers", name="Steers %",
+                                   line=dict(color=STEER_COLOR, width=2.2)))
+        _apply(fig4, height=340, y_title="% of on-feed inventory")
+        st.plotly_chart(fig4, width="stretch")
 
-    st.markdown(f'<div class="sec-hdr">Latest quarter by state</div>', unsafe_allow_html=True)
-    if latest_h_row is not None:
-        latest_q_date = latest_h_row["date"]
-        rows = []
-        for s in STATE_ORDER:
-            r = heifer_pct_frame(heifer, steer, inv_full, s)
-            match = r[r["date"] == latest_q_date]
-            if not match.empty:
-                m = match.iloc[0]
-                rows.append({
-                    "State": STATE_NAMES.get(s, s),
-                    "Heifers (head)": m["heifers"],
-                    "Steers (head)": m["steers"],
-                    "Total on feed": m["total"],
-                    "Heifer %": m["heifer_pct"],
-                })
-        state_tbl = pd.DataFrame(rows).sort_values("Heifers (head)", ascending=False)
-        st.dataframe(
-            state_tbl, hide_index=True, width="stretch",
-            column_config={
-                "Heifers (head)": st.column_config.NumberColumn(format="%,.0f"),
-                "Steers (head)": st.column_config.NumberColumn(format="%,.0f"),
-                "Total on feed": st.column_config.NumberColumn(format="%,.0f"),
-                "Heifer %": st.column_config.NumberColumn(format="%.1f%%"),
-            },
-        )
-    else:
-        st.info("No quarterly heifer/steer data available yet for this window.")
+        st.markdown(f'<div class="sec-hdr">Latest quarter by state</div>', unsafe_allow_html=True)
+        if latest_h_row is not None:
+            latest_q_date = latest_h_row["date"]
+            rows = []
+            for s in STATE_ORDER:
+                r = heifer_pct_frame(heifer, steer, inv_full, s)
+                match = r[r["date"] == latest_q_date]
+                if not match.empty:
+                    m = match.iloc[0]
+                    rows.append({
+                        "State": STATE_NAMES.get(s, s),
+                        "Heifers (head)": m["heifers"],
+                        "Steers (head)": m["steers"],
+                        "Total on feed": m["total"],
+                        "Heifer %": m["heifer_pct"],
+                    })
+            state_tbl = pd.DataFrame(rows).sort_values("Heifers (head)", ascending=False)
+            st.dataframe(
+                state_tbl, hide_index=True, width="stretch",
+                column_config={
+                    "Heifers (head)": st.column_config.NumberColumn(format="%,.0f"),
+                    "Steers (head)": st.column_config.NumberColumn(format="%,.0f"),
+                    "Total on feed": st.column_config.NumberColumn(format="%,.0f"),
+                    "Heifer %": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+        else:
+            st.info("No quarterly heifer/steer data available yet for this window.")
 
 # ── State Comparison ──────────────────────────────────────────────────────────
 with tab_state:
-    st.markdown(f'<div class="sec-hdr">On-feed inventory by state — latest month</div>', unsafe_allow_html=True)
-    comp_rows = []
-    for s in STATE_ORDER:
-        if s == "US":
-            continue
-        k = latest_kpi(inv, s)
-        comp_rows.append({"State": STATE_NAMES.get(s, s), "state_alpha": s,
-                           "Inventory": k["current"], "YoY %": k["yoy_pct"]})
-    comp_df = pd.DataFrame(comp_rows).dropna(subset=["Inventory"]).sort_values("Inventory", ascending=False)
+    if tab_state.open:
+        st.markdown(f'<div class="sec-hdr">On-feed inventory by state — latest month</div>', unsafe_allow_html=True)
+        comp_rows = []
+        for s in STATE_ORDER:
+            if s == "US":
+                continue
+            k = latest_kpi(inv, s)
+            comp_rows.append({"State": STATE_NAMES.get(s, s), "state_alpha": s,
+                               "Inventory": k["current"], "YoY %": k["yoy_pct"]})
+        comp_df = pd.DataFrame(comp_rows).dropna(subset=["Inventory"]).sort_values("Inventory", ascending=False)
 
-    fig5 = go.Figure()
-    fig5.add_trace(go.Bar(x=comp_df["State"], y=comp_df["Inventory"], marker_color=JSA_GREEN))
-    _apply(fig5, height=380, y_title="Head")
-    st.plotly_chart(fig5, width="stretch")
+        fig5 = go.Figure()
+        fig5.add_trace(go.Bar(x=comp_df["State"], y=comp_df["Inventory"], marker_color=JSA_GREEN))
+        _apply(fig5, height=380, y_title="Head")
+        st.plotly_chart(fig5, width="stretch")
 
-    st.markdown(f'<div class="sec-hdr">Year-over-year change by state</div>', unsafe_allow_html=True)
-    fig6 = go.Figure()
-    colors = [COL_POS if v >= 0 else COL_NEG for v in comp_df["YoY %"].fillna(0)]
-    fig6.add_trace(go.Bar(x=comp_df["State"], y=comp_df["YoY %"], marker_color=colors))
-    _apply(fig6, height=320, y_title="% change vs year ago")
-    st.plotly_chart(fig6, width="stretch")
+        st.markdown(f'<div class="sec-hdr">Year-over-year change by state</div>', unsafe_allow_html=True)
+        fig6 = go.Figure()
+        colors = [COL_POS if v >= 0 else COL_NEG for v in comp_df["YoY %"].fillna(0)]
+        fig6.add_trace(go.Bar(x=comp_df["State"], y=comp_df["YoY %"], marker_color=colors))
+        _apply(fig6, height=320, y_title="% change vs year ago")
+        st.plotly_chart(fig6, width="stretch")
 
-    st.dataframe(
-        comp_df[["State", "Inventory", "YoY %"]], hide_index=True, width="stretch",
-        column_config={
-            "Inventory": st.column_config.NumberColumn(format="%,.0f"),
-            "YoY %": st.column_config.NumberColumn(format="%+.1f%%"),
-        },
-    )
+        st.dataframe(
+            comp_df[["State", "Inventory", "YoY %"]], hide_index=True, width="stretch",
+            column_config={
+                "Inventory": st.column_config.NumberColumn(format="%,.0f"),
+                "YoY %": st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+        )
 
 # ── Data ───────────────────────────────────────────────────────────────────────
 with tab_data:
-    st.markdown(f'<div class="sec-hdr">Raw series — {STATE_NAMES.get(state, state)}</div>', unsafe_allow_html=True)
+    if tab_data.open:
+        st.markdown(f'<div class="sec-hdr">Raw series — {STATE_NAMES.get(state, state)}</div>', unsafe_allow_html=True)
 
-    dl_col1, dl_col2 = st.columns([1, 5])
-    with dl_col1:
-        excel_bytes = _to_excel({
-            "On-feed inventory": inv_s, "Placements": place_s, "Marketings": sales_s,
-            "Other disappearance": other_s, "Heifer-steer split": hpct,
-        })
-        st.download_button("Download Excel", excel_bytes, file_name=f"cattle_on_feed_{state}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        dl_col1, dl_col2 = st.columns([1, 5])
+        with dl_col1:
+            excel_bytes = _to_excel({
+                "On-feed inventory": inv_s, "Placements": place_s, "Marketings": sales_s,
+                "Other disappearance": other_s, "Heifer-steer split": hpct,
+            })
+            st.download_button("Download Excel", excel_bytes, file_name=f"cattle_on_feed_{state}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    _date_col = st.column_config.DateColumn("date", format="MMM YYYY")
-    _head_col = st.column_config.NumberColumn(format="%,.0f")
-    _pct_col  = st.column_config.NumberColumn(format="%.1f%%")
+        _date_col = st.column_config.DateColumn("date", format="MMM YYYY")
+        _head_col = st.column_config.NumberColumn(format="%,.0f")
+        _pct_col  = st.column_config.NumberColumn(format="%.1f%%")
 
-    st.markdown("**On-feed inventory (monthly)**")
-    st.dataframe(inv_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                 column_config={"date": _date_col, "Value": _head_col})
+        st.markdown("**On-feed inventory (monthly)**")
+        st.dataframe(inv_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config={"date": _date_col, "Value": _head_col})
 
-    st.markdown("**Placements (monthly)**")
-    st.dataframe(place_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                 column_config={"date": _date_col, "Value": _head_col})
+        st.markdown("**Placements (monthly)**")
+        st.dataframe(place_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config={"date": _date_col, "Value": _head_col})
 
-    st.markdown("**Marketings (monthly)**")
-    st.dataframe(sales_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                 column_config={"date": _date_col, "Value": _head_col})
+        st.markdown("**Marketings (monthly)**")
+        st.dataframe(sales_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config={"date": _date_col, "Value": _head_col})
 
-    st.markdown("**Heifer / steer split (quarterly)**")
-    st.dataframe(hpct.sort_values("date", ascending=False), hide_index=True, width="stretch",
-                 column_config={"date": _date_col, "heifers": _head_col, "steers": _head_col,
-                                 "total": _head_col, "heifer_pct": _pct_col, "steer_pct": _pct_col})
+        st.markdown("**Heifer / steer split (quarterly)**")
+        st.dataframe(hpct.sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config={"date": _date_col, "heifers": _head_col, "steers": _head_col,
+                                     "total": _head_col, "heifer_pct": _pct_col, "steer_pct": _pct_col})

@@ -517,42 +517,45 @@ if level == "National":
                     unsafe_allow_html=True)
 
     st.markdown("")
-    t_trend, t_yoy, t_data = st.tabs(["📈 Long-Run Trend", "📊 Year-over-Year Change", "📋 Data"])
+    t_trend, t_yoy, t_data = st.tabs(["📈 Long-Run Trend", "📊 Year-over-Year Change", "📋 Data"], on_change="rerun")
 
     with t_trend:
-        rng = st.slider("Year range", int(nat["year"].min()), int(nat["year"].max()),
-                        (max(int(nat["year"].min()), 1990), int(nat["year"].max())))
-        d = nat[(nat["year"] >= rng[0]) & (nat["year"] <= rng[1])]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=d["year"], y=d["Value"], mode="lines+markers",
-                      line=dict(color=JPSI_GREEN, width=2.5),
-                      marker=dict(size=4),
-                      hovertemplate="%{{x}}: %{{y:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
-        apply_layout(fig, f"U.S. {series_name} {MEASURE}", 440, UAXIS)
-        st.plotly_chart(fig, use_container_width=True)
+        if t_trend.open:
+            rng = st.slider("Year range", int(nat["year"].min()), int(nat["year"].max()),
+                            (max(int(nat["year"].min()), 1990), int(nat["year"].max())))
+            d = nat[(nat["year"] >= rng[0]) & (nat["year"] <= rng[1])]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=d["year"], y=d["Value"], mode="lines+markers",
+                          line=dict(color=JPSI_GREEN, width=2.5),
+                          marker=dict(size=4),
+                          hovertemplate="%{{x}}: %{{y:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
+            apply_layout(fig, f"U.S. {series_name} {MEASURE}", 440, UAXIS)
+            st.plotly_chart(fig, use_container_width=True)
 
     with t_yoy:
-        d = nat.copy()
-        d["yoy"] = d["Value"].diff()
-        d = d.dropna(subset=["yoy"])
-        d = d[d["year"] >= d["year"].max() - 25]
-        fig = go.Figure(go.Bar(
-            x=d["year"], y=d["yoy"],
-            marker_color=[POS if v >= 0 else NEG for v in d["yoy"]],
-            hovertemplate="%{{x}}: %{{y:+,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
-        fig.add_hline(y=0, line_color=DM_BORDER)
-        apply_layout(fig, f"Annual Change in {MEASURE}", 400, f"Δ {UAXIS}")
-        st.plotly_chart(fig, use_container_width=True)
+        if t_yoy.open:
+            d = nat.copy()
+            d["yoy"] = d["Value"].diff()
+            d = d.dropna(subset=["yoy"])
+            d = d[d["year"] >= d["year"].max() - 25]
+            fig = go.Figure(go.Bar(
+                x=d["year"], y=d["yoy"],
+                marker_color=[POS if v >= 0 else NEG for v in d["yoy"]],
+                hovertemplate="%{{x}}: %{{y:+,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
+            fig.add_hline(y=0, line_color=DM_BORDER)
+            apply_layout(fig, f"Annual Change in {MEASURE}", 400, f"Δ {UAXIS}")
+            st.plotly_chart(fig, use_container_width=True)
 
     with t_data:
-        out = nat.copy()
-        out.columns = ["Year", UAXIS]
-        st.dataframe(out.sort_values("Year", ascending=False), use_container_width=True,
-                     height=430,
-                     column_config={UAXIS: st.column_config.NumberColumn(format="%d")})
-        st.download_button("⬇ Download Excel", to_excel(out),
-                           file_name=f"national_{short_desc[:20]}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if t_data.open:
+            out = nat.copy()
+            out.columns = ["Year", UAXIS]
+            st.dataframe(out.sort_values("Year", ascending=False), use_container_width=True,
+                         height=430,
+                         column_config={UAXIS: st.column_config.NumberColumn(format="%d")})
+            st.download_button("⬇ Download Excel", to_excel(out),
+                               file_name=f"national_{short_desc[:20]}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -595,62 +598,66 @@ elif level == "State":
 
     st.markdown("")
     t_map, t_rank, t_trend, t_data = st.tabs(
-        ["🗺️ State Map", "🏆 Rankings", "📈 State Trend", "📋 Data"])
+        ["🗺️ State Map", "🏆 Rankings", "📈 State Trend", "📋 Data"], on_change="rerun")
 
     with t_map:
-        fig = go.Figure(go.Choropleth(
-            locations=sdf["state_alpha"], locationmode="USA-states",
-            z=sdf["Value"], colorscale=SEQ_SCALE,
-            marker_line_color=DM_BORDER, marker_line_width=0.5,
-            colorbar=dict(title=UAXIS, outlinewidth=0, tickfont=dict(color=DM_TEXT)),
-            text=sdf.get("state_name", sdf["state_alpha"]),
-            hovertemplate="%{{text}}: %{{z:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD),
-        ))
-        fig.update_geos(scope="usa", bgcolor=DM_SURFACE2, lakecolor=DM_SURFACE2,
-                        landcolor=DM_SURFACE, subunitcolor=DM_BORDER)
-        map_layout(fig, f"{series_name} {MEASURE} by State — {sel_year}", 540)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with t_rank:
-        rank = sdf.sort_values("Value", ascending=True).tail(25)
-        fig = go.Figure(go.Bar(
-            x=rank["Value"], y=rank.get("state_name", rank["state_alpha"]),
-            orientation="h", marker_color=JPSI_GREEN,
-            hovertemplate="%{{y}}: %{{x:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
-        apply_layout(fig, f"Top States — {sel_year}", max(400, 22*len(rank)), "")
-        fig.update_xaxes(title_text=UAXIS)
-        fig.update_yaxes(title_text="", showgrid=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with t_trend:
-        pick = st.selectbox("State", sorted(sdf.get("state_name", sdf["state_alpha"]).tolist()))
-        alpha = STATE_ABBR.get(str(pick).upper(),
-                               sdf.loc[sdf.get("state_name", sdf["state_alpha"]) == pick, "state_alpha"].iloc[0]
-                               if not sdf.empty else pick)
-        ss = pick_period(fetch_state_series(short_desc, alpha, UNIT), series["period_pref"])
-        if ss.empty:
-            st.info("No time series for this state.")
-        else:
-            ss = ss.groupby("year", as_index=False)["Value"].sum()
-            fig = go.Figure(go.Scatter(
-                x=ss["year"], y=ss["Value"], mode="lines+markers",
-                line=dict(color=JPSI_GREEN, width=2.5), marker=dict(size=4),
-                hovertemplate="%{{x}}: %{{y:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
-            apply_layout(fig, f"{pick} — {series_name} {MEASURE}", 430, UAXIS)
+        if t_map.open:
+            fig = go.Figure(go.Choropleth(
+                locations=sdf["state_alpha"], locationmode="USA-states",
+                z=sdf["Value"], colorscale=SEQ_SCALE,
+                marker_line_color=DM_BORDER, marker_line_width=0.5,
+                colorbar=dict(title=UAXIS, outlinewidth=0, tickfont=dict(color=DM_TEXT)),
+                text=sdf.get("state_name", sdf["state_alpha"]),
+                hovertemplate="%{{text}}: %{{z:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD),
+            ))
+            fig.update_geos(scope="usa", bgcolor=DM_SURFACE2, lakecolor=DM_SURFACE2,
+                            landcolor=DM_SURFACE, subunitcolor=DM_BORDER)
+            map_layout(fig, f"{series_name} {MEASURE} by State — {sel_year}", 540)
             st.plotly_chart(fig, use_container_width=True)
 
+    with t_rank:
+        if t_rank.open:
+            rank = sdf.sort_values("Value", ascending=True).tail(25)
+            fig = go.Figure(go.Bar(
+                x=rank["Value"], y=rank.get("state_name", rank["state_alpha"]),
+                orientation="h", marker_color=JPSI_GREEN,
+                hovertemplate="%{{y}}: %{{x:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
+            apply_layout(fig, f"Top States — {sel_year}", max(400, 22*len(rank)), "")
+            fig.update_xaxes(title_text=UAXIS)
+            fig.update_yaxes(title_text="", showgrid=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with t_trend:
+        if t_trend.open:
+            pick = st.selectbox("State", sorted(sdf.get("state_name", sdf["state_alpha"]).tolist()))
+            alpha = STATE_ABBR.get(str(pick).upper(),
+                                   sdf.loc[sdf.get("state_name", sdf["state_alpha"]) == pick, "state_alpha"].iloc[0]
+                                   if not sdf.empty else pick)
+            ss = pick_period(fetch_state_series(short_desc, alpha, UNIT), series["period_pref"])
+            if ss.empty:
+                st.info("No time series for this state.")
+            else:
+                ss = ss.groupby("year", as_index=False)["Value"].sum()
+                fig = go.Figure(go.Scatter(
+                    x=ss["year"], y=ss["Value"], mode="lines+markers",
+                    line=dict(color=JPSI_GREEN, width=2.5), marker=dict(size=4),
+                    hovertemplate="%{{x}}: %{{y:,.0f}} {UWORD}<extra></extra>".format(UWORD=UWORD)))
+                apply_layout(fig, f"{pick} — {series_name} {MEASURE}", 430, UAXIS)
+                st.plotly_chart(fig, use_container_width=True)
+
     with t_data:
-        out = sdf.copy()
-        cols = {"state_alpha": "State", "state_name": "State Name", "Value": UAXIS}
-        out = out.rename(columns=cols)
-        disp = [c for c in ["State Name", "State", UAXIS] if c in out.columns]
-        out = out[disp].sort_values(UAXIS, ascending=False)
-        out.insert(0, "Rank", range(1, len(out) + 1))
-        st.dataframe(out, use_container_width=True, height=460, hide_index=True,
-                     column_config={UAXIS: st.column_config.NumberColumn(format="%d")})
-        st.download_button("⬇ Download Excel", to_excel(out),
-                           file_name=f"state_{sel_year}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if t_data.open:
+            out = sdf.copy()
+            cols = {"state_alpha": "State", "state_name": "State Name", "Value": UAXIS}
+            out = out.rename(columns=cols)
+            disp = [c for c in ["State Name", "State", UAXIS] if c in out.columns]
+            out = out[disp].sort_values(UAXIS, ascending=False)
+            out.insert(0, "Rank", range(1, len(out) + 1))
+            st.dataframe(out, use_container_width=True, height=460, hide_index=True,
+                         column_config={UAXIS: st.column_config.NumberColumn(format="%d")})
+            st.download_button("⬇ Download Excel", to_excel(out),
+                               file_name=f"state_{sel_year}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -694,66 +701,70 @@ elif level == "County":
 
     st.markdown("")
     t_map, t_rank, t_trend, t_data = st.tabs(
-        ["🗺️ County Map", "🏆 Rankings", "📈 County Trend", "📋 Data"])
+        ["🗺️ County Map", "🏆 Rankings", "📈 County Trend", "📋 Data"], on_change="rerun")
 
     with t_map:
-        fig = go.Figure(go.Choropleth(
-            geojson=geo, locations=cdf["fips"], featureidkey="id",
-            z=cdf["Value"], colorscale=SEQ_SCALE,
-            marker_line_color=DM_BORDER, marker_line_width=0.4,
-            colorbar=dict(title="Head", outlinewidth=0, tickfont=dict(color=DM_TEXT)),
-            text=cdf["county_name"].str.title(),
-            hovertemplate="%{text}: %{z:,.0f} head<extra></extra>",
-        ))
-        fig.update_geos(fitbounds="locations", visible=False,
-                        bgcolor=DM_SURFACE2, subunitcolor=DM_BORDER)
-        map_layout(fig, f"{series_name} — {sel_state_name} Counties ({sel_year})", 560)
-        st.plotly_chart(fig, use_container_width=True)
+        if t_map.open:
+            fig = go.Figure(go.Choropleth(
+                geojson=geo, locations=cdf["fips"], featureidkey="id",
+                z=cdf["Value"], colorscale=SEQ_SCALE,
+                marker_line_color=DM_BORDER, marker_line_width=0.4,
+                colorbar=dict(title="Head", outlinewidth=0, tickfont=dict(color=DM_TEXT)),
+                text=cdf["county_name"].str.title(),
+                hovertemplate="%{text}: %{z:,.0f} head<extra></extra>",
+            ))
+            fig.update_geos(fitbounds="locations", visible=False,
+                            bgcolor=DM_SURFACE2, subunitcolor=DM_BORDER)
+            map_layout(fig, f"{series_name} — {sel_state_name} Counties ({sel_year})", 560)
+            st.plotly_chart(fig, use_container_width=True)
 
     with t_rank:
-        n = st.slider("Show top N counties", 5, 40, 20)
-        rank = cdf.sort_values("Value", ascending=True).tail(n)
-        fig = go.Figure(go.Bar(
-            x=rank["Value"], y=rank["county_name"].str.title(),
-            orientation="h", marker_color=JPSI_GREEN,
-            hovertemplate="%{y}: %{x:,.0f} head<extra></extra>"))
-        apply_layout(fig, f"Top {n} Counties — {sel_state_name} {sel_year}",
-                     max(400, 22*n), "")
-        fig.update_xaxes(title_text="Head")
-        fig.update_yaxes(title_text="", showgrid=False)
-        st.plotly_chart(fig, use_container_width=True)
+        if t_rank.open:
+            n = st.slider("Show top N counties", 5, 40, 20)
+            rank = cdf.sort_values("Value", ascending=True).tail(n)
+            fig = go.Figure(go.Bar(
+                x=rank["Value"], y=rank["county_name"].str.title(),
+                orientation="h", marker_color=JPSI_GREEN,
+                hovertemplate="%{y}: %{x:,.0f} head<extra></extra>"))
+            apply_layout(fig, f"Top {n} Counties — {sel_state_name} {sel_year}",
+                         max(400, 22*n), "")
+            fig.update_xaxes(title_text="Head")
+            fig.update_yaxes(title_text="", showgrid=False)
+            st.plotly_chart(fig, use_container_width=True)
 
     with t_trend:
-        county_pick = st.selectbox("County", sorted(cdf["county_name"].str.title().unique()))
-        allc = pick_period(fetch_county_series(short_desc, sel_state_alpha), series["period_pref"])
-        cs = allc[allc["county_name"].str.title() == county_pick]
-        if cs.empty:
-            st.info("No time series for this county.")
-        else:
-            cs = cs.groupby("year", as_index=False)["Value"].sum()
-            fig = go.Figure(go.Scatter(
-                x=cs["year"], y=cs["Value"], mode="lines+markers",
-                line=dict(color=JPSI_GREEN, width=2.5), marker=dict(size=5),
-                hovertemplate="%{x}: %{y:,.0f} head<extra></extra>"))
-            apply_layout(fig, f"{county_pick} County — {series_name}", 430, "Head")
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption("Gaps indicate years not separately published for this county "
-                       "(Survey coverage varies; Census years fill in all counties).")
+        if t_trend.open:
+            county_pick = st.selectbox("County", sorted(cdf["county_name"].str.title().unique()))
+            allc = pick_period(fetch_county_series(short_desc, sel_state_alpha), series["period_pref"])
+            cs = allc[allc["county_name"].str.title() == county_pick]
+            if cs.empty:
+                st.info("No time series for this county.")
+            else:
+                cs = cs.groupby("year", as_index=False)["Value"].sum()
+                fig = go.Figure(go.Scatter(
+                    x=cs["year"], y=cs["Value"], mode="lines+markers",
+                    line=dict(color=JPSI_GREEN, width=2.5), marker=dict(size=5),
+                    hovertemplate="%{x}: %{y:,.0f} head<extra></extra>"))
+                apply_layout(fig, f"{county_pick} County — {series_name}", 430, "Head")
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption("Gaps indicate years not separately published for this county "
+                           "(Survey coverage varies; Census years fill in all counties).")
 
     with t_data:
-        out = cdf.copy()
-        out["county_name"] = out["county_name"].str.title()
-        ren = {"county_name": "County", "asd_desc": "Ag District",
-               "Value": "Head", "source_desc": "Source", "fips": "FIPS"}
-        out = out.rename(columns=ren)
-        disp = [c for c in ["County", "Ag District", "Head", "Source", "FIPS"] if c in out.columns]
-        out = out[disp].sort_values("Head", ascending=False)
-        out.insert(0, "Rank", range(1, len(out) + 1))
-        st.dataframe(out, use_container_width=True, height=470, hide_index=True,
-                     column_config={"Head": st.column_config.NumberColumn(format="%d")})
-        st.download_button("⬇ Download Excel", to_excel(out),
-                           file_name=f"county_{sel_state_alpha}_{sel_year}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if t_data.open:
+            out = cdf.copy()
+            out["county_name"] = out["county_name"].str.title()
+            ren = {"county_name": "County", "asd_desc": "Ag District",
+                   "Value": "Head", "source_desc": "Source", "fips": "FIPS"}
+            out = out.rename(columns=ren)
+            disp = [c for c in ["County", "Ag District", "Head", "Source", "FIPS"] if c in out.columns]
+            out = out[disp].sort_values("Head", ascending=False)
+            out.insert(0, "Rank", range(1, len(out) + 1))
+            st.dataframe(out, use_container_width=True, height=470, hide_index=True,
+                         column_config={"Head": st.column_config.NumberColumn(format="%d")})
+            st.download_button("⬇ Download Excel", to_excel(out),
+                               file_name=f"county_{sel_state_alpha}_{sel_year}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -807,50 +818,53 @@ elif level == "Agricultural District":
                     unsafe_allow_html=True)
 
     st.markdown("")
-    t_map, t_rank, t_data = st.tabs(["🗺️ District Map", "🏆 District Rankings", "📋 Data"])
+    t_map, t_rank, t_data = st.tabs(["🗺️ District Map", "🏆 District Rankings", "📋 Data"], on_change="rerun")
 
     with t_map:
-        fig = go.Figure(go.Choropleth(
-            geojson=geo, locations=cdf["fips"], featureidkey="id",
-            z=cdf["district_value"], colorscale=SEQ_SCALE,
-            marker_line_color=DM_BORDER, marker_line_width=0.3,
-            colorbar=dict(title="Head", outlinewidth=0, tickfont=dict(color=DM_TEXT)),
-            text=cdf["asd_desc"].str.title(),
-            customdata=cdf["county_name"].str.title(),
-            hovertemplate="<b>%{text}</b> district<br>%{customdata} Co.<br>"
-                          "District total: %{z:,.0f} head<extra></extra>",
-        ))
-        fig.update_geos(fitbounds="locations", visible=False,
-                        bgcolor=DM_SURFACE2, subunitcolor=DM_BORDER)
-        map_layout(fig, f"{series_name} by Ag District — {sel_state_name} ({sel_year})", 560)
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption("Counties are shaded by their agricultural-district total, so each "
-                   "district reads as one block. Districts are USDA NASS crop-reporting districts.")
+        if t_map.open:
+            fig = go.Figure(go.Choropleth(
+                geojson=geo, locations=cdf["fips"], featureidkey="id",
+                z=cdf["district_value"], colorscale=SEQ_SCALE,
+                marker_line_color=DM_BORDER, marker_line_width=0.3,
+                colorbar=dict(title="Head", outlinewidth=0, tickfont=dict(color=DM_TEXT)),
+                text=cdf["asd_desc"].str.title(),
+                customdata=cdf["county_name"].str.title(),
+                hovertemplate="<b>%{text}</b> district<br>%{customdata} Co.<br>"
+                              "District total: %{z:,.0f} head<extra></extra>",
+            ))
+            fig.update_geos(fitbounds="locations", visible=False,
+                            bgcolor=DM_SURFACE2, subunitcolor=DM_BORDER)
+            map_layout(fig, f"{series_name} by Ag District — {sel_state_name} ({sel_year})", 560)
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("Counties are shaded by their agricultural-district total, so each "
+                       "district reads as one block. Districts are USDA NASS crop-reporting districts.")
 
     with t_rank:
-        rank = asd.sort_values("Value", ascending=True)
-        fig = go.Figure(go.Bar(
-            x=rank["Value"], y=rank["asd_desc"].str.title(),
-            orientation="h", marker_color=JPSI_GREEN,
-            customdata=rank["n_counties"],
-            hovertemplate="%{y}: %{x:,.0f} head · %{customdata} counties<extra></extra>"))
-        apply_layout(fig, f"Ag Districts — {sel_state_name} {sel_year}",
-                     max(380, 30*len(rank)), "")
-        fig.update_xaxes(title_text="Head")
-        fig.update_yaxes(title_text="", showgrid=False)
-        st.plotly_chart(fig, use_container_width=True)
+        if t_rank.open:
+            rank = asd.sort_values("Value", ascending=True)
+            fig = go.Figure(go.Bar(
+                x=rank["Value"], y=rank["asd_desc"].str.title(),
+                orientation="h", marker_color=JPSI_GREEN,
+                customdata=rank["n_counties"],
+                hovertemplate="%{y}: %{x:,.0f} head · %{customdata} counties<extra></extra>"))
+            apply_layout(fig, f"Ag Districts — {sel_state_name} {sel_year}",
+                         max(380, 30*len(rank)), "")
+            fig.update_xaxes(title_text="Head")
+            fig.update_yaxes(title_text="", showgrid=False)
+            st.plotly_chart(fig, use_container_width=True)
 
     with t_data:
-        out = asd.rename(columns={"asd_desc": "Ag District", "asd_code": "Code",
-                                  "Value": "Head", "n_counties": "Counties"})
-        out["Ag District"] = out["Ag District"].str.title()
-        out = out[["Ag District", "Code", "Counties", "Head"]].sort_values("Head", ascending=False)
-        out.insert(0, "Rank", range(1, len(out) + 1))
-        st.dataframe(out, use_container_width=True, height=430, hide_index=True,
-                     column_config={"Head": st.column_config.NumberColumn(format="%d")})
-        st.download_button("⬇ Download Excel", to_excel(out),
-                           file_name=f"asd_{sel_state_alpha}_{sel_year}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if t_data.open:
+            out = asd.rename(columns={"asd_desc": "Ag District", "asd_code": "Code",
+                                      "Value": "Head", "n_counties": "Counties"})
+            out["Ag District"] = out["Ag District"].str.title()
+            out = out[["Ag District", "Code", "Counties", "Head"]].sort_values("Head", ascending=False)
+            out.insert(0, "Rank", range(1, len(out) + 1))
+            st.dataframe(out, use_container_width=True, height=430, hide_index=True,
+                         column_config={"Head": st.column_config.NumberColumn(format="%d")})
+            st.download_button("⬇ Download Excel", to_excel(out),
+                               file_name=f"asd_{sel_state_alpha}_{sel_year}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────

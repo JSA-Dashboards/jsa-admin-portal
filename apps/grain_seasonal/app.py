@@ -1063,15 +1063,19 @@ def render_contract_history(commodity: dict, api_key: str, as_of: date, report_d
 def render_commodity(commodity: dict, api_key: str, as_of: date, report_dates: dict | None = None):
     tab_futures, tab_spread, tab_matrix, tab_history = st.tabs(
         ["Seasonal futures", "Seasonal spread", "Spread matrix", "Contract history"]
-    )
+    , on_change="rerun")
     with tab_futures:
-        render_seasonal_futures(commodity, api_key, as_of, report_dates)
+        if tab_futures.open:
+            render_seasonal_futures(commodity, api_key, as_of, report_dates)
     with tab_spread:
-        render_seasonal_spread(commodity, api_key, as_of, report_dates)
+        if tab_spread.open:
+            render_seasonal_spread(commodity, api_key, as_of, report_dates)
     with tab_matrix:
-        render_spread_matrix(commodity, api_key, as_of)
+        if tab_matrix.open:
+            render_spread_matrix(commodity, api_key, as_of)
     with tab_history:
-        render_contract_history(commodity, api_key, as_of, report_dates)
+        if tab_history.open:
+            render_contract_history(commodity, api_key, as_of, report_dates)
 
 
 def render_cross_commodity_spread(api_key: str, as_of: date, report_dates: dict | None = None):
@@ -1420,19 +1424,24 @@ def main():
     tab_labels = [c["label"] for c in COMMODITIES] + [
         "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
     ]
-    tabs = st.tabs(tab_labels)
+    tabs = st.tabs(tab_labels, on_change="rerun")
     for tab, commodity in zip(tabs, COMMODITIES):
         with tab:
-            st.caption(commodity["sublabel"])
-            render_commodity(commodity, api_key, as_of, report_dates_visible)
+            if tab.open:
+                st.caption(commodity["sublabel"])
+                render_commodity(commodity, api_key, as_of, report_dates_visible)
     with tabs[-4]:
-        render_cross_commodity_spread(api_key, as_of, report_dates_visible)
+        if tabs[-4].open:
+            render_cross_commodity_spread(api_key, as_of, report_dates_visible)
     with tabs[-3]:
-        render_report_calendar(wasde_dates, nass_dates, as_of)
+        if tabs[-3].open:
+            render_report_calendar(wasde_dates, nass_dates, as_of)
     with tabs[-2]:
-        render_ask_ai(api_key, anthropic_key, as_of, wasde_dates, nass_dates)
+        if tabs[-2].open:
+            render_ask_ai(api_key, anthropic_key, as_of, wasde_dates, nass_dates)
     with tabs[-1]:
-        render_hl_tab(api_key, load_legacy_history_cached())
+        if tabs[-1].open:
+            render_hl_tab(api_key, load_legacy_history_cached())
 
 
 if __name__ == "__main__":

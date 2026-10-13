@@ -351,6 +351,45 @@ def hd_delta_html(cur, prior):
     return f'<div class="tile-delta-{color}">{sign} {abs(diff):,.0f} hd{pct_str}</div>'
 
 
+def miss_delta_html(actual, call):
+    """
+    How far a CALL sat from the print, for the scoreboard tiles.
+
+    NOT `hd_delta_html`, and the difference is the whole point. That helper
+    answers "how much has this figure moved", so it divides by the PRIOR --
+    correct for week-ago and year-ago tiles, where the base is a real earlier
+    state of the world. Here the base is our own estimate, and dividing by it
+    reports the miss as a share of a number USDA never printed.
+
+    Live on 2026-10-12: the tiles read +18.2% and +11.6% while Step 1 and
+    Step 2, six inches below, read 15.4% and 10.4% for the identical misses.
+    Both defensible, and that is exactly the letter-versus-dashboard shape
+    CLAUDE.md records three times -- here inside one page.
+
+    THE DENOMINATOR IS THE PRINT, because that is the convention every
+    accuracy figure quoted for this tab uses: the 12.3% and 9.2% median
+    absolute errors in CLAUDE.md, the backtests behind FORECAST_MIN_ANALOGUES
+    and the gap window, and the scorecard table below. A tile that divides by
+    the call is not comparable with any of them.
+
+    IT IS ALSO NEUTRAL, never green or red. `hd_delta_html` paints a positive
+    difference green, so a week we called 7,283 head TOO LOW rendered in the
+    good colour. A miss has no good direction -- being under is not a success
+    -- and the page does not know whether more negotiated volume suits the
+    reader anyway. Same reasoning as the uncoloured deltas on US Beef Trade.
+    """
+    if actual is None or call is None or pd.isna(actual) or pd.isna(call):
+        return '<div class="tile-delta-neu">&mdash;</div>'
+    diff = actual - call
+    if not diff:
+        return '<div class="tile-delta-neu">exactly the call</div>'
+    word = "above" if diff > 0 else "below"
+    pct = (abs(diff) / actual * 100) if actual else None
+    pct_str = f" ({pct:.1f}%)" if pct is not None else ""
+    return (f'<div class="tile-delta-neu">{abs(diff):,.0f} hd {word} '
+            f'the call{pct_str}</div>')
+
+
 def and_list(items) -> str:
     """["a"] -> "a"; ["a","b"] -> "a and b"; ["a","b","c"] -> "a, b and c"."""
     items = list(items)
@@ -1691,757 +1730,759 @@ def wasde_steer_panel():
 
 tab_weekly, tab_daily, tab_fcst, tab_lev, tab_wasde = st.tabs(
     ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast",
-     "Packer Leverage", "WASDE Steer Price"])
+     "Packer Leverage", "WASDE Steer Price"], on_change="rerun")
 
 with tab_weekly:
-    if not load_ok:
-        st.warning(
-            "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
-            "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
-        )
-        with st.expander("Technical details"):
-            st.code(err_msg)
-    elif price_df.empty and vol_df.empty:
-        st.warning("No data returned from USDA APIs.")
-    else:
-        # ── Section 1: Combined Steer & Heifer prices ───────────────────────────────
-
-        st.markdown(
-            '<div class="sec-header">Cash Cattle Prices — Combined Steer &amp; Heifer, Head-Count Weighted (LM_CT150, 5-Area)</div>',
-            unsafe_allow_html=True,
-        )
-
-        combo = combine_steer_heifer(price_df) if not price_df.empty else pd.DataFrame()
-
-        if combo.empty:
-            st.info("No price data available.")
-            fob_now = fob_wk = fob_yr = del_now = del_wk = del_yr = None
-            fob_now_hd = del_now_hd = None
-        else:
-            fob_now, fob_now_hd = period_value(combo, last_price_date, "WEEKLY WEIGHTED AVERAGES", "Live")
-            fob_wk, _ = period_value(combo, last_price_date, "SAME PERIOD LAST WEEK", "Live")
-            fob_yr, _ = period_value(combo, last_price_date, "SAME PERIOD LAST YEAR", "Live")
-            del_now, del_now_hd = period_value(combo, last_price_date, "WEEKLY WEIGHTED AVERAGES", "Dressed")
-            del_wk, _ = period_value(combo, last_price_date, "SAME PERIOD LAST WEEK", "Dressed")
-            del_yr, _ = period_value(combo, last_price_date, "SAME PERIOD LAST YEAR", "Dressed")
-
-        st.markdown(f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">Live FOB ($/cwt) — {fmt_hd(fob_now_hd)}</div>', unsafe_allow_html=True)
-        cols = st.columns(3)
-        with cols[0]:
-            st.markdown(tile("This Week", fmt_price(fob_now), cls="tile-fob"), unsafe_allow_html=True)
-        with cols[1]:
-            st.markdown(tile("vs Week Ago", fmt_price(fob_wk), price_delta_html(fob_now, fob_wk), "tile-fob"), unsafe_allow_html=True)
-        with cols[2]:
-            st.markdown(tile("vs Year Ago", fmt_price(fob_yr), price_delta_html(fob_now, fob_yr), "tile-fob"), unsafe_allow_html=True)
-
-        st.markdown(f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">Dressed Delivered ($/cwt) — {fmt_hd(del_now_hd)}</div>', unsafe_allow_html=True)
-        cols = st.columns(3)
-        with cols[0]:
-            st.markdown(tile("This Week", fmt_price(del_now), cls="tile-del"), unsafe_allow_html=True)
-        with cols[1]:
-            st.markdown(tile("vs Week Ago", fmt_price(del_wk), price_delta_html(del_now, del_wk), "tile-del"), unsafe_allow_html=True)
-        with cols[2]:
-            st.markdown(tile("vs Year Ago", fmt_price(del_yr), price_delta_html(del_now, del_yr), "tile-del"), unsafe_allow_html=True)
-
-        st.markdown(
-            '<div class="note" style="margin-top:6px;">Combined price = (Steer head count × Steer price + Heifer head count × '
-            'Heifer price) ÷ total head count — a simple head-count-weighted average of USDA\'s own published Steer and Heifer '
-            'weekly weighted averages. "This Week", "Week Ago" and "Year Ago" are the exact aligned periods USDA publishes '
-            'alongside the current report.</div>',
-            unsafe_allow_html=True,
-        )
-
-
-        # ── Price Trend Chart ────────────────────────────────────────────────────────
-
-        st.markdown('<div class="sec-header">Weekly combined price trend</div>', unsafe_allow_html=True)
-
-        AXIS = dict(gridcolor=BORDER, linecolor=BORDER, showgrid=True,
-                    tickfont=dict(color=MUTED, size=11), title_font=dict(color=MUTED, size=11),
-                    zeroline=False)
-
-        if not combo.empty:
-            trend = combo[combo["current_period"] == "WEEKLY WEIGHTED AVERAGES"].sort_values("report_date")
-            fob_trend = trend[trend["selling_basis_desc"] == "Live"]
-            del_trend = trend[trend["selling_basis_desc"] == "Dressed"]
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=fob_trend["report_date"], y=fob_trend["combo_price"],
-                name="Live FOB (combined)", mode="lines+markers",
-                line=dict(color=FOB_COLOR, width=2), marker=dict(size=4),
-                hovertemplate="<b>Live FOB</b>: $%{y:.2f}<extra></extra>",
-            ))
-            fig.add_trace(go.Scatter(
-                x=del_trend["report_date"], y=del_trend["combo_price"],
-                name="Dressed Delivered (combined)", mode="lines+markers",
-                line=dict(color=DEL_COLOR, width=2), marker=dict(size=4),
-                hovertemplate="<b>Dressed Delivered</b>: $%{y:.2f}<extra></extra>",
-            ))
-
-            _end = trend["report_date"].max()
-            _start = _end - pd.Timedelta(days=3 * 365) if pd.notna(_end) else None
-
-            fig.add_layout_image(dict(
-                source=JSA_LOGO, xref="paper", yref="paper",
-                x=0.5, y=0.5, sizex=0.5, sizey=0.5,
-                xanchor="center", yanchor="middle", sizing="contain",
-                opacity=WATERMARK_OPACITY, layer="below",
-            ))
-            fig.update_layout(
-                paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
-                font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                            font=dict(color=JPSI_DARK, size=11), bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=55, r=20, t=15, b=40),
-                xaxis=dict(
-                    **AXIS, title="",
-                    range=[_start, _end] if _start is not None else None,
-                    rangeselector=dict(
-                        buttons=[
-                            dict(count=6, label="6M", step="month", stepmode="backward"),
-                            dict(count=1, label="YTD", step="year", stepmode="todate"),
-                            dict(count=1, label="1Y", step="year", stepmode="backward"),
-                            dict(count=3, label="3Y", step="year", stepmode="backward"),
-                            dict(count=10, label="10Y", step="year", stepmode="backward"),
-                            dict(step="all", label="All"),
-                        ],
-                        bgcolor="#f6f8fa", activecolor=JPSI_BLUE,
-                        font=dict(color=JPSI_DARK, size=10), bordercolor=BORDER,
-                    ),
-                    rangeslider=dict(visible=False), type="date",
-                ),
-                yaxis=dict(**AXIS, title="$/cwt", tickprefix="$"),
-                height=400,
+    if tab_weekly.open:
+        if not load_ok:
+            st.warning(
+                "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
+                "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
             )
-            st.plotly_chart(fig, width="stretch")
+            with st.expander("Technical details"):
+                st.code(err_msg)
+        elif price_df.empty and vol_df.empty:
+            st.warning("No data returned from USDA APIs.")
         else:
-            st.info("No price trend data available.")
+            # ── Section 1: Combined Steer & Heifer prices ───────────────────────────────
 
-
-        # ── Steer / Heifer detail table ─────────────────────────────────────────────
-
-        with st.expander("📋  Steer / Heifer / Combined detail — this week, week ago, year ago"):
-            if price_df.empty:
-                st.info("No data.")
-            else:
-                detail = price_df[price_df["report_date"] == last_price_date].copy()
-                detail["Class"] = detail["class_description"]
-                detail["Period"] = detail["current_period"].map(PERIOD_LABEL)
-                detail["Basis"] = detail["selling_basis_desc"].map(BASIS_LABEL)
-                detail = detail.rename(columns={"head_count": "Head Count", "weight_range_avg": "Avg Weight",
-                                                 "weighted_avg_price": "Wtd Avg Price"})
-
-                combo_detail = combo[combo["report_date"] == last_price_date].copy()
-                combo_detail["Class"] = "Combined (Steer+Heifer)"
-                combo_detail["Period"] = combo_detail["current_period"].map(PERIOD_LABEL)
-                combo_detail["Basis"] = combo_detail["selling_basis_desc"].map(BASIS_LABEL)
-                combo_detail = combo_detail.rename(columns={"head_count": "Head Count", "combo_price": "Wtd Avg Price"})
-                combo_detail["Avg Weight"] = float("nan")
-
-                full = pd.concat([
-                    detail[["Period", "Basis", "Class", "Head Count", "Avg Weight", "Wtd Avg Price"]],
-                    combo_detail[["Period", "Basis", "Class", "Head Count", "Avg Weight", "Wtd Avg Price"]],
-                ], ignore_index=True)
-
-                period_order = {"This Week": 0, "Week Ago": 1, "Year Ago": 2}
-                class_order = {"Steer": 0, "Heifer": 1, "Combined (Steer+Heifer)": 2}
-                full["_p"] = full["Period"].map(period_order)
-                full["_c"] = full["Class"].map(class_order)
-                full = full.sort_values(["_p", "Basis", "_c"]).drop(columns=["_p", "_c"]).reset_index(drop=True)
-
-                full["Head Count"] = full["Head Count"].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
-                full["Avg Weight"] = full["Avg Weight"].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
-                full["Wtd Avg Price"] = full["Wtd Avg Price"].apply(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
-
-                st.dataframe(full, width="stretch", height=380, hide_index=True)
-
-
-        # ── Section 2: Negotiated cash trade volume ─────────────────────────────────
-
-        st.markdown(
-            '<div class="sec-header">Negotiated Cash Trade Volume — National (LM_CT154)</div>',
-            unsafe_allow_html=True,
-        )
-
-        if vol_df.empty:
-            st.info("No volume data available.")
-            conf_now = conf_wk = conf_yr = d14_now = d14_wk = d30_now = d30_wk = None
-            narrative = None
-        else:
-            latest_vol = vol_df.iloc[-1]
-            conf_now, conf_wk, conf_yr = latest_vol["total_head_count"], latest_vol["head_count_week_ago"], latest_vol["head_count_year_ago"]
-            d14_now, d14_wk = latest_vol["total_head_count_1"], latest_vol["head_count_week_ago_1"]
-            d30_now, d30_wk = latest_vol["total_head_count_2"], latest_vol["head_count_week_ago_2"]
-            narrative = latest_vol["trend"]
-
-        cols = st.columns(3)
-        with cols[0]:
-            st.markdown(tile("Total Confirmed — This Week", fmt_hd(conf_now), cls="tile-conf"), unsafe_allow_html=True)
-        with cols[1]:
-            st.markdown(tile("vs Week Ago", fmt_hd(conf_wk), hd_delta_html(conf_now, conf_wk), "tile-conf"), unsafe_allow_html=True)
-        with cols[2]:
-            st.markdown(tile("vs Year Ago", fmt_hd(conf_yr), hd_delta_html(conf_now, conf_yr), "tile-conf"), unsafe_allow_html=True)
-
-        cols = st.columns(4)
-        with cols[0]:
-            st.markdown(tile("1-14 Day Delivery — This Week", fmt_hd(d14_now), cls="tile-d14"), unsafe_allow_html=True)
-        with cols[1]:
-            st.markdown(tile("1-14 Day vs Week Ago", fmt_hd(d14_wk), hd_delta_html(d14_now, d14_wk), "tile-d14"), unsafe_allow_html=True)
-        with cols[2]:
-            st.markdown(tile("15-30 Day Delivery — This Week", fmt_hd(d30_now), cls="tile-d30"), unsafe_allow_html=True)
-        with cols[3]:
-            st.markdown(tile("15-30 Day vs Week Ago", fmt_hd(d30_wk), hd_delta_html(d30_now, d30_wk), "tile-d30"), unsafe_allow_html=True)
-
-        st.markdown(
-            '<div class="note" style="margin-top:6px;">USDA does not publish a year-ago figure for the 1-14 day / 15-30 day '
-            'delivery windows — only for total confirmed trade — so those two rows compare to week-ago only, matching the source report.</div>',
-            unsafe_allow_html=True,
-        )
-
-        if narrative:
-            st.markdown('<div class="sec-header">This week\'s market narrative</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="narrative">{narrative}</div>', unsafe_allow_html=True)
-
-
-        # ── Volume Trend Chart ───────────────────────────────────────────────────────
-
-        st.markdown('<div class="sec-header">Weekly negotiated cash trade volume trend</div>', unsafe_allow_html=True)
-
-        if not vol_df.empty:
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(
-                x=vol_df["report_date"], y=vol_df["total_head_count"],
-                name="Total Confirmed", mode="lines+markers",
-                line=dict(color=CONF_COLOR, width=2), marker=dict(size=4),
-                hovertemplate="<b>Total Confirmed</b>: %{y:,.0f} hd<extra></extra>",
-            ))
-            fig2.add_trace(go.Scatter(
-                x=vol_df["report_date"], y=vol_df["total_head_count_1"],
-                name="1-14 Day Delivery", mode="lines+markers",
-                line=dict(color=D14_COLOR, width=2), marker=dict(size=4),
-                hovertemplate="<b>1-14 Day</b>: %{y:,.0f} hd<extra></extra>",
-            ))
-            fig2.add_trace(go.Scatter(
-                x=vol_df["report_date"], y=vol_df["total_head_count_2"],
-                name="15-30 Day Delivery", mode="lines+markers",
-                line=dict(color=D30_COLOR, width=2), marker=dict(size=4),
-                hovertemplate="<b>15-30 Day</b>: %{y:,.0f} hd<extra></extra>",
-            ))
-
-            _vend = vol_df["report_date"].max()
-            _vstart = _vend - pd.Timedelta(days=2 * 365) if pd.notna(_vend) else None
-
-            fig2.add_layout_image(dict(
-                source=JSA_LOGO, xref="paper", yref="paper",
-                x=0.5, y=0.5, sizex=0.5, sizey=0.5,
-                xanchor="center", yanchor="middle", sizing="contain",
-                opacity=WATERMARK_OPACITY, layer="below",
-            ))
-            fig2.update_layout(
-                paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
-                font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                            font=dict(color=JPSI_DARK, size=11), bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=55, r=20, t=15, b=40),
-                xaxis=dict(
-                    **AXIS, title="",
-                    range=[_vstart, _vend] if _vstart is not None else None,
-                    rangeselector=dict(
-                        buttons=[
-                            dict(count=6, label="6M", step="month", stepmode="backward"),
-                            dict(count=1, label="YTD", step="year", stepmode="todate"),
-                            dict(count=1, label="1Y", step="year", stepmode="backward"),
-                            dict(count=5, label="5Y", step="year", stepmode="backward"),
-                            dict(step="all", label="All"),
-                        ],
-                        bgcolor="#f6f8fa", activecolor=JPSI_BLUE,
-                        font=dict(color=JPSI_DARK, size=10), bordercolor=BORDER,
-                    ),
-                    rangeslider=dict(visible=False), type="date",
-                ),
-                yaxis=dict(**AXIS, title="Head Count"),
-                height=380,
+            st.markdown(
+                '<div class="sec-header">Cash Cattle Prices — Combined Steer &amp; Heifer, Head-Count Weighted (LM_CT150, 5-Area)</div>',
+                unsafe_allow_html=True,
             )
-            st.plotly_chart(fig2, width="stretch")
-        else:
-            st.info("No volume trend data available.")
 
+            combo = combine_steer_heifer(price_df) if not price_df.empty else pd.DataFrame()
 
-        # ── Data Tables ────────────────────────────────────────────────────────────
-
-        with st.expander("📋  Weekly combined price history"):
             if combo.empty:
-                st.info("No data.")
+                st.info("No price data available.")
+                fob_now = fob_wk = fob_yr = del_now = del_wk = del_yr = None
+                fob_now_hd = del_now_hd = None
             else:
-                trend = combo[combo["current_period"] == "WEEKLY WEIGHTED AVERAGES"].sort_values("report_date")
-                piv = trend.pivot_table(index="report_date", columns="selling_basis_desc", values="combo_price").reset_index()
-                piv = piv.rename(columns={"report_date": "Week Of", "Live": "Live FOB", "Dressed": "Dressed Delivered"})
-                piv["Week Of"] = piv["Week Of"].dt.strftime("%Y-%m-%d")
-                piv = piv.sort_values("Week Of", ascending=False).reset_index(drop=True)
-                st.dataframe(piv.style.format({"Live FOB": "${:.2f}", "Dressed Delivered": "${:.2f}"}, na_rep="—"),
-                             width="stretch", height=320)
+                fob_now, fob_now_hd = period_value(combo, last_price_date, "WEEKLY WEIGHTED AVERAGES", "Live")
+                fob_wk, _ = period_value(combo, last_price_date, "SAME PERIOD LAST WEEK", "Live")
+                fob_yr, _ = period_value(combo, last_price_date, "SAME PERIOD LAST YEAR", "Live")
+                del_now, del_now_hd = period_value(combo, last_price_date, "WEEKLY WEIGHTED AVERAGES", "Dressed")
+                del_wk, _ = period_value(combo, last_price_date, "SAME PERIOD LAST WEEK", "Dressed")
+                del_yr, _ = period_value(combo, last_price_date, "SAME PERIOD LAST YEAR", "Dressed")
 
-        with st.expander("📋  Weekly negotiated cash trade volume history"):
-            if vol_df.empty:
-                st.info("No data.")
+            st.markdown(f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">Live FOB ($/cwt) — {fmt_hd(fob_now_hd)}</div>', unsafe_allow_html=True)
+            cols = st.columns(3)
+            with cols[0]:
+                st.markdown(tile("This Week", fmt_price(fob_now), cls="tile-fob"), unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown(tile("vs Week Ago", fmt_price(fob_wk), price_delta_html(fob_now, fob_wk), "tile-fob"), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(tile("vs Year Ago", fmt_price(fob_yr), price_delta_html(fob_now, fob_yr), "tile-fob"), unsafe_allow_html=True)
+
+            st.markdown(f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">Dressed Delivered ($/cwt) — {fmt_hd(del_now_hd)}</div>', unsafe_allow_html=True)
+            cols = st.columns(3)
+            with cols[0]:
+                st.markdown(tile("This Week", fmt_price(del_now), cls="tile-del"), unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown(tile("vs Week Ago", fmt_price(del_wk), price_delta_html(del_now, del_wk), "tile-del"), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(tile("vs Year Ago", fmt_price(del_yr), price_delta_html(del_now, del_yr), "tile-del"), unsafe_allow_html=True)
+
+            st.markdown(
+                '<div class="note" style="margin-top:6px;">Combined price = (Steer head count × Steer price + Heifer head count × '
+                'Heifer price) ÷ total head count — a simple head-count-weighted average of USDA\'s own published Steer and Heifer '
+                'weekly weighted averages. "This Week", "Week Ago" and "Year Ago" are the exact aligned periods USDA publishes '
+                'alongside the current report.</div>',
+                unsafe_allow_html=True,
+            )
+
+
+            # ── Price Trend Chart ────────────────────────────────────────────────────────
+
+            st.markdown('<div class="sec-header">Weekly combined price trend</div>', unsafe_allow_html=True)
+
+            AXIS = dict(gridcolor=BORDER, linecolor=BORDER, showgrid=True,
+                        tickfont=dict(color=MUTED, size=11), title_font=dict(color=MUTED, size=11),
+                        zeroline=False)
+
+            if not combo.empty:
+                trend = combo[combo["current_period"] == "WEEKLY WEIGHTED AVERAGES"].sort_values("report_date")
+                fob_trend = trend[trend["selling_basis_desc"] == "Live"]
+                del_trend = trend[trend["selling_basis_desc"] == "Dressed"]
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=fob_trend["report_date"], y=fob_trend["combo_price"],
+                    name="Live FOB (combined)", mode="lines+markers",
+                    line=dict(color=FOB_COLOR, width=2), marker=dict(size=4),
+                    hovertemplate="<b>Live FOB</b>: $%{y:.2f}<extra></extra>",
+                ))
+                fig.add_trace(go.Scatter(
+                    x=del_trend["report_date"], y=del_trend["combo_price"],
+                    name="Dressed Delivered (combined)", mode="lines+markers",
+                    line=dict(color=DEL_COLOR, width=2), marker=dict(size=4),
+                    hovertemplate="<b>Dressed Delivered</b>: $%{y:.2f}<extra></extra>",
+                ))
+
+                _end = trend["report_date"].max()
+                _start = _end - pd.Timedelta(days=3 * 365) if pd.notna(_end) else None
+
+                fig.add_layout_image(dict(
+                    source=JSA_LOGO, xref="paper", yref="paper",
+                    x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+                    xanchor="center", yanchor="middle", sizing="contain",
+                    opacity=WATERMARK_OPACITY, layer="below",
+                ))
+                fig.update_layout(
+                    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+                    font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                                font=dict(color=JPSI_DARK, size=11), bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=55, r=20, t=15, b=40),
+                    xaxis=dict(
+                        **AXIS, title="",
+                        range=[_start, _end] if _start is not None else None,
+                        rangeselector=dict(
+                            buttons=[
+                                dict(count=6, label="6M", step="month", stepmode="backward"),
+                                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                                dict(count=1, label="1Y", step="year", stepmode="backward"),
+                                dict(count=3, label="3Y", step="year", stepmode="backward"),
+                                dict(count=10, label="10Y", step="year", stepmode="backward"),
+                                dict(step="all", label="All"),
+                            ],
+                            bgcolor="#f6f8fa", activecolor=JPSI_BLUE,
+                            font=dict(color=JPSI_DARK, size=10), bordercolor=BORDER,
+                        ),
+                        rangeslider=dict(visible=False), type="date",
+                    ),
+                    yaxis=dict(**AXIS, title="$/cwt", tickprefix="$"),
+                    height=400,
+                )
+                st.plotly_chart(fig, width="stretch")
             else:
-                disp = vol_df.drop(columns="trend").copy()
-                disp["report_date"] = disp["report_date"].dt.strftime("%Y-%m-%d")
-                disp = disp.rename(columns={
-                    "report_date": "Week Of", "total_head_count": "Confirmed", "head_count_week_ago": "Confirmed (Wk Ago)",
-                    "head_count_year_ago": "Confirmed (Yr Ago)", "total_head_count_1": "1-14 Day",
-                    "head_count_week_ago_1": "1-14 Day (Wk Ago)", "total_head_count_2": "15-30 Day",
-                    "head_count_week_ago_2": "15-30 Day (Wk Ago)",
-                }).sort_values("Week Of", ascending=False).reset_index(drop=True)
-                st.dataframe(disp.style.format({c: "{:,.0f}" for c in disp.columns if c != "Week Of"}, na_rep="—"),
-                             width="stretch", height=320)
+                st.info("No price trend data available.")
+
+
+            # ── Steer / Heifer detail table ─────────────────────────────────────────────
+
+            with st.expander("📋  Steer / Heifer / Combined detail — this week, week ago, year ago"):
+                if price_df.empty:
+                    st.info("No data.")
+                else:
+                    detail = price_df[price_df["report_date"] == last_price_date].copy()
+                    detail["Class"] = detail["class_description"]
+                    detail["Period"] = detail["current_period"].map(PERIOD_LABEL)
+                    detail["Basis"] = detail["selling_basis_desc"].map(BASIS_LABEL)
+                    detail = detail.rename(columns={"head_count": "Head Count", "weight_range_avg": "Avg Weight",
+                                                     "weighted_avg_price": "Wtd Avg Price"})
+
+                    combo_detail = combo[combo["report_date"] == last_price_date].copy()
+                    combo_detail["Class"] = "Combined (Steer+Heifer)"
+                    combo_detail["Period"] = combo_detail["current_period"].map(PERIOD_LABEL)
+                    combo_detail["Basis"] = combo_detail["selling_basis_desc"].map(BASIS_LABEL)
+                    combo_detail = combo_detail.rename(columns={"head_count": "Head Count", "combo_price": "Wtd Avg Price"})
+                    combo_detail["Avg Weight"] = float("nan")
+
+                    full = pd.concat([
+                        detail[["Period", "Basis", "Class", "Head Count", "Avg Weight", "Wtd Avg Price"]],
+                        combo_detail[["Period", "Basis", "Class", "Head Count", "Avg Weight", "Wtd Avg Price"]],
+                    ], ignore_index=True)
+
+                    period_order = {"This Week": 0, "Week Ago": 1, "Year Ago": 2}
+                    class_order = {"Steer": 0, "Heifer": 1, "Combined (Steer+Heifer)": 2}
+                    full["_p"] = full["Period"].map(period_order)
+                    full["_c"] = full["Class"].map(class_order)
+                    full = full.sort_values(["_p", "Basis", "_c"]).drop(columns=["_p", "_c"]).reset_index(drop=True)
+
+                    full["Head Count"] = full["Head Count"].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+                    full["Avg Weight"] = full["Avg Weight"].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+                    full["Wtd Avg Price"] = full["Wtd Avg Price"].apply(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+
+                    st.dataframe(full, width="stretch", height=380, hide_index=True)
+
+
+            # ── Section 2: Negotiated cash trade volume ─────────────────────────────────
+
+            st.markdown(
+                '<div class="sec-header">Negotiated Cash Trade Volume — National (LM_CT154)</div>',
+                unsafe_allow_html=True,
+            )
+
+            if vol_df.empty:
+                st.info("No volume data available.")
+                conf_now = conf_wk = conf_yr = d14_now = d14_wk = d30_now = d30_wk = None
+                narrative = None
+            else:
+                latest_vol = vol_df.iloc[-1]
+                conf_now, conf_wk, conf_yr = latest_vol["total_head_count"], latest_vol["head_count_week_ago"], latest_vol["head_count_year_ago"]
+                d14_now, d14_wk = latest_vol["total_head_count_1"], latest_vol["head_count_week_ago_1"]
+                d30_now, d30_wk = latest_vol["total_head_count_2"], latest_vol["head_count_week_ago_2"]
+                narrative = latest_vol["trend"]
+
+            cols = st.columns(3)
+            with cols[0]:
+                st.markdown(tile("Total Confirmed — This Week", fmt_hd(conf_now), cls="tile-conf"), unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown(tile("vs Week Ago", fmt_hd(conf_wk), hd_delta_html(conf_now, conf_wk), "tile-conf"), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(tile("vs Year Ago", fmt_hd(conf_yr), hd_delta_html(conf_now, conf_yr), "tile-conf"), unsafe_allow_html=True)
+
+            cols = st.columns(4)
+            with cols[0]:
+                st.markdown(tile("1-14 Day Delivery — This Week", fmt_hd(d14_now), cls="tile-d14"), unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown(tile("1-14 Day vs Week Ago", fmt_hd(d14_wk), hd_delta_html(d14_now, d14_wk), "tile-d14"), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(tile("15-30 Day Delivery — This Week", fmt_hd(d30_now), cls="tile-d30"), unsafe_allow_html=True)
+            with cols[3]:
+                st.markdown(tile("15-30 Day vs Week Ago", fmt_hd(d30_wk), hd_delta_html(d30_now, d30_wk), "tile-d30"), unsafe_allow_html=True)
+
+            st.markdown(
+                '<div class="note" style="margin-top:6px;">USDA does not publish a year-ago figure for the 1-14 day / 15-30 day '
+                'delivery windows — only for total confirmed trade — so those two rows compare to week-ago only, matching the source report.</div>',
+                unsafe_allow_html=True,
+            )
+
+            if narrative:
+                st.markdown('<div class="sec-header">This week\'s market narrative</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="narrative">{narrative}</div>', unsafe_allow_html=True)
+
+
+            # ── Volume Trend Chart ───────────────────────────────────────────────────────
+
+            st.markdown('<div class="sec-header">Weekly negotiated cash trade volume trend</div>', unsafe_allow_html=True)
+
+            if not vol_df.empty:
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(
+                    x=vol_df["report_date"], y=vol_df["total_head_count"],
+                    name="Total Confirmed", mode="lines+markers",
+                    line=dict(color=CONF_COLOR, width=2), marker=dict(size=4),
+                    hovertemplate="<b>Total Confirmed</b>: %{y:,.0f} hd<extra></extra>",
+                ))
+                fig2.add_trace(go.Scatter(
+                    x=vol_df["report_date"], y=vol_df["total_head_count_1"],
+                    name="1-14 Day Delivery", mode="lines+markers",
+                    line=dict(color=D14_COLOR, width=2), marker=dict(size=4),
+                    hovertemplate="<b>1-14 Day</b>: %{y:,.0f} hd<extra></extra>",
+                ))
+                fig2.add_trace(go.Scatter(
+                    x=vol_df["report_date"], y=vol_df["total_head_count_2"],
+                    name="15-30 Day Delivery", mode="lines+markers",
+                    line=dict(color=D30_COLOR, width=2), marker=dict(size=4),
+                    hovertemplate="<b>15-30 Day</b>: %{y:,.0f} hd<extra></extra>",
+                ))
+
+                _vend = vol_df["report_date"].max()
+                _vstart = _vend - pd.Timedelta(days=2 * 365) if pd.notna(_vend) else None
+
+                fig2.add_layout_image(dict(
+                    source=JSA_LOGO, xref="paper", yref="paper",
+                    x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+                    xanchor="center", yanchor="middle", sizing="contain",
+                    opacity=WATERMARK_OPACITY, layer="below",
+                ))
+                fig2.update_layout(
+                    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+                    font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                                font=dict(color=JPSI_DARK, size=11), bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=55, r=20, t=15, b=40),
+                    xaxis=dict(
+                        **AXIS, title="",
+                        range=[_vstart, _vend] if _vstart is not None else None,
+                        rangeselector=dict(
+                            buttons=[
+                                dict(count=6, label="6M", step="month", stepmode="backward"),
+                                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                                dict(count=1, label="1Y", step="year", stepmode="backward"),
+                                dict(count=5, label="5Y", step="year", stepmode="backward"),
+                                dict(step="all", label="All"),
+                            ],
+                            bgcolor="#f6f8fa", activecolor=JPSI_BLUE,
+                            font=dict(color=JPSI_DARK, size=10), bordercolor=BORDER,
+                        ),
+                        rangeslider=dict(visible=False), type="date",
+                    ),
+                    yaxis=dict(**AXIS, title="Head Count"),
+                    height=380,
+                )
+                st.plotly_chart(fig2, width="stretch")
+            else:
+                st.info("No volume trend data available.")
+
+
+            # ── Data Tables ────────────────────────────────────────────────────────────
+
+            with st.expander("📋  Weekly combined price history"):
+                if combo.empty:
+                    st.info("No data.")
+                else:
+                    trend = combo[combo["current_period"] == "WEEKLY WEIGHTED AVERAGES"].sort_values("report_date")
+                    piv = trend.pivot_table(index="report_date", columns="selling_basis_desc", values="combo_price").reset_index()
+                    piv = piv.rename(columns={"report_date": "Week Of", "Live": "Live FOB", "Dressed": "Dressed Delivered"})
+                    piv["Week Of"] = piv["Week Of"].dt.strftime("%Y-%m-%d")
+                    piv = piv.sort_values("Week Of", ascending=False).reset_index(drop=True)
+                    st.dataframe(piv.style.format({"Live FOB": "${:.2f}", "Dressed Delivered": "${:.2f}"}, na_rep="—"),
+                                 width="stretch", height=320)
+
+            with st.expander("📋  Weekly negotiated cash trade volume history"):
+                if vol_df.empty:
+                    st.info("No data.")
+                else:
+                    disp = vol_df.drop(columns="trend").copy()
+                    disp["report_date"] = disp["report_date"].dt.strftime("%Y-%m-%d")
+                    disp = disp.rename(columns={
+                        "report_date": "Week Of", "total_head_count": "Confirmed", "head_count_week_ago": "Confirmed (Wk Ago)",
+                        "head_count_year_ago": "Confirmed (Yr Ago)", "total_head_count_1": "1-14 Day",
+                        "head_count_week_ago_1": "1-14 Day (Wk Ago)", "total_head_count_2": "15-30 Day",
+                        "head_count_week_ago_2": "15-30 Day (Wk Ago)",
+                    }).sort_values("Week Of", ascending=False).reset_index(drop=True)
+                    st.dataframe(disp.style.format({c: "{:,.0f}" for c in disp.columns if c != "Week Of"}, na_rep="—"),
+                                 width="stretch", height=320)
 
 
 with tab_daily:
-    st.markdown(
-        '<div class="sec-header">Daily Negotiated Cash Trade &mdash; by region, Steer &amp; Heifer combined</div>',
-        unsafe_allow_html=True,
-    )
-
-    _win = st.segmented_control(
-        "History window", list(DAILY_WINDOWS), default=DAILY_WINDOW_DEFAULT,
-        key="daily_window", label_visibility="collapsed")
-    _days = DAILY_WINDOWS.get(_win or DAILY_WINDOW_DEFAULT,
-                              DAILY_WINDOWS[DAILY_WINDOW_DEFAULT])
-
-    _end_d = datetime.now().date()
-    _start_d = _end_d - timedelta(days=_days)
-
-    with st.spinner("Loading USDA daily regional cash trade…"):
-        try:
-            _daily_slugs = [s for cuts in DAILY_REGIONS.values() for s in cuts.values()]
-            _stamps = stamps_for(_probe, _daily_slugs)
-            daily_df = fetch_daily_cash(_start_d.strftime("%m/%d/%Y"),
-                                        _end_d.strftime("%m/%d/%Y"), _stamps)
-            daily_vol = fetch_daily_volume(_start_d.strftime("%m/%d/%Y"),
-                                           _end_d.strftime("%m/%d/%Y"), _stamps)
-            daily_err = ""
-        except Exception as e:
-            _stamps = PROBE_FAILED
-            daily_df, daily_vol, daily_err = pd.DataFrame(), pd.DataFrame(), str(e)
-
-    # Show the publication stamp rather than a "last refreshed" clock. Our
-    # refresh time says nothing useful -- USDA's does, and it is the number that
-    # tells you whether a quiet page is quiet because nothing traded or because
-    # the feed stopped.
-    _pub = daily_last_published(_stamps)
-    if _pub:
+    if tab_daily.open:
         st.markdown(
-            f'<div class="note" style="margin:-4px 0 10px;">USDA last published '
-            f'these reports <b>{html.escape(_pub)}</b>. This page follows that stamp, '
-            f'so it picks up a release as soon as one lands rather than on a timer.'
-            f'</div>', unsafe_allow_html=True)
-    elif _stamps == PROBE_FAILED:
-        st.markdown(
-            '<div class="note" style="margin:-4px 0 10px;">Could not reach USDA\'s '
-            'report index, so the figures below are whatever was last cached and '
-            'may be behind a release.</div>', unsafe_allow_html=True)
-
-    dcombo = daily_combined(daily_df)
-
-    if daily_err:
-        st.warning(
-            "⏳ **USDA daily data unavailable** — the USDA server is not responding. "
-            "Use **Refresh now** in the sidebar to retry."
+            '<div class="sec-header">Daily Negotiated Cash Trade &mdash; by region, Steer &amp; Heifer combined</div>',
+            unsafe_allow_html=True,
         )
-        with st.expander("Technical details"):
-            st.code(daily_err)
-    elif daily_df.empty:
-        st.info("USDA published no daily reports for these regions in this window.")
-    else:
-        # The newest day USDA PUBLISHED, which is not the same as the newest day
-        # that PRICED -- see the unpriced-rows note in fetch_daily_cash. Taking
-        # it from dcombo instead would skip every no-trade day and head this
-        # section with an older date, which is what made a Wednesday page read
-        # "Monday" with nothing saying Tuesday had been published and was quiet.
-        last_trade = daily_df["trade_date"].max()
-        day = (dcombo[dcombo["trade_date"] == last_trade] if not dcombo.empty
-               else pd.DataFrame(columns=["region", "basis", "cut", "head", "price"]))
 
-        _priced = dcombo["trade_date"].max() if not dcombo.empty else None
-        _quiet = _priced is not None and _priced < last_trade
+        _win = st.segmented_control(
+            "History window", list(DAILY_WINDOWS), default=DAILY_WINDOW_DEFAULT,
+            key="daily_window", label_visibility="collapsed")
+        _days = DAILY_WINDOWS.get(_win or DAILY_WINDOW_DEFAULT,
+                                  DAILY_WINDOWS[DAILY_WINDOW_DEFAULT])
 
-        # COMPUTED HERE, DISPLAYED TWICE, AND THE ORDER IS THE POINT. The price
-        # tiles below need the per-region `suppressed` flag, and the week-to-date
-        # panel further down needs the whole dict. Script order decides what is
-        # available, not the order things appear on screen (see the tabs rule in
-        # CLAUDE.md), so this has to sit above the first of the two. Calling
-        # weekly_to_date() twice would work and is worse: the two panels would
-        # be free to disagree about which regions are withheld, which is exactly
-        # the class of bug where both numbers are defensible and nothing raises.
-        wtd = weekly_to_date(daily_vol, last_trade)
+        _end_d = datetime.now().date()
+        _start_d = _end_d - timedelta(days=_days)
 
-        # THE VOLUME FEED CAN FAIL ON ITS OWN AND NOTHING ELSE NOTICES. Prices
-        # come from each report's /Detail section and head counts from its
-        # /Summary, two separate requests, and _fetch_many's worker swallows
-        # every exception per job and returns []. So a Summary outage leaves
-        # daily_err == "", passes the `elif daily_df.empty` gate because the
-        # PRICE frame is fine, and silently drops the week-to-date panel at the
-        # `if wtd:` below. The page looks healthy and is not, so it says so.
-        #
-        # THE TILES NO LONGER DEPEND ON THIS BEING READ. _price_blank_run_days
-        # gives daily_price_state a fallback, so a region withheld through a
-        # Summary outage is still named rather than reverting to USDA's
-        # "Undefined". The warning survives that because the week-to-date
-        # panel really is gone and the remaining evidence really is weaker --
-        # a reader comparing head counts needs to know which, and the wording
-        # below says so rather than claiming the distinction was lost.
-        #
-        # It does not cry wolf: over 263 trading days to 2026-10-02,
-        # weekly_to_date() returned {} on none of the days that carried a
-        # price, so the two sections move together and an empty one here is a
-        # real failure rather than the feeds being a few hours apart.
-        #
-        # "Refresh now" is the right advice and was checked rather than
-        # assumed: both fetches are @st.cache_data(persist="disk") keyed on
-        # the publication stamps, so the empty frame a failed fetch returns is
-        # CACHED and re-served on every rerun until USDA republishes. The
-        # sidebar button calls st.cache_data.clear(), which drops persisted
-        # entries too, so it genuinely retries rather than redrawing the same
-        # cached failure.
-        if not wtd:
+        with st.spinner("Loading USDA daily regional cash trade…"):
+            try:
+                _daily_slugs = [s for cuts in DAILY_REGIONS.values() for s in cuts.values()]
+                _stamps = stamps_for(_probe, _daily_slugs)
+                daily_df = fetch_daily_cash(_start_d.strftime("%m/%d/%Y"),
+                                            _end_d.strftime("%m/%d/%Y"), _stamps)
+                daily_vol = fetch_daily_volume(_start_d.strftime("%m/%d/%Y"),
+                                               _end_d.strftime("%m/%d/%Y"), _stamps)
+                daily_err = ""
+            except Exception as e:
+                _stamps = PROBE_FAILED
+                daily_df, daily_vol, daily_err = pd.DataFrame(), pd.DataFrame(), str(e)
+
+        # Show the publication stamp rather than a "last refreshed" clock. Our
+        # refresh time says nothing useful -- USDA's does, and it is the number that
+        # tells you whether a quiet page is quiet because nothing traded or because
+        # the feed stopped.
+        _pub = daily_last_published(_stamps)
+        if _pub:
+            st.markdown(
+                f'<div class="note" style="margin:-4px 0 10px;">USDA last published '
+                f'these reports <b>{html.escape(_pub)}</b>. This page follows that stamp, '
+                f'so it picks up a release as soon as one lands rather than on a timer.'
+                f'</div>', unsafe_allow_html=True)
+        elif _stamps == PROBE_FAILED:
+            st.markdown(
+                '<div class="note" style="margin:-4px 0 10px;">Could not reach USDA\'s '
+                'report index, so the figures below are whatever was last cached and '
+                'may be behind a release.</div>', unsafe_allow_html=True)
+
+        dcombo = daily_combined(daily_df)
+
+        if daily_err:
             st.warning(
-                "⚠️ **USDA's volume reports did not load.** Head counts and prices "
-                "come from different sections of the same reports and only the price "
-                "half returned, so the week-to-date panel is missing below. Which "
-                "regions USDA is **withholding** is being read from each region's price "
-                "history instead — less direct than the head counts, and a tile reading "
-                "*no volume data* is one the price history could not settle either. "
+                "⏳ **USDA daily data unavailable** — the USDA server is not responding. "
                 "Use **Refresh now** in the sidebar to retry."
             )
+            with st.expander("Technical details"):
+                st.code(daily_err)
+        elif daily_df.empty:
+            st.info("USDA published no daily reports for these regions in this window.")
+        else:
+            # The newest day USDA PUBLISHED, which is not the same as the newest day
+            # that PRICED -- see the unpriced-rows note in fetch_daily_cash. Taking
+            # it from dcombo instead would skip every no-trade day and head this
+            # section with an older date, which is what made a Wednesday page read
+            # "Monday" with nothing saying Tuesday had been published and was quiet.
+            last_trade = daily_df["trade_date"].max()
+            day = (dcombo[dcombo["trade_date"] == last_trade] if not dcombo.empty
+                   else pd.DataFrame(columns=["region", "basis", "cut", "head", "price"]))
 
-        st.markdown(
-            f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">'
-            f'Latest trading day &mdash; {last_trade.strftime("%A, %b %d, %Y")} '
-            f'($/cwt)</div>',
-            unsafe_allow_html=True)
+            _priced = dcombo["trade_date"].max() if not dcombo.empty else None
+            _quiet = _priced is not None and _priced < last_trade
 
-        if _quiet:
-            # "No trade in any region" is a claim about EVERY region, so it has
-            # to exclude the ones USDA is withholding. On a day where the
-            # reporting regions are quiet and the others are suppressed, the old
-            # wording asserted a silent Texas that is in fact trading.
+            # COMPUTED HERE, DISPLAYED TWICE, AND THE ORDER IS THE POINT. The price
+            # tiles below need the per-region `suppressed` flag, and the week-to-date
+            # panel further down needs the whole dict. Script order decides what is
+            # available, not the order things appear on screen (see the tabs rule in
+            # CLAUDE.md), so this has to sit above the first of the two. Calling
+            # weekly_to_date() twice would work and is worse: the two panels would
+            # be free to disagree about which regions are withheld, which is exactly
+            # the class of bug where both numbers are defensible and nothing raises.
+            wtd = weekly_to_date(daily_vol, last_trade)
+
+            # THE VOLUME FEED CAN FAIL ON ITS OWN AND NOTHING ELSE NOTICES. Prices
+            # come from each report's /Detail section and head counts from its
+            # /Summary, two separate requests, and _fetch_many's worker swallows
+            # every exception per job and returns []. So a Summary outage leaves
+            # daily_err == "", passes the `elif daily_df.empty` gate because the
+            # PRICE frame is fine, and silently drops the week-to-date panel at the
+            # `if wtd:` below. The page looks healthy and is not, so it says so.
             #
-            # All four withheld gets its own sentence rather than a subtraction:
-            # the region list would be empty and the sentence would read "no
-            # confirmed negotiated trade in ." It is reachable -- _quiet means
-            # nothing priced, which is exactly what four withheld regions look
-            # like -- so it is written out rather than guarded against.
-            _held_q = [r for r in DAILY_REGIONS
-                       if (wtd.get(r) or {}).get("suppressed")] if wtd else []
-            _open_q = [r for r in DAILY_REGIONS if r not in _held_q]
-            _last_p = f'The last day that priced was <b>{_priced.strftime("%A, %b %d, %Y")}</b>.'
-            if not _held_q:
-                _msg = f'USDA published this day with no confirmed negotiated trade in any region. {_last_p}'
-            elif not _open_q:
-                _msg = (f'USDA is withholding every region for confidentiality on this day, so '
-                        f'there is no published price anywhere. {_last_p}')
-            else:
-                _msg = (f'USDA published this day with no confirmed negotiated trade in '
-                        f'{and_list(_open_q)}. It is withholding {and_list(_held_q)} for '
-                        f'confidentiality, so '
-                        f'{"those regions are" if len(_held_q) > 1 else "that region is"} '
-                        f'not part of that statement. {_last_p}')
+            # THE TILES NO LONGER DEPEND ON THIS BEING READ. _price_blank_run_days
+            # gives daily_price_state a fallback, so a region withheld through a
+            # Summary outage is still named rather than reverting to USDA's
+            # "Undefined". The warning survives that because the week-to-date
+            # panel really is gone and the remaining evidence really is weaker --
+            # a reader comparing head counts needs to know which, and the wording
+            # below says so rather than claiming the distinction was lost.
+            #
+            # It does not cry wolf: over 263 trading days to 2026-10-02,
+            # weekly_to_date() returned {} on none of the days that carried a
+            # price, so the two sections move together and an empty one here is a
+            # real failure rather than the feeds being a few hours apart.
+            #
+            # "Refresh now" is the right advice and was checked rather than
+            # assumed: both fetches are @st.cache_data(persist="disk") keyed on
+            # the publication stamps, so the empty frame a failed fetch returns is
+            # CACHED and re-served on every rerun until USDA republishes. The
+            # sidebar button calls st.cache_data.clear(), which drops persisted
+            # entries too, so it genuinely retries rather than redrawing the same
+            # cached failure.
+            if not wtd:
+                st.warning(
+                    "⚠️ **USDA's volume reports did not load.** Head counts and prices "
+                    "come from different sections of the same reports and only the price "
+                    "half returned, so the week-to-date panel is missing below. Which "
+                    "regions USDA is **withholding** is being read from each region's price "
+                    "history instead — less direct than the head counts, and a tile reading "
+                    "*no volume data* is one the price history could not settle either. "
+                    "Use **Refresh now** in the sidebar to retry."
+                )
+
             st.markdown(
-                f'<div class="note" style="margin:-6px 0 12px;">{_msg}</div>',
+                f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">'
+                f'Latest trading day &mdash; {last_trade.strftime("%A, %b %d, %Y")} '
+                f'($/cwt)</div>',
                 unsafe_allow_html=True)
 
-        # One tile per region: the final print where USDA has closed the day
-        # out, otherwise the 1:30 pm cut, labelled so the two are never
-        # confused. The decision is daily_price_state() at module level, where
-        # a test can reach it -- this block only renders what it returns.
-        #
-        # THREE WAYS TO HAVE NO PRICE, AND THEY ARE DIFFERENT NEWS. "Undefined"
-        # is USDA's own market test and is right on a quiet day; it is wrong for
-        # a region whose trade USDA is withholding, which is what Kansas and
-        # TX/OK/NM have been doing since 08/14 and 06/26/2026. The captions stay
-        # short because .tile-delta-neu is nowrap and four tiles share the row;
-        # the reason goes in the footnote, which has space for it.
-        _PRICE_BLANK = {
-            "withheld":    ("—", "withheld by USDA"),
-            "undefined":   ("Undefined", "no confirmed trade"),
-            "unpublished": ("—", "not published"),
-            # "not published" is USDA having published nothing for the region;
-            # this is us having lost the feed that would say WHY the price is
-            # blank. Different causes, and the reader can act on this one by
-            # coming back later, so it does not fold into the one above --
-            # folding them would collapse two states into one, which is the
-            # error being fixed here one line up.
-            "unknown":     ("—", "no volume data"),
-        }
-        # RESOLVED ONCE, READ BY THE TILES AND BY THE TABLE UNDER THEM. Same
-        # reason weekly_to_date() is hoisted above both: two callers deciding
-        # separately are two callers free to disagree, and a table that said
-        # "no confirmed trade" beside a tile saying "withheld by USDA" would be
-        # the exact defect this page is being fixed for, one row lower.
-        _states = {}
-        for region in DAILY_REGIONS:
-            _entry = wtd.get(region) if wtd else None
-            _states[region] = daily_price_state(
-                day[day["region"] == region],
-                daily_df[(daily_df["trade_date"] == last_trade)
-                         & (daily_df["region"] == region)],
-                # None, not False: no volume row for this region is no
-                # evidence either way, and False would assert the opposite.
-                suppressed=(_entry["suppressed"] if _entry else None),
-                # Computed here and passed in, so daily_price_state keeps its
-                # single call site and stays a pure decision a test can reach.
-                # It costs nothing when the flag exists -- the state resolves
-                # on `suppressed` before `blank_run` is ever consulted.
-                blank_run=_price_blank_run_days(daily_df, region, last_trade),
-            )
-
-        cols = st.columns(len(DAILY_REGIONS))
-        for col, region in zip(cols, DAILY_REGIONS):
-            state, row = _states[region]
-            with col:
-                if row is None:
-                    _val, _why = _PRICE_BLANK[state]
-                    st.markdown(
-                        tile(region, _val,
-                             f'<div class="tile-delta-neu">{_why}</div>',
-                             "tile-neu"),
-                        unsafe_allow_html=True)
+            if _quiet:
+                # "No trade in any region" is a claim about EVERY region, so it has
+                # to exclude the ones USDA is withholding. On a day where the
+                # reporting regions are quiet and the others are suppressed, the old
+                # wording asserted a silent Texas that is in fact trading.
+                #
+                # All four withheld gets its own sentence rather than a subtraction:
+                # the region list would be empty and the sentence would read "no
+                # confirmed negotiated trade in ." It is reachable -- _quiet means
+                # nothing priced, which is exactly what four withheld regions look
+                # like -- so it is written out rather than guarded against.
+                _held_q = [r for r in DAILY_REGIONS
+                           if (wtd.get(r) or {}).get("suppressed")] if wtd else []
+                _open_q = [r for r in DAILY_REGIONS if r not in _held_q]
+                _last_p = f'The last day that priced was <b>{_priced.strftime("%A, %b %d, %Y")}</b>.'
+                if not _held_q:
+                    _msg = f'USDA published this day with no confirmed negotiated trade in any region. {_last_p}'
+                elif not _open_q:
+                    _msg = (f'USDA is withholding every region for confidentiality on this day, so '
+                            f'there is no published price anywhere. {_last_p}')
                 else:
-                    basis_short = "Live FOB" if row["basis"] == "Live FOB" else "Dressed"
-                    st.markdown(
-                        tile(region, fmt_price(row["price"]),
-                             f'<div class="tile-delta-neu">{fmt_hd(row["head"])} '
-                             f'&middot; {basis_short}, {DAILY_CUT_LABEL[row["cut"]]}</div>',
-                             "tile-fob" if row["basis"] == "Live FOB" else "tile-del"),
-                        unsafe_allow_html=True)
-
-        # ── Both cuts, side by side ──────────────────────────────────────────
-        st.markdown(
-            '<div class="sec-header">Both cuts of the same trading day</div>',
-            unsafe_allow_html=True)
-
-        # EVERY CELL IN A WITHHELD ROW IS A DASH, AND A DASH SAYS NOTHING. The
-        # tiles above distinguish a quiet region from one USDA is withholding;
-        # six identical dashes across this row put the reader straight back to
-        # not knowing which. The reason goes in a column of its own rather than
-        # into the price cells, which would repeat it four times and widen the
-        # table for a sentence that is about the ROW.
-        #
-        # The column is always present, including on a day when no region is
-        # blank. A table that changes shape day to day is harder to read at a
-        # glance than one with an empty column, and this is a page people check
-        # every morning.
-        grid = []
-        for region in DAILY_REGIONS:
-            reg = day[day["region"] == region]
-            entry = {"Region": region}
-            for basis, short in (("Live FOB", "Live FOB"),
-                                 ("Dressed Delivered", "Dressed")):
-                for cut in ("afternoon", "morning"):
-                    m = reg[(reg["basis"] == basis) & (reg["cut"] == cut)]
-                    entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = (
-                        fmt_price(m.iloc[0]["price"]) if not m.empty else "—")
-            # Head across BOTH bases, not Live FOB alone -- on a dressed-only
-            # day (see daily_price_state) a live-only count reads "—" for a
-            # region that actually traded thousands of head.
-            fin = reg[reg["cut"] == "morning"]
-            entry["Head (final)"] = (
-                fmt_hd(fin["head"].sum()) if not fin.empty else "—")
-            # Blank for a region that priced: the row speaks for itself, and
-            # filling it with "published" would bury the two rows that matter.
-            _state = _states[region][0]
-            entry["USDA status"] = ("" if _state == "priced"
-                                    else _PRICE_BLANK[_state][1])
-            grid.append(entry)
-        st.dataframe(pd.DataFrame(grid), width="stretch", hide_index=True)
-
-        # ── Week to date ─────────────────────────────────────────────────────
-        # `wtd` is built above the price tiles, which share its suppressed flag.
-        if wtd:
-            st.markdown(
-                f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
-                f'Negotiated cash volume, week to date &mdash; through '
-                f'{last_trade.strftime("%A, %b %d")}</div>',
-                unsafe_allow_html=True)
-
-            # The 5-Area total leads as a line rather than a fifth tile. Five
-            # tiles across is one too many: at a narrow window each is about
-            # 80px, which is where the region labels start breaking mid-word.
-            # Four also keeps this row the same shape as the price row above.
-            _tot = wtd.get("_total")
-            if _tot is not None:
-                _cmp = ""
-                if _tot["week_ago"] is not None:
-                    _d = _tot["head"] - _tot["week_ago"]
-                    _arrow = "▲" if _d > 0 else ("▼" if _d < 0 else "")
-                    _col = POS if _d > 0 else (NEG if _d < 0 else MUTED)
-                    _cmp = (f' <span style="color:{_col};font-weight:600;">{_arrow} '
-                            f'{abs(_d):,.0f} hd</span> against {_tot["week_ago"]:,.0f} hd '
-                            f'at the same point last week')
-                # Name what the total is actually made of while a region is
-                # withheld. The figure is still USDA's -- their 5-Area drops a
-                # withheld region too -- but "5-Area" invites the reader to
-                # assume five regions are in it, and right now two are not.
-                _held = ""
-                if _tot["withheld"]:
-                    _held = (f' USDA is withholding {and_list(_tot["withheld"])} for '
-                             f'confidentiality and leaves '
-                             f'{"them" if len(_tot["withheld"]) > 1 else "it"} out of its '
-                             f'own 5-Area figure as well, so this is '
-                             f'{and_list(_tot["counted"])}.')
+                    _msg = (f'USDA published this day with no confirmed negotiated trade in '
+                            f'{and_list(_open_q)}. It is withholding {and_list(_held_q)} for '
+                            f'confidentiality, so '
+                            f'{"those regions are" if len(_held_q) > 1 else "that region is"} '
+                            f'not part of that statement. {_last_p}')
                 st.markdown(
-                    f'<div style="font-size:0.95rem;color:{JPSI_DARK};margin:-4px 0 12px;">'
-                    f'<b>5-Area total {_tot["head"]:,.0f} head</b>{_cmp}.{_held}</div>',
+                    f'<div class="note" style="margin:-6px 0 12px;">{_msg}</div>',
                     unsafe_allow_html=True)
+
+            # One tile per region: the final print where USDA has closed the day
+            # out, otherwise the 1:30 pm cut, labelled so the two are never
+            # confused. The decision is daily_price_state() at module level, where
+            # a test can reach it -- this block only renders what it returns.
+            #
+            # THREE WAYS TO HAVE NO PRICE, AND THEY ARE DIFFERENT NEWS. "Undefined"
+            # is USDA's own market test and is right on a quiet day; it is wrong for
+            # a region whose trade USDA is withholding, which is what Kansas and
+            # TX/OK/NM have been doing since 08/14 and 06/26/2026. The captions stay
+            # short because .tile-delta-neu is nowrap and four tiles share the row;
+            # the reason goes in the footnote, which has space for it.
+            _PRICE_BLANK = {
+                "withheld":    ("—", "withheld by USDA"),
+                "undefined":   ("Undefined", "no confirmed trade"),
+                "unpublished": ("—", "not published"),
+                # "not published" is USDA having published nothing for the region;
+                # this is us having lost the feed that would say WHY the price is
+                # blank. Different causes, and the reader can act on this one by
+                # coming back later, so it does not fold into the one above --
+                # folding them would collapse two states into one, which is the
+                # error being fixed here one line up.
+                "unknown":     ("—", "no volume data"),
+            }
+            # RESOLVED ONCE, READ BY THE TILES AND BY THE TABLE UNDER THEM. Same
+            # reason weekly_to_date() is hoisted above both: two callers deciding
+            # separately are two callers free to disagree, and a table that said
+            # "no confirmed trade" beside a tile saying "withheld by USDA" would be
+            # the exact defect this page is being fixed for, one row lower.
+            _states = {}
+            for region in DAILY_REGIONS:
+                _entry = wtd.get(region) if wtd else None
+                _states[region] = daily_price_state(
+                    day[day["region"] == region],
+                    daily_df[(daily_df["trade_date"] == last_trade)
+                             & (daily_df["region"] == region)],
+                    # None, not False: no volume row for this region is no
+                    # evidence either way, and False would assert the opposite.
+                    suppressed=(_entry["suppressed"] if _entry else None),
+                    # Computed here and passed in, so daily_price_state keeps its
+                    # single call site and stays a pure decision a test can reach.
+                    # It costs nothing when the flag exists -- the state resolves
+                    # on `suppressed` before `blank_run` is ever consulted.
+                    blank_run=_price_blank_run_days(daily_df, region, last_trade),
+                )
 
             cols = st.columns(len(DAILY_REGIONS))
             for col, region in zip(cols, DAILY_REGIONS):
-                entry = wtd.get(region)
+                state, row = _states[region]
                 with col:
-                    if entry is None:
+                    if row is None:
+                        _val, _why = _PRICE_BLANK[state]
                         st.markdown(
-                            tile(region, "—",
-                                 '<div class="tile-delta-neu">not published</div>',
-                                 "tile-neu"),
-                            unsafe_allow_html=True)
-                    elif entry["head"] is None:
-                        # USDA published the file and left the volume blank.
-                        # "0 head" here is a number USDA never prints and reads
-                        # as "nobody traded" -- see weekly_to_date. Only a
-                        # sustained blank is called withheld; a short one is
-                        # indistinguishable from a quiet day and says so.
-                        #
-                        # Both captions are kept short enough not to overflow
-                        # the tile at a narrow window, which the nowrap in
-                        # .tile-delta-neu makes a real constraint. The reason a
-                        # region is withheld goes on the 5-Area line above and
-                        # in the footnote below, which have room for it.
-                        _why = ("withheld by USDA"
-                                if entry["suppressed"] else "no volume published")
-                        st.markdown(
-                            tile(region, "—",
+                            tile(region, _val,
                                  f'<div class="tile-delta-neu">{_why}</div>',
                                  "tile-neu"),
                             unsafe_allow_html=True)
                     else:
+                        basis_short = "Live FOB" if row["basis"] == "Live FOB" else "Dressed"
                         st.markdown(
-                            tile(region, fmt_hd(entry["head"]),
-                                 hd_delta_html(entry["head"], entry["week_ago"]),
-                                 "tile-d14"),
+                            tile(region, fmt_price(row["price"]),
+                                 f'<div class="tile-delta-neu">{fmt_hd(row["head"])} '
+                                 f'&middot; {basis_short}, {DAILY_CUT_LABEL[row["cut"]]}</div>',
+                                 "tile-fob" if row["basis"] == "Live FOB" else "tile-del"),
                             unsafe_allow_html=True)
 
+            # ── Both cuts, side by side ──────────────────────────────────────────
             st.markdown(
-                '<div class="note" style="margin-top:6px;">Cumulative negotiated cash head '
-                'from Monday through the trading day above, against the running total at the '
-                'same point last week &mdash; USDA&rsquo;s own week-to-date line, not a sum computed '
-                'here. <b>This counts more cattle than the prices above.</b> The averages are '
-                'Steer and Heifer on Live FOB and Dressed Delivered only; this is every class '
-                'and all four selling bases, so it is the size of the week&rsquo;s trade rather than '
-                'the head behind those quotes. The 5-Area figure is the four regions added up, '
-                'which reproduces USDA&rsquo;s own 5-Area total exactly. '
-                '<b>A region shown as withheld is absent from that total</b> &mdash; USDA '
-                'publishes the report with the head count blank when too few buyers reported '
-                'to disclose it, and drops it from its own 5-Area figure the same way, so the '
-                'total is the regions named above it and not the whole 5-Area trade. That '
-                'cattle is still counted in the national confirmed negotiated figure on the '
-                'Weekly tab, which is why the two have diverged.</div>',
+                '<div class="sec-header">Both cuts of the same trading day</div>',
                 unsafe_allow_html=True)
 
-        # ── Daily trend ──────────────────────────────────────────────────────
-        st.markdown(
-            '<div class="sec-header">Daily Live FOB by region &mdash; final prints</div>',
-            unsafe_allow_html=True)
-
-        # A local axis dict rather than the weekly tab's AXIS: that one is built
-        # inside the weekly branch, which does not run when LM_CT150 is down.
-        DAXIS = dict(gridcolor=BORDER, linecolor=BORDER, showgrid=True,
-                     tickfont=dict(color=MUTED, size=11),
-                     title_font=dict(color=MUTED, size=11), zeroline=False)
-
-        line = (dcombo[(dcombo["basis"] == "Live FOB") & (dcombo["cut"] == "morning")]
-                if not dcombo.empty else dcombo)
-        if line.empty:
-            st.info("No final Live FOB prints in this window.")
-        else:
-            fig_d = go.Figure()
+            # EVERY CELL IN A WITHHELD ROW IS A DASH, AND A DASH SAYS NOTHING. The
+            # tiles above distinguish a quiet region from one USDA is withholding;
+            # six identical dashes across this row put the reader straight back to
+            # not knowing which. The reason goes in a column of its own rather than
+            # into the price cells, which would repeat it four times and widen the
+            # table for a sentence that is about the ROW.
+            #
+            # The column is always present, including on a day when no region is
+            # blank. A table that changes shape day to day is harder to read at a
+            # glance than one with an empty column, and this is a page people check
+            # every morning.
+            grid = []
             for region in DAILY_REGIONS:
-                s = line[line["region"] == region].sort_values("trade_date")
-                if s.empty:
-                    continue
-                fig_d.add_trace(go.Scatter(
-                    x=s["trade_date"], y=s["price"], name=region,
-                    mode="lines+markers",
-                    line=dict(color=DAILY_REGION_COLORS.get(region, MUTED), width=2),
-                    marker=dict(size=4),
-                    hovertemplate=f"<b>{region}</b>: $%{{y:.2f}}<extra></extra>"))
-            fig_d.add_layout_image(dict(
-                source=JSA_LOGO, xref="paper", yref="paper", x=0.5, y=0.5,
-                sizex=0.5, sizey=0.5, xanchor="center", yanchor="middle",
-                sizing="contain", opacity=WATERMARK_OPACITY, layer="below"))
-            fig_d.update_layout(
-                paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
-                font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                            xanchor="right", x=1,
-                            font=dict(color=JPSI_DARK, size=11),
-                            bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=55, r=20, t=15, b=40),
-                xaxis=dict(**DAXIS, title="", type="date"),
-                yaxis=dict(**DAXIS, title="$/cwt", tickprefix="$"),
-                height=400)
-            st.plotly_chart(fig_d, width="stretch")
+                reg = day[day["region"] == region]
+                entry = {"Region": region}
+                for basis, short in (("Live FOB", "Live FOB"),
+                                     ("Dressed Delivered", "Dressed")):
+                    for cut in ("afternoon", "morning"):
+                        m = reg[(reg["basis"] == basis) & (reg["cut"] == cut)]
+                        entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = (
+                            fmt_price(m.iloc[0]["price"]) if not m.empty else "—")
+                # Head across BOTH bases, not Live FOB alone -- on a dressed-only
+                # day (see daily_price_state) a live-only count reads "—" for a
+                # region that actually traded thousands of head.
+                fin = reg[reg["cut"] == "morning"]
+                entry["Head (final)"] = (
+                    fmt_hd(fin["head"].sum()) if not fin.empty else "—")
+                # Blank for a region that priced: the row speaks for itself, and
+                # filling it with "published" would bury the two rows that matter.
+                _state = _states[region][0]
+                entry["USDA status"] = ("" if _state == "priced"
+                                        else _PRICE_BLANK[_state][1])
+                grid.append(entry)
+            st.dataframe(pd.DataFrame(grid), width="stretch", hide_index=True)
 
-        # ── Detail ───────────────────────────────────────────────────────────
-        with st.expander("\U0001f4cb  Daily detail — every print in the window, both cuts"):
-            if dcombo.empty:
-                st.info("USDA published in this window but nothing priced.")
+            # ── Week to date ─────────────────────────────────────────────────────
+            # `wtd` is built above the price tiles, which share its suppressed flag.
+            if wtd:
+                st.markdown(
+                    f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
+                    f'Negotiated cash volume, week to date &mdash; through '
+                    f'{last_trade.strftime("%A, %b %d")}</div>',
+                    unsafe_allow_html=True)
+
+                # The 5-Area total leads as a line rather than a fifth tile. Five
+                # tiles across is one too many: at a narrow window each is about
+                # 80px, which is where the region labels start breaking mid-word.
+                # Four also keeps this row the same shape as the price row above.
+                _tot = wtd.get("_total")
+                if _tot is not None:
+                    _cmp = ""
+                    if _tot["week_ago"] is not None:
+                        _d = _tot["head"] - _tot["week_ago"]
+                        _arrow = "▲" if _d > 0 else ("▼" if _d < 0 else "")
+                        _col = POS if _d > 0 else (NEG if _d < 0 else MUTED)
+                        _cmp = (f' <span style="color:{_col};font-weight:600;">{_arrow} '
+                                f'{abs(_d):,.0f} hd</span> against {_tot["week_ago"]:,.0f} hd '
+                                f'at the same point last week')
+                    # Name what the total is actually made of while a region is
+                    # withheld. The figure is still USDA's -- their 5-Area drops a
+                    # withheld region too -- but "5-Area" invites the reader to
+                    # assume five regions are in it, and right now two are not.
+                    _held = ""
+                    if _tot["withheld"]:
+                        _held = (f' USDA is withholding {and_list(_tot["withheld"])} for '
+                                 f'confidentiality and leaves '
+                                 f'{"them" if len(_tot["withheld"]) > 1 else "it"} out of its '
+                                 f'own 5-Area figure as well, so this is '
+                                 f'{and_list(_tot["counted"])}.')
+                    st.markdown(
+                        f'<div style="font-size:0.95rem;color:{JPSI_DARK};margin:-4px 0 12px;">'
+                        f'<b>5-Area total {_tot["head"]:,.0f} head</b>{_cmp}.{_held}</div>',
+                        unsafe_allow_html=True)
+
+                cols = st.columns(len(DAILY_REGIONS))
+                for col, region in zip(cols, DAILY_REGIONS):
+                    entry = wtd.get(region)
+                    with col:
+                        if entry is None:
+                            st.markdown(
+                                tile(region, "—",
+                                     '<div class="tile-delta-neu">not published</div>',
+                                     "tile-neu"),
+                                unsafe_allow_html=True)
+                        elif entry["head"] is None:
+                            # USDA published the file and left the volume blank.
+                            # "0 head" here is a number USDA never prints and reads
+                            # as "nobody traded" -- see weekly_to_date. Only a
+                            # sustained blank is called withheld; a short one is
+                            # indistinguishable from a quiet day and says so.
+                            #
+                            # Both captions are kept short enough not to overflow
+                            # the tile at a narrow window, which the nowrap in
+                            # .tile-delta-neu makes a real constraint. The reason a
+                            # region is withheld goes on the 5-Area line above and
+                            # in the footnote below, which have room for it.
+                            _why = ("withheld by USDA"
+                                    if entry["suppressed"] else "no volume published")
+                            st.markdown(
+                                tile(region, "—",
+                                     f'<div class="tile-delta-neu">{_why}</div>',
+                                     "tile-neu"),
+                                unsafe_allow_html=True)
+                        else:
+                            st.markdown(
+                                tile(region, fmt_hd(entry["head"]),
+                                     hd_delta_html(entry["head"], entry["week_ago"]),
+                                     "tile-d14"),
+                                unsafe_allow_html=True)
+
+                st.markdown(
+                    '<div class="note" style="margin-top:6px;">Cumulative negotiated cash head '
+                    'from Monday through the trading day above, against the running total at the '
+                    'same point last week &mdash; USDA&rsquo;s own week-to-date line, not a sum computed '
+                    'here. <b>This counts more cattle than the prices above.</b> The averages are '
+                    'Steer and Heifer on Live FOB and Dressed Delivered only; this is every class '
+                    'and all four selling bases, so it is the size of the week&rsquo;s trade rather than '
+                    'the head behind those quotes. The 5-Area figure is the four regions added up, '
+                    'which reproduces USDA&rsquo;s own 5-Area total exactly. '
+                    '<b>A region shown as withheld is absent from that total</b> &mdash; USDA '
+                    'publishes the report with the head count blank when too few buyers reported '
+                    'to disclose it, and drops it from its own 5-Area figure the same way, so the '
+                    'total is the regions named above it and not the whole 5-Area trade. That '
+                    'cattle is still counted in the national confirmed negotiated figure on the '
+                    'Weekly tab, which is why the two have diverged.</div>',
+                    unsafe_allow_html=True)
+
+            # ── Daily trend ──────────────────────────────────────────────────────
+            st.markdown(
+                '<div class="sec-header">Daily Live FOB by region &mdash; final prints</div>',
+                unsafe_allow_html=True)
+
+            # A local axis dict rather than the weekly tab's AXIS: that one is built
+            # inside the weekly branch, which does not run when LM_CT150 is down.
+            DAXIS = dict(gridcolor=BORDER, linecolor=BORDER, showgrid=True,
+                         tickfont=dict(color=MUTED, size=11),
+                         title_font=dict(color=MUTED, size=11), zeroline=False)
+
+            line = (dcombo[(dcombo["basis"] == "Live FOB") & (dcombo["cut"] == "morning")]
+                    if not dcombo.empty else dcombo)
+            if line.empty:
+                st.info("No final Live FOB prints in this window.")
             else:
-                det = dcombo.copy()
-                det["Trading Day"] = det["trade_date"].dt.strftime("%Y-%m-%d")
-                det["Cut"] = det["cut"].map(DAILY_CUT_LABEL)
-                det = det.rename(columns={"region": "Region", "basis": "Basis",
-                                          "head": "Head", "weight": "Avg Weight",
-                                          "price": "Wtd Avg Price"})
-                det = det[["Trading Day", "Region", "Basis", "Cut",
-                           "Head", "Avg Weight", "Wtd Avg Price"]]
-                st.dataframe(
-                    det.sort_values(["Trading Day", "Region"], ascending=[False, True]),
-                    width="stretch", hide_index=True)
+                fig_d = go.Figure()
+                for region in DAILY_REGIONS:
+                    s = line[line["region"] == region].sort_values("trade_date")
+                    if s.empty:
+                        continue
+                    fig_d.add_trace(go.Scatter(
+                        x=s["trade_date"], y=s["price"], name=region,
+                        mode="lines+markers",
+                        line=dict(color=DAILY_REGION_COLORS.get(region, MUTED), width=2),
+                        marker=dict(size=4),
+                        hovertemplate=f"<b>{region}</b>: $%{{y:.2f}}<extra></extra>"))
+                fig_d.add_layout_image(dict(
+                    source=JSA_LOGO, xref="paper", yref="paper", x=0.5, y=0.5,
+                    sizex=0.5, sizey=0.5, xanchor="center", yanchor="middle",
+                    sizing="contain", opacity=WATERMARK_OPACITY, layer="below"))
+                fig_d.update_layout(
+                    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+                    font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                xanchor="right", x=1,
+                                font=dict(color=JPSI_DARK, size=11),
+                                bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=55, r=20, t=15, b=40),
+                    xaxis=dict(**DAXIS, title="", type="date"),
+                    yaxis=dict(**DAXIS, title="$/cwt", tickprefix="$"),
+                    height=400)
+                st.plotly_chart(fig_d, width="stretch")
 
-    st.markdown(
-        '<div class="note" style="margin-top:10px;">'
-        '<b>Two files a day, one trading day apart.</b> USDA publishes each region twice: an '
-        'afternoon file (~2:55 pm CT) carrying that day\'s trade as of the 1:30 pm cut, and a '
-        'morning file (median 11:17 CT) that finalises the <i>previous</i> business day. The morning '
-        'file is dated the day it is published, so this page shifts it back one business day &mdash; '
-        '&ldquo;Final&rdquo; and &ldquo;1:30 pm cut&rdquo; above are the same trading day, not the '
-        'same file.<br><br>'
-        '<b>Colorado is not shown.</b> USDA discontinued the Colorado daily reports &mdash; the '
-        'afternoon file (LM_CT133) last published 27 Jun 2023 and the summary (LM_CT134) 5 Jul 2024, '
-        'and the API has returned nothing for either since. Colorado is still inside the 5-Area '
-        'weekly average on the Weekly tab.<br><br>'
-        '<b>Week to date</b> is USDA&rsquo;s own cumulative negotiated cash head from Monday, read from each report&rsquo;s Summary section. It counts every class and all four selling bases, so it is a wider count than the Steer/Heifer Live-FOB-and-Dressed averages above and will not tie to them. The 5-Area figure is the four regions summed, which reproduces USDA&rsquo;s own 5-Area week-to-date exactly.<br><br>'
-        '<b>&ldquo;Undefined&rdquo;</b> is USDA\'s own state when a region has too little confirmed '
-        'trade to publish a market test &mdash; a real answer, not a failed fetch. Regions are '
-        'routinely undefined early in the week.<br><br>'
-        '<b>&ldquo;Withheld by USDA&rdquo; is not the same thing</b>, and the difference is the '
-        'whole market. A withheld region traded; USDA is publishing the report with the price '
-        'and the head count left blank because too few buyers reported to disclose them under '
-        'LMR confidentiality. An undefined region is one USDA is telling you was quiet. The '
-        'report itself cannot say which &mdash; the field is empty either way and USDA never '
-        'prints a literal zero &mdash; so this page reads the length of the blank run. A '
-        'few quiet days in a row is an ordinary stretch; a run reaching '
-        f'{SUPPRESSION_RUN_DAYS} trading days is a region that has gone dark. '
-        '<b>TX/OK/NM has published no daily price since 26 Jun 2026 and Kansas '
-        'none since 14 Aug 2026.</b> That cattle is still counted in the national confirmed '
-        'negotiated figure on the Weekly tab, which is why the two have diverged.<br><br>'
-        'Negotiated cash only, Steer and Heifer combined head-count-weighted, &ldquo;Total all '
-        'grades&rdquo;. Sources: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), '
-        '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota) — prices from each report&rsquo;s Detail section, week-to-date head from its Summary. Cached until USDA republishes, checked every 5 minutes.'
-        '</div>',
-        unsafe_allow_html=True)
+            # ── Detail ───────────────────────────────────────────────────────────
+            with st.expander("\U0001f4cb  Daily detail — every print in the window, both cuts"):
+                if dcombo.empty:
+                    st.info("USDA published in this window but nothing priced.")
+                else:
+                    det = dcombo.copy()
+                    det["Trading Day"] = det["trade_date"].dt.strftime("%Y-%m-%d")
+                    det["Cut"] = det["cut"].map(DAILY_CUT_LABEL)
+                    det = det.rename(columns={"region": "Region", "basis": "Basis",
+                                              "head": "Head", "weight": "Avg Weight",
+                                              "price": "Wtd Avg Price"})
+                    det = det[["Trading Day", "Region", "Basis", "Cut",
+                               "Head", "Avg Weight", "Wtd Avg Price"]]
+                    st.dataframe(
+                        det.sort_values(["Trading Day", "Region"], ascending=[False, True]),
+                        width="stretch", hide_index=True)
+
+        st.markdown(
+            '<div class="note" style="margin-top:10px;">'
+            '<b>Two files a day, one trading day apart.</b> USDA publishes each region twice: an '
+            'afternoon file (~2:55 pm CT) carrying that day\'s trade as of the 1:30 pm cut, and a '
+            'morning file (median 11:17 CT) that finalises the <i>previous</i> business day. The morning '
+            'file is dated the day it is published, so this page shifts it back one business day &mdash; '
+            '&ldquo;Final&rdquo; and &ldquo;1:30 pm cut&rdquo; above are the same trading day, not the '
+            'same file.<br><br>'
+            '<b>Colorado is not shown.</b> USDA discontinued the Colorado daily reports &mdash; the '
+            'afternoon file (LM_CT133) last published 27 Jun 2023 and the summary (LM_CT134) 5 Jul 2024, '
+            'and the API has returned nothing for either since. Colorado is still inside the 5-Area '
+            'weekly average on the Weekly tab.<br><br>'
+            '<b>Week to date</b> is USDA&rsquo;s own cumulative negotiated cash head from Monday, read from each report&rsquo;s Summary section. It counts every class and all four selling bases, so it is a wider count than the Steer/Heifer Live-FOB-and-Dressed averages above and will not tie to them. The 5-Area figure is the four regions summed, which reproduces USDA&rsquo;s own 5-Area week-to-date exactly.<br><br>'
+            '<b>&ldquo;Undefined&rdquo;</b> is USDA\'s own state when a region has too little confirmed '
+            'trade to publish a market test &mdash; a real answer, not a failed fetch. Regions are '
+            'routinely undefined early in the week.<br><br>'
+            '<b>&ldquo;Withheld by USDA&rdquo; is not the same thing</b>, and the difference is the '
+            'whole market. A withheld region traded; USDA is publishing the report with the price '
+            'and the head count left blank because too few buyers reported to disclose them under '
+            'LMR confidentiality. An undefined region is one USDA is telling you was quiet. The '
+            'report itself cannot say which &mdash; the field is empty either way and USDA never '
+            'prints a literal zero &mdash; so this page reads the length of the blank run. A '
+            'few quiet days in a row is an ordinary stretch; a run reaching '
+            f'{SUPPRESSION_RUN_DAYS} trading days is a region that has gone dark. '
+            '<b>TX/OK/NM has published no daily price since 26 Jun 2026 and Kansas '
+            'none since 14 Aug 2026.</b> That cattle is still counted in the national confirmed '
+            'negotiated figure on the Weekly tab, which is why the two have diverged.<br><br>'
+            'Negotiated cash only, Steer and Heifer combined head-count-weighted, &ldquo;Total all '
+            'grades&rdquo;. Sources: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), '
+            '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota) — prices from each report&rsquo;s Detail section, week-to-date head from its Summary. Cached until USDA republishes, checked every 5 minutes.'
+            '</div>',
+            unsafe_allow_html=True)
 
 
 # ── Monday Print Forecast ────────────────────────────────────────────────────
@@ -2458,511 +2499,512 @@ with tab_daily:
 # one request set is the daily /Summary year below, which is cheap for the
 # reason FORECAST_CAL_DAYS documents.
 with tab_fcst:
-    st.markdown(
-        '<div class="sec-header">Monday Print Forecast &mdash; negotiated cash volume</div>',
-        unsafe_allow_html=True)
-
-    with st.spinner("Loading USDA daily history for the forecast…"):
-        try:
-            _f_slugs = [sl for cuts in DAILY_REGIONS.values() for sl in cuts.values()]
-            _f_stamps = stamps_for(_probe, _f_slugs)
-            _f_end = datetime.now().date()
-            _f_start = _f_end - timedelta(days=FORECAST_CAL_DAYS)
-            fcst_vol = fetch_daily_volume(_f_start.strftime("%m/%d/%Y"),
-                                          _f_end.strftime("%m/%d/%Y"), _f_stamps)
-            fcst_err = ""
-        except Exception as e:
-            fcst_vol, fcst_err = pd.DataFrame(), str(e)
-
-    head5 = weekly_5area_head(price_df)
-    headn = weekly_national_head(vol_df)
-    f5 = forecast_5area(fcst_vol, head5) if not fcst_vol.empty else {}
-    fn = forecast_national(f5, head5, headn) if f5 else {}
-
-    if fcst_err:
-        st.warning("⏳ **USDA daily data unavailable** — the forecast needs the daily "
-                   "regional reports. Use **Refresh now** in the sidebar to retry.")
-        with st.expander("Technical details"):
-            st.code(fcst_err)
-    elif not f5 or not fn:
-        st.info("Not enough published history yet to build a forecast.")
-    else:
-        _cp = f5["checkpoint"]
-        _dow = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][int(_cp["weekday"])]
-        _cut = DAILY_CUT_LABEL[_cp["cut"]]
-        _wk = pd.Timestamp(f5["week"])
-        _print_day = (_wk + pd.Timedelta(days=7)).strftime("%A, %b %d")
-
-        _last_wk_hdr = _wk - pd.Timedelta(days=7)
-        _settled_hdr = (_wk in head5.index) and (_wk in headn.index)
-        _wow5 = _wown = ""
-        if _settled_hdr:
-            _p5h, _pnh = head5.get(_last_wk_hdr), headn.get(_last_wk_hdr)
-            _wow5 = (f'<b>{head5[_wk] - _p5h:+,.0f} hd</b> on the 5-Area '
-                     if _p5h is not None and pd.notna(_p5h) else "")
-            _wown = (f'<b>{headn[_wk] - _pnh:+,.0f} hd</b> nationally '
-                     if _pnh is not None and pd.notna(_pnh) else "")
+    if tab_fcst.open:
         st.markdown(
-            f'<div class="note" style="margin:-4px 0 12px;">Trading week of '
-            f'<b>{_wk.strftime("%b %d")}&ndash;{(_wk + pd.Timedelta(days=4)).strftime("%b %d, %Y")}</b>. '
-            + (f'Both weekly reports are in. Against the '
-               f'{_last_wk_hdr.strftime("%b %d")} week they are '
-               f'{(_wow5 + "and " + _wown).strip()}.'
-               if _settled_hdr else
-               f'USDA last published the <b>{_dow} {_cut}</b> figure; the weekly reports '
-               f'print <b>{_print_day}</b>.')
-            + '</div>', unsafe_allow_html=True)
-
-        # The board is built here rather than down beside the table because the
-        # tiles need its newest row: once USDA prints, they stop forecasting
-        # and start reporting. Same object feeds both, so they cannot disagree.
-        board = scorecard.build_scorecard(
-            fcst_vol, head5, headn, forecast_5area, forecast_national,
-            CUT_ORDER, weeks=10)
-
-        # ── headline numbers ────────────────────────────────────────────────
-        # TWO STATES, AND THE SECOND ONE EXISTS BECAUSE THE FIRST LIED.
-        #
-        # Until USDA prints, these are a forecast and its inputs. AFTER it
-        # prints they must become a scoreboard, because forecast_5area reports
-        # done=True once Friday's final lands and returns the week-to-date
-        # unchanged -- so a "forecast print" tile in that state shows the
-        # ACTUAL, twice, and the call we actually made is gone from the page.
-        # On 2026-10-05 that read "5-Area week to date 60,063 / 5-Area forecast
-        # print 60,063" while the scorecard table six inches below reported we
-        # had called 61,167. Both were true; together they were a bug. Same
-        # class as the letter-vs-dashboard FCI disagreement in CLAUDE.md, and
-        # it is caught the same way -- by putting one number in front of
-        # another and seeing them differ.
-        _scored = None
-        if not board.empty and pd.Timestamp(board.iloc[0]["week"]) == _wk \
-                and not board.iloc[0].get("pending", False):
-            _scored = board.iloc[0]
-
-        c1, c2, c3, c4 = st.columns(4)
-        _last_wk = _wk - pd.Timedelta(days=7)
-        _prev5 = head5.get(_last_wk)
-        _prevn = headn.get(_last_wk)
-
-        if _scored is not None:
-            # The call is the REPLAYED one from the last checkpoint that still
-            # had something to predict, which is what the scorecard scores and
-            # what we actually said. Verified 2026-10-05: replaying the 9/28
-            # week three days later reproduced 61,167 and 81,723 to the head.
-            _s_dow = ["Monday", "Tuesday", "Wednesday", "Thursday",
-                      "Friday"][int(_scored["cp_weekday"])] \
-                if "cp_weekday" in _scored else _dow
-            with c1:
-                st.markdown(tile("5-Area &mdash; we called",
-                                 fmt_hd(_scored["f5"]),
-                                 f'<div class="tile-delta-neu">before the print</div>',
-                                 "tile-d14"), unsafe_allow_html=True)
-            with c2:
-                st.markdown(tile("5-Area &mdash; USDA printed",
-                                 fmt_hd(_scored["a5"]),
-                                 hd_delta_html(_scored["a5"], _scored["f5"]),
-                                 "tile-conf"), unsafe_allow_html=True)
-            with c3:
-                st.markdown(tile("National &mdash; we called",
-                                 fmt_hd(_scored["fn"]),
-                                 f'<div class="tile-delta-neu">before the print</div>',
-                                 "tile-del"), unsafe_allow_html=True)
-            with c4:
-                st.markdown(tile("National &mdash; USDA printed",
-                                 fmt_hd(_scored["an"]),
-                                 hd_delta_html(_scored["an"], _scored["fn"]),
-                                 "tile-neu"), unsafe_allow_html=True)
-        else:
-            with c1:
-                st.markdown(tile("5-Area &mdash; week to date",
-                                 fmt_hd(f5["wtd"]),
-                                 f'<div class="tile-delta-neu">{_dow} {_cut}, published</div>',
-                                 "tile-conf"), unsafe_allow_html=True)
-            # TOO GREEN: WHAT RECENT WEEKS DID, NOT WHAT THIS ONE WILL DO.
-            # See forecast_5area's `too_green` for the measurement. The range
-            # is labelled as history because that is what it is -- the page
-            # is not allowed to imply it is a call on this week.
-            with c2:
-                if f5["no_call"]:
-                    st.markdown(tile("5-Area &mdash; recent weeks",
-                                     f'{f5["recent_lo"]:,.0f}&ndash;'
-                                     f'{f5["recent_hi"]:,.0f}',
-                                     f'<div class="tile-delta-neu">hd, last 13 weeks '
-                                     f'&middot; median {f5["typical"]:,.0f}</div>',
-                                     "tile-neu"), unsafe_allow_html=True)
-                else:
-                    st.markdown(tile("5-Area &mdash; forecast print",
-                                     fmt_hd(f5["central"]),
-                                     hd_delta_html(f5["central"], _prev5),
-                                     "tile-d14"), unsafe_allow_html=True)
-            with c3:
-                if f5["no_call"]:
-                    st.markdown(tile("National &mdash; recent weeks",
-                                     f'{fn["recent_lo"]:,.0f}&ndash;'
-                                     f'{fn["recent_hi"]:,.0f}',
-                                     f'<div class="tile-delta-neu">hd, last 13 weeks '
-                                     f'&middot; median {fn["recent_mid"]:,.0f}</div>',
-                                     "tile-neu"), unsafe_allow_html=True)
-                else:
-                    st.markdown(tile("National &mdash; forecast print",
-                                     fmt_hd(fn["central"]),
-                                     hd_delta_html(fn["central"], _prevn),
-                                     "tile-del"), unsafe_allow_html=True)
-            with c4:
-                st.markdown(tile("National &mdash; last week printed",
-                                 fmt_hd(_prevn),
-                                 f'<div class="tile-delta-neu">'
-                                 f'{_last_wk.strftime("%b %d")} week, actual</div>',
-                                 "tile-neu"), unsafe_allow_html=True)
-
-        _GRADE = {
-            "final": (POS, "The week is closed", "Friday&rsquo;s final file has landed, so the "
-                      "5-Area figure below is not an estimate &mdash; it is the number."),
-            "firm": (POS, "Firm", "The week has traded about as much as a normal week already, "
-                     "which is the state this method is most reliable in: backtested over 52 "
-                     "weeks, the busiest quarter of them land within a median 3% and the band "
-                     "holds the answer 92% of the time."),
-            "provisional": (D30_COLOR, "Provisional", "Roughly half to four-fifths of a normal "
-                            "week is in. Comparable weeks land within a median 7&ndash;11%."),
-            # NO FORECAST IS PRINTED IN THIS STATE, so this text says why
-            # rather than hedging a number. It used to end "treat the number
-            # as a floor, not a forecast" -- measured over 338 sub-0.50
-            # checkpoints the actual lands at or above the central on 50% of
-            # them, so it was never a floor.
-            "weak": (NEG, "Too early to forecast", "Only a small fraction of a normal week "
-                     "is on the board and most of the trade is still to come. At this point "
-                     "an estimate is no closer than simply quoting recent weeks, and lands "
-                     "above the eventual print as often as below it &mdash; so the tiles show "
-                     "what recent weeks actually did instead of a call on this one."),
-            "thin": (NEG, "Not enough history to forecast from", "This weekday and cut has "
-                     "too few past weeks behind it to estimate the rest of the week. "
-                     "Backtested, calls built on three analogue weeks or fewer ran a median "
-                     "81% high and never once landed at or below the eventual print, so no "
-                     "call is shown &mdash; the tiles give what recent weeks did instead."),
-            "unknown": (MUTED, "Unrated", "Not enough published weekly history to judge how far "
-                        "through the week this is."),
-        }
-        _gc, _gl, _gt = _GRADE[f5["grade"]]
-        _mat = f5.get("maturity")
-        _mat_s = (f"{_mat:.0%} of a typical recent week ({fmt_hd(f5['typical'])})"
-                  if _mat == _mat else "&mdash;")
-        st.markdown(
-            f'<div style="border-left:3px solid {_gc};background:#fafbfc;padding:8px 12px;'
-            f'margin:4px 0 14px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
-            f'<b style="color:{_gc};">Confidence: {_gl}.</b> {_gt}<br>'
-            f'<span style="color:{MUTED};">Week to date is {_mat_s}.</span></div>',
+            '<div class="sec-header">Monday Print Forecast &mdash; negotiated cash volume</div>',
             unsafe_allow_html=True)
 
-        # ── step 1 ──────────────────────────────────────────────────────────
-        st.markdown(
-            f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
-            f'Step 1 &mdash; finishing the 5-Area week (LM_CT150)</div>',
-            unsafe_allow_html=True)
-        _front_s = f"{f5['front']:.0%}" if f5.get("front") is not None else "&mdash;"
-        if _scored is not None:
-            _m5 = _scored["a5"] - _scored["f5"]
-            _in5 = bool(_scored["in5"])
-            st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'From <b>{_scored["wtd"]:,.0f} hd</b> on the board we called '
-                f'<b>{_scored["f5"]:,.0f} hd</b>. USDA printed '
-                f'<b>{_scored["a5"]:,.0f} hd</b> &mdash; '
-                f'<b style="color:{POS if _in5 else NEG};">{abs(_m5):,.0f} hd '
-                f'{"below" if _m5 < 0 else "above"} the call '
-                f'({abs(_m5) / _scored["a5"]:.1%})</b>, '
-                f'{"inside" if _in5 else "<b>outside</b>"} the '
-                f'{_scored["f5_lo"]:,.0f}&ndash;{_scored["f5_hi"]:,.0f} hd range we gave.'
-                f'</div>', unsafe_allow_html=True)
-        elif f5["no_call"]:
-            # TWO REASONS, ONE OUTCOME. Too green is about this week; a thin
-            # pool is about the history behind this checkpoint. Printing the
-            # maturity sentence for a thin pool would name the wrong cause.
-            _why = (f'<b>{f5["maturity"]:.0%}</b> of a typical recent week, too little to '
-                    f'estimate the rest from'
-                    if f5["too_green"] else
-                    f'but only <b>{f5["n_hist"]}</b> past weeks stand at this same point '
-                    f'in the week, too few to estimate the rest from')
-            st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()} '
-                f'&mdash; {_why}. The last 13 weeks printed '
-                f'<b>{f5["recent_lo"]:,.0f}&ndash;{f5["recent_hi"]:,.0f} hd</b>, median '
-                f'<b>{f5["typical"]:,.0f} hd</b>.</div>',
-                unsafe_allow_html=True)
+        with st.spinner("Loading USDA daily history for the forecast…"):
+            try:
+                _f_slugs = [sl for cuts in DAILY_REGIONS.values() for sl in cuts.values()]
+                _f_stamps = stamps_for(_probe, _f_slugs)
+                _f_end = datetime.now().date()
+                _f_start = _f_end - timedelta(days=FORECAST_CAL_DAYS)
+                fcst_vol = fetch_daily_volume(_f_start.strftime("%m/%d/%Y"),
+                                              _f_end.strftime("%m/%d/%Y"), _f_stamps)
+                fcst_err = ""
+            except Exception as e:
+                fcst_vol, fcst_err = pd.DataFrame(), str(e)
+
+        head5 = weekly_5area_head(price_df)
+        headn = weekly_national_head(vol_df)
+        f5 = forecast_5area(fcst_vol, head5) if not fcst_vol.empty else {}
+        fn = forecast_national(f5, head5, headn) if f5 else {}
+
+        if fcst_err:
+            st.warning("⏳ **USDA daily data unavailable** — the forecast needs the daily "
+                       "regional reports. Use **Refresh now** in the sidebar to retry.")
+            with st.expander("Technical details"):
+                st.code(fcst_err)
+        elif not f5 or not fn:
+            st.info("Not enough published history yet to build a forecast.")
         else:
-            st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()}, '
-                f'plus an estimated <b>{f5["late_median"]:,.0f} hd</b> still to be reported '
-                f'&rarr; <b>{f5["central"]:,.0f} hd</b>, with a likely range of '
-                f'<b>{f5["low"]:,.0f}&ndash;{f5["high"]:,.0f} hd</b>.</div>',
-                unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="note" style="margin-bottom:14px;">The week-to-date is USDA&rsquo;s '
-            f'own cumulative count, and the four daily regions summed at Friday&rsquo;s final '
-            f'reproduce USDA&rsquo;s published 5-Area weekly figure <b>exactly</b> &mdash; checked '
-            f'on every week the daily window covers. '
-            + ('So the call above was the week-to-date plus the late trade seen in '
-               'comparable past weeks at the same point.'
-               if _scored is not None else
-               'So the only unknown is the trade still to come &mdash; which this early is '
-               'most of the week, and is why no estimate of it is shown.'
-               if f5["no_call"] else
-               f'So the only unknown is trade reported after the last cut, estimated from '
-               f'the <b>{f5["n"]}</b> past weeks standing at the same point'
-               + (f' with similar front-loading (the previous cut held {_front_s} of the '
-                  f'current one)' if f5.get("narrowed") else ' in the week')
-               + '.')
-            + '</div>', unsafe_allow_html=True)
+            _cp = f5["checkpoint"]
+            _dow = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][int(_cp["weekday"])]
+            _cut = DAILY_CUT_LABEL[_cp["cut"]]
+            _wk = pd.Timestamp(f5["week"])
+            _print_day = (_wk + pd.Timedelta(days=7)).strftime("%A, %b %d")
 
-        # ── step 2 ──────────────────────────────────────────────────────────
-        st.markdown(
-            f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
-            f'Step 2 &mdash; 5-Area across to national (LM_CT154)</div>',
-            unsafe_allow_html=True)
-        if _scored is not None:
-            # THE REALISED GAP IS THE WHOLE STORY OF STEP 2 and is worth
-            # printing rather than leaving the reader to subtract. It is the
-            # only part of the chain with no running total to watch, so when
-            # the national call misses this is always why.
-            _gap_used = _scored["fn"] - _scored["f5"]
-            _gap_real = _scored["an"] - _scored["a5"]
-            _mn = _scored["an"] - _scored["fn"]
-            _inn = bool(_scored["inn"])
+            _last_wk_hdr = _wk - pd.Timedelta(days=7)
+            _settled_hdr = (_wk in head5.index) and (_wk in headn.index)
+            _wow5 = _wown = ""
+            if _settled_hdr:
+                _p5h, _pnh = head5.get(_last_wk_hdr), headn.get(_last_wk_hdr)
+                _wow5 = (f'<b>{head5[_wk] - _p5h:+,.0f} hd</b> on the 5-Area '
+                         if _p5h is not None and pd.notna(_p5h) else "")
+                _wown = (f'<b>{headn[_wk] - _pnh:+,.0f} hd</b> nationally '
+                         if _pnh is not None and pd.notna(_pnh) else "")
             st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'We added a gap of <b>{_gap_used:,.0f} hd</b> to get '
-                f'<b>{_scored["fn"]:,.0f} hd</b>. USDA printed '
-                f'<b>{_scored["an"]:,.0f} hd</b> &mdash; '
-                f'<b style="color:{POS if _inn else NEG};">{abs(_mn):,.0f} hd '
-                f'{"below" if _mn < 0 else "above"} the call '
-                f'({abs(_mn) / _scored["an"]:.1%})</b>, '
-                f'{"inside" if _inn else "<b>outside</b>"} the range we gave. '
-                f'The gap actually came in at <b>{_gap_real:,.0f} hd</b>.</div>',
-                unsafe_allow_html=True)
-        elif f5["no_call"]:
-            # Nothing to carry across: this step starts from the 5-Area call,
-            # and there isn't one. The gap is still worth printing because it
-            # is what separates the two figures whenever they are quoted.
-            st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'No 5-Area call to carry across yet. The recent gap between the two is '
-                f'<b>{fn["gap"]:,.0f} hd</b>, and the last 13 national weeks printed '
-                f'<b>{fn["recent_lo"]:,.0f}&ndash;{fn["recent_hi"]:,.0f} hd</b>, median '
-                f'<b>{fn["recent_mid"]:,.0f} hd</b>.</div>',
-                unsafe_allow_html=True)
-        else:
-            st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'<b>{f5["central"]:,.0f} hd</b> plus the recent 5-Area-to-national gap of '
-                f'<b>{fn["gap"]:,.0f} hd</b> &rarr; <b>{fn["central"]:,.0f} hd</b>, '
-                f'range <b>{fn["low"]:,.0f}&ndash;{fn["high"]:,.0f} hd</b>.</div>',
-                unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="note" style="margin-bottom:14px;">The gap is negotiated trade outside '
-            f'the five areas, plus any region USDA is currently withholding. It is taken as a '
-            f'median over the last <b>{fn["n"]}</b> weeks and added, not scaled &mdash; neither '
-            f'part of it grows with the 5-Area total, so a ratio drifts whenever the 5-Area '
-            f'number is unusually high or low. Over the last {FORECAST_BAND_WEEKS} weeks the gap '
-            f'ran {fn["gap_lo"]:,.0f}&ndash;{fn["gap_hi"]:,.0f} hd, which is what sets the range '
-            f'above.</div>', unsafe_allow_html=True)
+                f'<div class="note" style="margin:-4px 0 12px;">Trading week of '
+                f'<b>{_wk.strftime("%b %d")}&ndash;{(_wk + pd.Timedelta(days=4)).strftime("%b %d, %Y")}</b>. '
+                + (f'Both weekly reports are in. Against the '
+                   f'{_last_wk_hdr.strftime("%b %d")} week they are '
+                   f'{(_wow5 + "and " + _wown).strip()}.'
+                   if _settled_hdr else
+                   f'USDA last published the <b>{_dow} {_cut}</b> figure; the weekly reports '
+                   f'print <b>{_print_day}</b>.')
+                + '</div>', unsafe_allow_html=True)
 
-        # ── the two series, with the forecast on the end ────────────────────
-        pair = fn["pair"].tail(52)
-        if not pair.empty:
-            st.markdown('<div class="sec-header">5-Area and national weekly negotiated volume</div>',
-                        unsafe_allow_html=True)
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=pair.index, y=pair["nat"], name="National (LM_CT154)",
-                mode="lines", line=dict(color=DEL_COLOR, width=2),
-                hovertemplate="%{x|%b %d, %Y}<br>National %{y:,.0f} hd<extra></extra>"))
-            fig.add_trace(go.Scatter(
-                x=pair.index, y=pair["h5"], name="5-Area (LM_CT150)",
-                mode="lines", line=dict(color=CONF_COLOR, width=2),
-                hovertemplate="%{x|%b %d, %Y}<br>5-Area %{y:,.0f} hd<extra></extra>"))
-            # The forecast as its own marked points, never joined to the line --
-            # a dotted continuation reads as data at a glance.
-            fig.add_trace(go.Scatter(
-                x=[_wk], y=[fn["central"]], name="National forecast",
-                mode="markers", marker=dict(color=DEL_COLOR, size=11, symbol="diamond",
-                                            line=dict(color="#ffffff", width=1.5)),
-                error_y=dict(type="data", symmetric=False,
-                             array=[fn["high"] - fn["central"]],
-                             arrayminus=[fn["central"] - fn["low"]],
-                             color=DEL_COLOR, thickness=1.5, width=6),
-                hovertemplate="%{x|%b %d, %Y}<br>National forecast %{y:,.0f} hd<extra></extra>"))
-            fig.add_trace(go.Scatter(
-                x=[_wk], y=[f5["central"]], name="5-Area forecast",
-                mode="markers", marker=dict(color=CONF_COLOR, size=11, symbol="diamond",
-                                            line=dict(color="#ffffff", width=1.5)),
-                error_y=dict(type="data", symmetric=False,
-                             array=[f5["high"] - f5["central"]],
-                             arrayminus=[f5["central"] - f5["low"]],
-                             color=CONF_COLOR, thickness=1.5, width=6),
-                hovertemplate="%{x|%b %d, %Y}<br>5-Area forecast %{y:,.0f} hd<extra></extra>"))
-            fig.update_layout(
-                height=330, margin=dict(l=10, r=10, t=10, b=10),
-                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-                font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
-                hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                xaxis=dict(showgrid=False, linecolor=BORDER),
-                yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
-                           zeroline=False, tickformat=","))
-            st.plotly_chart(fig, use_container_width=True,
-                            config={"displayModeBar": False})
+            # The board is built here rather than down beside the table because the
+            # tiles need its newest row: once USDA prints, they stop forecasting
+            # and start reporting. Same object feeds both, so they cannot disagree.
+            board = scorecard.build_scorecard(
+                fcst_vol, head5, headn, forecast_5area, forecast_national,
+                CUT_ORDER, weeks=10)
 
-            recent = pair.tail(10).copy()
-            recent.index = [d.strftime("%b %d") for d in recent.index]
-            recent = recent.rename(columns={"h5": "5-Area", "nat": "National", "gap": "Gap"})
-            st.dataframe(
-                recent[["5-Area", "National", "Gap"]].iloc[::-1]
-                      .style.format("{:,.0f}"),
-                use_container_width=True)
-
-        # ── how the last ten calls landed ───────────────────────────────────
-        # Scored at the SAME checkpoint the live forecast above is standing at,
-        # not at a fixed Friday -- accuracy depends far more on how far into the
-        # week you are than on anything else, so a fixed-Friday scorecard would
-        # flatter a Wednesday reading of this page roughly tenfold. See
-        # scorecard.py, which also records why replaying past calls is honest
-        # here when it is not for the sibling FCI scorecard.
-        stats = scorecard.summarise(board)
-        # Deliberately after summarise(). The accuracy line above the table
-        # describes CALLS THAT HAVE BEEN SETTLED; this week has not been, so it
-        # is appended for display only and never reaches the median or the band
-        # count. scorecard.summarise() also drops it defensively.
-        pending = scorecard.pending_row(
-            fcst_vol, head5, headn, forecast_5area, forecast_national)
-        if not board.empty and stats:
-            # NAME THE CHECKPOINT THESE WERE SCORED AT, because it is not
-            # always the live one. build_scorecard steps back when the live
-            # week is too green to forecast from (see its GREEN_MATURITY note),
-            # and "at this point in the week" then describes a checkpoint the
-            # rows were not scored at -- borrowing a Friday call's accuracy for
-            # a Monday one, which flatters rather than merely misleads.
+            # ── headline numbers ────────────────────────────────────────────────
+            # TWO STATES, AND THE SECOND ONE EXISTS BECAUSE THE FIRST LIED.
             #
-            # IT HAS TO BE BUILT BEFORE THE HEADER THAT PRINTS IT. Writing it
-            # underneath read fine and raised NameError on the live page --
-            # script order again, the rule this file keeps relearning.
-            _sc_cp = scorecard.checkpoint_of(board)
-            _live_cp = ((int(f5["checkpoint"]["weekday"]), int(f5["checkpoint"]["order"]))
-                        if f5 else None)
-            _sc_dow_lbl, _sc_cut_lbl = _dow, _cut
-            if _sc_cp is not None:
-                _sc_dow_lbl = ["Monday", "Tuesday", "Wednesday", "Thursday",
-                               "Friday"][_sc_cp[0]]
-                _sc_cut_lbl = DAILY_CUT_LABEL["morning" if _sc_cp[1] else "afternoon"]
-            if _sc_cp is None or _sc_cp == _live_cp:
-                _cp_label = "at this point in the week"
+            # Until USDA prints, these are a forecast and its inputs. AFTER it
+            # prints they must become a scoreboard, because forecast_5area reports
+            # done=True once Friday's final lands and returns the week-to-date
+            # unchanged -- so a "forecast print" tile in that state shows the
+            # ACTUAL, twice, and the call we actually made is gone from the page.
+            # On 2026-10-05 that read "5-Area week to date 60,063 / 5-Area forecast
+            # print 60,063" while the scorecard table six inches below reported we
+            # had called 61,167. Both were true; together they were a bug. Same
+            # class as the letter-vs-dashboard FCI disagreement in CLAUDE.md, and
+            # it is caught the same way -- by putting one number in front of
+            # another and seeing them differ.
+            _scored = None
+            if not board.empty and pd.Timestamp(board.iloc[0]["week"]) == _wk \
+                    and not board.iloc[0].get("pending", False):
+                _scored = board.iloc[0]
+
+            c1, c2, c3, c4 = st.columns(4)
+            _last_wk = _wk - pd.Timedelta(days=7)
+            _prev5 = head5.get(_last_wk)
+            _prevn = headn.get(_last_wk)
+
+            if _scored is not None:
+                # The call is the REPLAYED one from the last checkpoint that still
+                # had something to predict, which is what the scorecard scores and
+                # what we actually said. Verified 2026-10-05: replaying the 9/28
+                # week three days later reproduced 61,167 and 81,723 to the head.
+                _s_dow = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                          "Friday"][int(_scored["cp_weekday"])] \
+                    if "cp_weekday" in _scored else _dow
+                with c1:
+                    st.markdown(tile("5-Area &mdash; JSA Estimate",
+                                     fmt_hd(_scored["f5"]),
+                                     f'<div class="tile-delta-neu">before the print</div>',
+                                     "tile-d14"), unsafe_allow_html=True)
+                with c2:
+                    st.markdown(tile("5-Area &mdash; USDA printed",
+                                     fmt_hd(_scored["a5"]),
+                                     miss_delta_html(_scored["a5"], _scored["f5"]),
+                                     "tile-conf"), unsafe_allow_html=True)
+                with c3:
+                    st.markdown(tile("National &mdash; JSA Estimate",
+                                     fmt_hd(_scored["fn"]),
+                                     f'<div class="tile-delta-neu">before the print</div>',
+                                     "tile-del"), unsafe_allow_html=True)
+                with c4:
+                    st.markdown(tile("National &mdash; USDA printed",
+                                     fmt_hd(_scored["an"]),
+                                     miss_delta_html(_scored["an"], _scored["fn"]),
+                                     "tile-neu"), unsafe_allow_html=True)
             else:
-                # DAILY_CUT_LABEL already ends in "cut" for the afternoon
-                # file ("1:30 pm cut") and reads "Final" for the morning one,
-                # so neither wants the word appended.
-                _cp_label = (
-                    f'at the {_sc_dow_lbl} {_sc_cut_lbl.lower()} &mdash; this week '
-                    f'has barely traded, so there is nothing yet to score a call from')
+                with c1:
+                    st.markdown(tile("5-Area &mdash; week to date",
+                                     fmt_hd(f5["wtd"]),
+                                     f'<div class="tile-delta-neu">{_dow} {_cut}, published</div>',
+                                     "tile-conf"), unsafe_allow_html=True)
+                # TOO GREEN: WHAT RECENT WEEKS DID, NOT WHAT THIS ONE WILL DO.
+                # See forecast_5area's `too_green` for the measurement. The range
+                # is labelled as history because that is what it is -- the page
+                # is not allowed to imply it is a call on this week.
+                with c2:
+                    if f5["no_call"]:
+                        st.markdown(tile("5-Area &mdash; recent weeks",
+                                         f'{f5["recent_lo"]:,.0f}&ndash;'
+                                         f'{f5["recent_hi"]:,.0f}',
+                                         f'<div class="tile-delta-neu">hd, last 13 weeks '
+                                         f'&middot; median {f5["typical"]:,.0f}</div>',
+                                         "tile-neu"), unsafe_allow_html=True)
+                    else:
+                        st.markdown(tile("5-Area &mdash; forecast print",
+                                         fmt_hd(f5["central"]),
+                                         hd_delta_html(f5["central"], _prev5),
+                                         "tile-d14"), unsafe_allow_html=True)
+                with c3:
+                    if f5["no_call"]:
+                        st.markdown(tile("National &mdash; recent weeks",
+                                         f'{fn["recent_lo"]:,.0f}&ndash;'
+                                         f'{fn["recent_hi"]:,.0f}',
+                                         f'<div class="tile-delta-neu">hd, last 13 weeks '
+                                         f'&middot; median {fn["recent_mid"]:,.0f}</div>',
+                                         "tile-neu"), unsafe_allow_html=True)
+                    else:
+                        st.markdown(tile("National &mdash; forecast print",
+                                         fmt_hd(fn["central"]),
+                                         hd_delta_html(fn["central"], _prevn),
+                                         "tile-del"), unsafe_allow_html=True)
+                with c4:
+                    st.markdown(tile("National &mdash; last week printed",
+                                     fmt_hd(_prevn),
+                                     f'<div class="tile-delta-neu">'
+                                     f'{_last_wk.strftime("%b %d")} week, actual</div>',
+                                     "tile-neu"), unsafe_allow_html=True)
 
+            _GRADE = {
+                "final": (POS, "The week is closed", "Friday&rsquo;s final file has landed, so the "
+                          "5-Area figure below is not an estimate &mdash; it is the number."),
+                "firm": (POS, "Firm", "The week has traded about as much as a normal week already, "
+                         "which is the state this method is most reliable in: backtested over 52 "
+                         "weeks, the busiest quarter of them land within a median 3% and the band "
+                         "holds the answer 92% of the time."),
+                "provisional": (D30_COLOR, "Provisional", "Roughly half to four-fifths of a normal "
+                                "week is in. Comparable weeks land within a median 7&ndash;11%."),
+                # NO FORECAST IS PRINTED IN THIS STATE, so this text says why
+                # rather than hedging a number. It used to end "treat the number
+                # as a floor, not a forecast" -- measured over 338 sub-0.50
+                # checkpoints the actual lands at or above the central on 50% of
+                # them, so it was never a floor.
+                "weak": (NEG, "Too early to forecast", "Only a small fraction of a normal week "
+                         "is on the board and most of the trade is still to come. At this point "
+                         "an estimate is no closer than simply quoting recent weeks, and lands "
+                         "above the eventual print as often as below it &mdash; so the tiles show "
+                         "what recent weeks actually did instead of a call on this one."),
+                "thin": (NEG, "Not enough history to forecast from", "This weekday and cut has "
+                         "too few past weeks behind it to estimate the rest of the week. "
+                         "Backtested, calls built on three analogue weeks or fewer ran a median "
+                         "81% high and never once landed at or below the eventual print, so no "
+                         "call is shown &mdash; the tiles give what recent weeks did instead."),
+                "unknown": (MUTED, "Unrated", "Not enough published weekly history to judge how far "
+                            "through the week this is."),
+            }
+            _gc, _gl, _gt = _GRADE[f5["grade"]]
+            _mat = f5.get("maturity")
+            _mat_s = (f"{_mat:.0%} of a typical recent week ({fmt_hd(f5['typical'])})"
+                      if _mat == _mat else "&mdash;")
             st.markdown(
-                f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
-                f'Forecast accuracy &mdash; the last {stats["n"]} calls '
-                f'{_cp_label}</div>', unsafe_allow_html=True)
-
-            _f, _n = stats["five"], stats["nat"]
-            st.markdown(
-                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 8px;">'
-                f'<b>5-Area</b> missed by a median <b>{_f["median_abs_head"]:,.0f} hd '
-                f'({_f["median_abs_pct"]:.1%})</b>, inside the stated range '
-                f'<b>{_f["in_band"] * stats["n"]:.0f} of {stats["n"]}</b> times. '
-                f'<b>National</b> missed by a median <b>{_n["median_abs_head"]:,.0f} hd '
-                f'({_n["median_abs_pct"]:.1%})</b>, inside <b>'
-                f'{_n["in_band"] * stats["n"]:.0f} of {stats["n"]}</b>.</div>',
+                f'<div style="border-left:3px solid {_gc};background:#fafbfc;padding:8px 12px;'
+                f'margin:4px 0 14px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
+                f'<b style="color:{_gc};">Confidence: {_gl}.</b> {_gt}<br>'
+                f'<span style="color:{MUTED};">Week to date is {_mat_s}.</span></div>',
                 unsafe_allow_html=True)
 
-            # The live week rides on top, newest first like the rest.
-            _b = (board.copy() if pending.empty
-                  else pd.concat([pending, board], ignore_index=True))
-            _live = _b["pending"].fillna(False).astype(bool)
-
-            # Every actual and every miss on the pending row is NaN. Formatted
-            # with the scored rows' f-strings those print "nan", which reads as
-            # a broken number rather than an unanswered one.
-            def _hd(v):
-                return "\u2014" if pd.isna(v) else f"{v:,.0f}"
-
-            def _ms(m, q):
-                return ("\u2014" if pd.isna(m) or pd.isna(q)
-                        else f"{m:+,.0f} ({q:+.1%})")
-
-            _b["Week of"] = [d.strftime("%b %d") + (" \u00b7 live" if lv else "")
-                             for d, lv in zip(_b["week"], _live)]
-            _b["Week to date"] = _b["wtd"].map(_hd)
-            _b["Confidence"] = _b["grade"].fillna("").str.title()
-            _b["5-Area est."] = _b["f5"].map(_hd)
-            _b["5-Area actual"] = _b["a5"].map(_hd)
-            _b["5-Area miss"] = [_ms(m, q) for m, q in zip(_b["miss5"], _b["pct5"])]
-            _b["National est."] = _b["fn"].map(_hd)
-            _b["National actual"] = _b["an"].map(_hd)
-            _b["National miss"] = [_ms(m, q) for m, q in zip(_b["missn"], _b["pctn"])]
-            st.dataframe(
-                _b[["Week of", "Week to date", "Confidence", "5-Area est.",
-                    "5-Area actual", "5-Area miss", "National est.",
-                    "National actual", "National miss"]],
-                use_container_width=True, hide_index=True)
-
-            if not pending.empty:
-                _pw = pending["week"].iloc[0]
-                _prints = (_pw + pd.Timedelta(days=7)).strftime("%a %b %d")
+            # ── step 1 ──────────────────────────────────────────────────────────
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
+                f'Step 1 &mdash; finishing the 5-Area week (LM_CT150)</div>',
+                unsafe_allow_html=True)
+            _front_s = f"{f5['front']:.0%}" if f5.get("front") is not None else "&mdash;"
+            if _scored is not None:
+                _m5 = _scored["a5"] - _scored["f5"]
+                _in5 = bool(_scored["in5"])
                 st.markdown(
-                    f'<div class="note" style="margin-top:6px;">'
-                    f'<b>The top row is this week, still open.</b> '
-                    + ('It carries no estimate because the week is too green for '
-                       'one &mdash; the same reason the tiles above show recent weeks '
-                       'instead of a call. '
-                       if f5.get("no_call") else
-                       'It is the same call as the tiles above &mdash; estimates and '
-                       'confidence only. ')
-                    + f'There is no actual to score against until USDA prints the week '
-                    f'of {_pw.strftime("%b %d")} on <b>{_prints}</b>. '
-                    f'It is <b>not</b> in the accuracy figures above, which cover the '
-                    f'{stats["n"]} settled calls; when the print lands this row is '
-                    f'scored like any other and the averages take it in.</div>',
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'From <b>{_scored["wtd"]:,.0f} hd</b> on the board we called '
+                    f'<b>{_scored["f5"]:,.0f} hd</b>. USDA printed '
+                    f'<b>{_scored["a5"]:,.0f} hd</b> &mdash; '
+                    f'<b style="color:{POS if _in5 else NEG};">{abs(_m5):,.0f} hd '
+                    f'{"below" if _m5 < 0 else "above"} the call '
+                    f'({abs(_m5) / _scored["a5"]:.1%})</b>, '
+                    f'{"inside" if _in5 else "<b>outside</b>"} the '
+                    f'{_scored["f5_lo"]:,.0f}&ndash;{_scored["f5_hi"]:,.0f} hd range we gave.'
+                    f'</div>', unsafe_allow_html=True)
+            elif f5["no_call"]:
+                # TWO REASONS, ONE OUTCOME. Too green is about this week; a thin
+                # pool is about the history behind this checkpoint. Printing the
+                # maturity sentence for a thin pool would name the wrong cause.
+                _why = (f'<b>{f5["maturity"]:.0%}</b> of a typical recent week, too little to '
+                        f'estimate the rest from'
+                        if f5["too_green"] else
+                        f'but only <b>{f5["n_hist"]}</b> past weeks stand at this same point '
+                        f'in the week, too few to estimate the rest from')
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()} '
+                    f'&mdash; {_why}. The last 13 weeks printed '
+                    f'<b>{f5["recent_lo"]:,.0f}&ndash;{f5["recent_hi"]:,.0f} hd</b>, median '
+                    f'<b>{f5["typical"]:,.0f} hd</b>.</div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()}, '
+                    f'plus an estimated <b>{f5["late_median"]:,.0f} hd</b> still to be reported '
+                    f'&rarr; <b>{f5["central"]:,.0f} hd</b>, with a likely range of '
+                    f'<b>{f5["low"]:,.0f}&ndash;{f5["high"]:,.0f} hd</b>.</div>',
+                    unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="note" style="margin-bottom:14px;">The week-to-date is USDA&rsquo;s '
+                f'own cumulative count, and the four daily regions summed at Friday&rsquo;s final '
+                f'reproduce USDA&rsquo;s published 5-Area weekly figure <b>exactly</b> &mdash; checked '
+                f'on every week the daily window covers. '
+                + ('So the call above was the week-to-date plus the late trade seen in '
+                   'comparable past weeks at the same point.'
+                   if _scored is not None else
+                   'So the only unknown is the trade still to come &mdash; which this early is '
+                   'most of the week, and is why no estimate of it is shown.'
+                   if f5["no_call"] else
+                   f'So the only unknown is trade reported after the last cut, estimated from '
+                   f'the <b>{f5["n"]}</b> past weeks standing at the same point'
+                   + (f' with similar front-loading (the previous cut held {_front_s} of the '
+                      f'current one)' if f5.get("narrowed") else ' in the week')
+                   + '.')
+                + '</div>', unsafe_allow_html=True)
+
+            # ── step 2 ──────────────────────────────────────────────────────────
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
+                f'Step 2 &mdash; 5-Area across to national (LM_CT154)</div>',
+                unsafe_allow_html=True)
+            if _scored is not None:
+                # THE REALISED GAP IS THE WHOLE STORY OF STEP 2 and is worth
+                # printing rather than leaving the reader to subtract. It is the
+                # only part of the chain with no running total to watch, so when
+                # the national call misses this is always why.
+                _gap_used = _scored["fn"] - _scored["f5"]
+                _gap_real = _scored["an"] - _scored["a5"]
+                _mn = _scored["an"] - _scored["fn"]
+                _inn = bool(_scored["inn"])
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'We added a gap of <b>{_gap_used:,.0f} hd</b> to get '
+                    f'<b>{_scored["fn"]:,.0f} hd</b>. USDA printed '
+                    f'<b>{_scored["an"]:,.0f} hd</b> &mdash; '
+                    f'<b style="color:{POS if _inn else NEG};">{abs(_mn):,.0f} hd '
+                    f'{"below" if _mn < 0 else "above"} the call '
+                    f'({abs(_mn) / _scored["an"]:.1%})</b>, '
+                    f'{"inside" if _inn else "<b>outside</b>"} the range we gave. '
+                    f'The gap actually came in at <b>{_gap_real:,.0f} hd</b>.</div>',
+                    unsafe_allow_html=True)
+            elif f5["no_call"]:
+                # Nothing to carry across: this step starts from the 5-Area call,
+                # and there isn't one. The gap is still worth printing because it
+                # is what separates the two figures whenever they are quoted.
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'No 5-Area call to carry across yet. The recent gap between the two is '
+                    f'<b>{fn["gap"]:,.0f} hd</b>, and the last 13 national weeks printed '
+                    f'<b>{fn["recent_lo"]:,.0f}&ndash;{fn["recent_hi"]:,.0f} hd</b>, median '
+                    f'<b>{fn["recent_mid"]:,.0f} hd</b>.</div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'<b>{f5["central"]:,.0f} hd</b> plus the recent 5-Area-to-national gap of '
+                    f'<b>{fn["gap"]:,.0f} hd</b> &rarr; <b>{fn["central"]:,.0f} hd</b>, '
+                    f'range <b>{fn["low"]:,.0f}&ndash;{fn["high"]:,.0f} hd</b>.</div>',
+                    unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="note" style="margin-bottom:14px;">The gap is negotiated trade outside '
+                f'the five areas, plus any region USDA is currently withholding. It is taken as a '
+                f'median over the last <b>{fn["n"]}</b> weeks and added, not scaled &mdash; neither '
+                f'part of it grows with the 5-Area total, so a ratio drifts whenever the 5-Area '
+                f'number is unusually high or low. Over the last {FORECAST_BAND_WEEKS} weeks the gap '
+                f'ran {fn["gap_lo"]:,.0f}&ndash;{fn["gap_hi"]:,.0f} hd, which is what sets the range '
+                f'above.</div>', unsafe_allow_html=True)
+
+            # ── the two series, with the forecast on the end ────────────────────
+            pair = fn["pair"].tail(52)
+            if not pair.empty:
+                st.markdown('<div class="sec-header">5-Area and national weekly negotiated volume</div>',
+                            unsafe_allow_html=True)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=pair.index, y=pair["nat"], name="National (LM_CT154)",
+                    mode="lines", line=dict(color=DEL_COLOR, width=2),
+                    hovertemplate="%{x|%b %d, %Y}<br>National %{y:,.0f} hd<extra></extra>"))
+                fig.add_trace(go.Scatter(
+                    x=pair.index, y=pair["h5"], name="5-Area (LM_CT150)",
+                    mode="lines", line=dict(color=CONF_COLOR, width=2),
+                    hovertemplate="%{x|%b %d, %Y}<br>5-Area %{y:,.0f} hd<extra></extra>"))
+                # The forecast as its own marked points, never joined to the line --
+                # a dotted continuation reads as data at a glance.
+                fig.add_trace(go.Scatter(
+                    x=[_wk], y=[fn["central"]], name="National forecast",
+                    mode="markers", marker=dict(color=DEL_COLOR, size=11, symbol="diamond",
+                                                line=dict(color="#ffffff", width=1.5)),
+                    error_y=dict(type="data", symmetric=False,
+                                 array=[fn["high"] - fn["central"]],
+                                 arrayminus=[fn["central"] - fn["low"]],
+                                 color=DEL_COLOR, thickness=1.5, width=6),
+                    hovertemplate="%{x|%b %d, %Y}<br>National forecast %{y:,.0f} hd<extra></extra>"))
+                fig.add_trace(go.Scatter(
+                    x=[_wk], y=[f5["central"]], name="5-Area forecast",
+                    mode="markers", marker=dict(color=CONF_COLOR, size=11, symbol="diamond",
+                                                line=dict(color="#ffffff", width=1.5)),
+                    error_y=dict(type="data", symmetric=False,
+                                 array=[f5["high"] - f5["central"]],
+                                 arrayminus=[f5["central"] - f5["low"]],
+                                 color=CONF_COLOR, thickness=1.5, width=6),
+                    hovertemplate="%{x|%b %d, %Y}<br>5-Area forecast %{y:,.0f} hd<extra></extra>"))
+                fig.update_layout(
+                    height=330, margin=dict(l=10, r=10, t=10, b=10),
+                    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                    font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                    xaxis=dict(showgrid=False, linecolor=BORDER),
+                    yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
+                               zeroline=False, tickformat=","))
+                st.plotly_chart(fig, use_container_width=True,
+                                config={"displayModeBar": False})
+
+                recent = pair.tail(10).copy()
+                recent.index = [d.strftime("%b %d") for d in recent.index]
+                recent = recent.rename(columns={"h5": "5-Area", "nat": "National", "gap": "Gap"})
+                st.dataframe(
+                    recent[["5-Area", "National", "Gap"]].iloc[::-1]
+                          .style.format("{:,.0f}"),
+                    use_container_width=True)
+
+            # ── how the last ten calls landed ───────────────────────────────────
+            # Scored at the SAME checkpoint the live forecast above is standing at,
+            # not at a fixed Friday -- accuracy depends far more on how far into the
+            # week you are than on anything else, so a fixed-Friday scorecard would
+            # flatter a Wednesday reading of this page roughly tenfold. See
+            # scorecard.py, which also records why replaying past calls is honest
+            # here when it is not for the sibling FCI scorecard.
+            stats = scorecard.summarise(board)
+            # Deliberately after summarise(). The accuracy line above the table
+            # describes CALLS THAT HAVE BEEN SETTLED; this week has not been, so it
+            # is appended for display only and never reaches the median or the band
+            # count. scorecard.summarise() also drops it defensively.
+            pending = scorecard.pending_row(
+                fcst_vol, head5, headn, forecast_5area, forecast_national)
+            if not board.empty and stats:
+                # NAME THE CHECKPOINT THESE WERE SCORED AT, because it is not
+                # always the live one. build_scorecard steps back when the live
+                # week is too green to forecast from (see its GREEN_MATURITY note),
+                # and "at this point in the week" then describes a checkpoint the
+                # rows were not scored at -- borrowing a Friday call's accuracy for
+                # a Monday one, which flatters rather than merely misleads.
+                #
+                # IT HAS TO BE BUILT BEFORE THE HEADER THAT PRINTS IT. Writing it
+                # underneath read fine and raised NameError on the live page --
+                # script order again, the rule this file keeps relearning.
+                _sc_cp = scorecard.checkpoint_of(board)
+                _live_cp = ((int(f5["checkpoint"]["weekday"]), int(f5["checkpoint"]["order"]))
+                            if f5 else None)
+                _sc_dow_lbl, _sc_cut_lbl = _dow, _cut
+                if _sc_cp is not None:
+                    _sc_dow_lbl = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                                   "Friday"][_sc_cp[0]]
+                    _sc_cut_lbl = DAILY_CUT_LABEL["morning" if _sc_cp[1] else "afternoon"]
+                if _sc_cp is None or _sc_cp == _live_cp:
+                    _cp_label = "at this point in the week"
+                else:
+                    # DAILY_CUT_LABEL already ends in "cut" for the afternoon
+                    # file ("1:30 pm cut") and reads "Final" for the morning one,
+                    # so neither wants the word appended.
+                    _cp_label = (
+                        f'at the {_sc_dow_lbl} {_sc_cut_lbl.lower()} &mdash; this week '
+                        f'has barely traded, so there is nothing yet to score a call from')
+
+                st.markdown(
+                    f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
+                    f'Forecast accuracy &mdash; the last {stats["n"]} calls '
+                    f'{_cp_label}</div>', unsafe_allow_html=True)
+
+                _f, _n = stats["five"], stats["nat"]
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 8px;">'
+                    f'<b>5-Area</b> missed by a median <b>{_f["median_abs_head"]:,.0f} hd '
+                    f'({_f["median_abs_pct"]:.1%})</b>, inside the stated range '
+                    f'<b>{_f["in_band"] * stats["n"]:.0f} of {stats["n"]}</b> times. '
+                    f'<b>National</b> missed by a median <b>{_n["median_abs_head"]:,.0f} hd '
+                    f'({_n["median_abs_pct"]:.1%})</b>, inside <b>'
+                    f'{_n["in_band"] * stats["n"]:.0f} of {stats["n"]}</b>.</div>',
+                    unsafe_allow_html=True)
+
+                # The live week rides on top, newest first like the rest.
+                _b = (board.copy() if pending.empty
+                      else pd.concat([pending, board], ignore_index=True))
+                _live = _b["pending"].fillna(False).astype(bool)
+
+                # Every actual and every miss on the pending row is NaN. Formatted
+                # with the scored rows' f-strings those print "nan", which reads as
+                # a broken number rather than an unanswered one.
+                def _hd(v):
+                    return "\u2014" if pd.isna(v) else f"{v:,.0f}"
+
+                def _ms(m, q):
+                    return ("\u2014" if pd.isna(m) or pd.isna(q)
+                            else f"{m:+,.0f} ({q:+.1%})")
+
+                _b["Week of"] = [d.strftime("%b %d") + (" \u00b7 live" if lv else "")
+                                 for d, lv in zip(_b["week"], _live)]
+                _b["Week to date"] = _b["wtd"].map(_hd)
+                _b["Confidence"] = _b["grade"].fillna("").str.title()
+                _b["5-Area est."] = _b["f5"].map(_hd)
+                _b["5-Area actual"] = _b["a5"].map(_hd)
+                _b["5-Area miss"] = [_ms(m, q) for m, q in zip(_b["miss5"], _b["pct5"])]
+                _b["National est."] = _b["fn"].map(_hd)
+                _b["National actual"] = _b["an"].map(_hd)
+                _b["National miss"] = [_ms(m, q) for m, q in zip(_b["missn"], _b["pctn"])]
+                st.dataframe(
+                    _b[["Week of", "Week to date", "Confidence", "5-Area est.",
+                        "5-Area actual", "5-Area miss", "National est.",
+                        "National actual", "National miss"]],
+                    use_container_width=True, hide_index=True)
+
+                if not pending.empty:
+                    _pw = pending["week"].iloc[0]
+                    _prints = (_pw + pd.Timedelta(days=7)).strftime("%a %b %d")
+                    st.markdown(
+                        f'<div class="note" style="margin-top:6px;">'
+                        f'<b>The top row is this week, still open.</b> '
+                        + ('It carries no estimate because the week is too green for '
+                           'one &mdash; the same reason the tiles above show recent weeks '
+                           'instead of a call. '
+                           if f5.get("no_call") else
+                           'It is the same call as the tiles above &mdash; estimates and '
+                           'confidence only. ')
+                        + f'There is no actual to score against until USDA prints the week '
+                        f'of {_pw.strftime("%b %d")} on <b>{_prints}</b>. '
+                        f'It is <b>not</b> in the accuracy figures above, which cover the '
+                        f'{stats["n"]} settled calls; when the print lands this row is '
+                        f'scored like any other and the averages take it in.</div>',
+                        unsafe_allow_html=True)
+
+                st.markdown(
+                    f'<div class="note" style="margin-top:6px;">Each past week is replayed '
+                    f'through the same code the forecast above runs, standing at the same '
+                    # _dow/_cut are the LIVE checkpoint; these rows may have been
+                    # scored at an earlier one when the live week is too green to
+                    # forecast from. Naming the wrong checkpoint here is the same
+                    # defect as naming it wrong in the header above.
+                    f'<b>{_sc_dow_lbl} {_sc_cut_lbl.lower()}</b> and seeing only what had been '
+                    f'published by then &mdash; the analogue pool, the typical-week baseline '
+                    f'and the national gap are all cut to weeks USDA had already printed. '
+                    f'<b>The 5-Area column is the one to trust.</b> It is close to arithmetic, '
+                    f'and the national column carries the gap to states with no daily report '
+                    f'at all, which is why its miss is the larger of the two. Replaying is '
+                    f'sound here because the weekly figure being scored against has never been '
+                    f'revised &mdash; zero corrections in twelve months &mdash; and only 0.5% of '
+                    f'the daily rows it replays from ever are.</div>',
                     unsafe_allow_html=True)
 
             st.markdown(
-                f'<div class="note" style="margin-top:6px;">Each past week is replayed '
-                f'through the same code the forecast above runs, standing at the same '
-                # _dow/_cut are the LIVE checkpoint; these rows may have been
-                # scored at an earlier one when the live week is too green to
-                # forecast from. Naming the wrong checkpoint here is the same
-                # defect as naming it wrong in the header above.
-                f'<b>{_sc_dow_lbl} {_sc_cut_lbl.lower()}</b> and seeing only what had been '
-                f'published by then &mdash; the analogue pool, the typical-week baseline '
-                f'and the national gap are all cut to weeks USDA had already printed. '
-                f'<b>The 5-Area column is the one to trust.</b> It is close to arithmetic, '
-                f'and the national column carries the gap to states with no daily report '
-                f'at all, which is why its miss is the larger of the two. Replaying is '
-                f'sound here because the weekly figure being scored against has never been '
-                f'revised &mdash; zero corrections in twelve months &mdash; and only 0.5% of '
-                f'the daily rows it replays from ever are.</div>',
-                unsafe_allow_html=True)
-
-        st.markdown(
-            '<div class="note" style="margin-top:10px;">'
-            '<b>What this is.</b> Both weekly reports print the Monday after the week they '
-            'cover. The 5-Area step is close to arithmetic &mdash; USDA&rsquo;s own daily '
-            'week-to-date already carries most of the answer, and only late-reported trade is '
-            'estimated. The national step is the looser of the two, because the gap between '
-            'the two reports moves with trade in states that have no daily report at all.<br><br>'
-            '<b>The one thing that can move it a long way.</b> When USDA withholds a region&rsquo;s '
-            'daily volume for confidentiality, that region drops out of the 5-Area figure but '
-            '<b>stays in the national count</b>, so the gap widens and the national forecast is '
-            'the half that suffers. Check the week-to-date tiles on the Daily tab: a region '
-            'sitting at zero across a whole week is the signal.<br><br>'
-            '<b>Neither number is USDA&rsquo;s.</b> They are estimates built from USDA&rsquo;s '
-            'published daily reports, and they carry no official standing until the Monday '
-            'release.</div>', unsafe_allow_html=True)
+                '<div class="note" style="margin-top:10px;">'
+                '<b>What this is.</b> Both weekly reports print the Monday after the week they '
+                'cover. The 5-Area step is close to arithmetic &mdash; USDA&rsquo;s own daily '
+                'week-to-date already carries most of the answer, and only late-reported trade is '
+                'estimated. The national step is the looser of the two, because the gap between '
+                'the two reports moves with trade in states that have no daily report at all.<br><br>'
+                '<b>The one thing that can move it a long way.</b> When USDA withholds a region&rsquo;s '
+                'daily volume for confidentiality, that region drops out of the 5-Area figure but '
+                '<b>stays in the national count</b>, so the gap widens and the national forecast is '
+                'the half that suffers. Check the week-to-date tiles on the Daily tab: a region '
+                'sitting at zero across a whole week is the signal.<br><br>'
+                '<b>Neither number is USDA&rsquo;s.</b> They are estimates built from USDA&rsquo;s '
+                'published daily reports, and they carry no official standing until the Monday '
+                'release.</div>', unsafe_allow_html=True)
 
 
 # ── Packer Leverage ──────────────────────────────────────────────────────────
@@ -2972,466 +3014,467 @@ with tab_fcst:
 # the other tabs is a different population on a different clock, and dividing
 # one by the other yields a number that looks like a share and is not one.
 with tab_lev:
-    st.markdown(
-        '<div class="sec-header">Packer Leverage &mdash; how much of the kill was '
-        'already bought</div>', unsafe_allow_html=True)
-
-    with st.spinner("Loading USDA purchase-mix and committed inventory…"):
-        try:
-            _lev_stamps = stamps_for(_probe, [leverage.CT142_ID, leverage.CT153_ID])
-            lev_f = fetch_leverage(_lev_stamps, leverage.SCHEMA)
-            lev_err = ""
-        except Exception as e:
-            lev_f, lev_err = {}, str(e)
-
-    _mix = lev_f.get("mix", pd.DataFrame())
-    _L = leverage.latest(lev_f) if lev_f else {}
-
-    if lev_err:
-        st.warning("⏳ **USDA data unavailable** — the purchase-mix reports are not "
-                   "responding. Use **Refresh now** in the sidebar to retry.")
-        with st.expander("Technical details"):
-            st.code(lev_err)
-    elif _mix.empty or "mix" not in _L:
-        st.info("USDA has published no purchase-mix data for this period.")
-    else:
-        _r = _L["mix"]
-        _wk = pd.Timestamp(_r["week"])
-        _pr = _L.get("mix_prior")
-        _yr = _L.get("mix_year")
-        _pct = leverage.percentile(_mix, "negotiated_pct", _r["negotiated_pct"])
-
+    if tab_lev.open:
         st.markdown(
-            f'<div class="note" style="margin:-4px 0 12px;">Slaughter week ending '
-            f'<b>{_wk.strftime("%b %d, %Y")}</b>, from USDA&rsquo;s own split of the kill '
-            f'by how each animal was bought (LM_CT153). This is the SLAUGHTER side &mdash; '
-            f'cattle killed that week, bought whenever they were bought. The negotiated '
-            f'volume on the other tabs is the PURCHASE side and runs on a different '
-            f'clock.</div>', unsafe_allow_html=True)
+            '<div class="sec-header">Packer Leverage &mdash; how much of the kill was '
+            'already bought</div>', unsafe_allow_html=True)
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(tile("Negotiated share of kill",
-                             f"{_r['negotiated_pct']:.1%}",
-                             (f'<div class="tile-delta-{"neg" if _r["negotiated_pct"] < _pr["negotiated_pct"] else "pos"}">'
-                              f'{"▼" if _r["negotiated_pct"] < _pr["negotiated_pct"] else "▲"} '
-                              f'{abs(_r["negotiated_pct"] - _pr["negotiated_pct"]) * 100:.1f} pt vs week ago</div>')
-                             if _pr is not None else "",
-                             "tile-conf"), unsafe_allow_html=True)
-        with c2:
-            st.markdown(tile("Already committed",
-                             f"{_r['committed_pct']:.1%}",
-                             f'<div class="tile-delta-neu">formula + forward</div>',
-                             "tile-d14"), unsafe_allow_html=True)
-        # c3/c4 ARE THE STANDING BOOK, not the weekly flow that used to sit
-        # here. "Committed inventory" and "weeks of coverage" both read
-        # LM_CT142, whose Committed column is head committed DURING the week —
-        # a flow — so the first was not an inventory and the second was not
-        # weeks of anything. The real inventory is LM_CT153's forward book:
-        # "Cumulative Total for Listed Months" on ams_2480.pdf, cattle bought
-        # and not yet delivered.
-        _sch = _L.get("schedule")
-        _fw = _L.get("forward")
-        _near = leverage.near_months(_sch, 3) if _sch is not None else {}
-        with c3:
-            st.markdown(tile("Forward book, undelivered",
-                             fmt_hd(_fw["fwd_book"]) if _fw is not None else "—",
-                             (hd_delta_html(_fw["fwd_book"], _L["forward_prior"]["fwd_book"])
-                              if _fw is not None and _L.get("forward_prior") is not None else ""),
-                             "tile-del"), unsafe_allow_html=True)
-        with c4:
-            _nc = _near.get("change")
-            st.markdown(tile("Next 3 months vs year ago",
-                             f"{_nc:+.0%}" if _nc is not None else "—",
-                             (f'<div class="tile-delta-{"neg" if _nc < 0 else "pos"}">'
-                              f'{_near["committed"]:,.0f} vs {_near["last_year"]:,.0f} hd</div>')
-                             if _nc is not None else "",
-                             "tile-neu"), unsafe_allow_html=True)
+        with st.spinner("Loading USDA purchase-mix and committed inventory…"):
+            try:
+                _lev_stamps = stamps_for(_probe, [leverage.CT142_ID, leverage.CT153_ID])
+                lev_f = fetch_leverage(_lev_stamps, leverage.SCHEMA)
+                lev_err = ""
+            except Exception as e:
+                lev_f, lev_err = {}, str(e)
 
-        # ── what it means, in the market's own recent terms ─────────────────
-        if _pct == _pct:
-            _tight = _pct >= 0.67
-            _loose = _pct <= 0.33
-            _col = POS if _tight else (NEG if _loose else D30_COLOR)
-            _verdict = ("Packers are leaning on the cash market MORE than usual"
-                        if _tight else
-                        "Packers are leaning on the cash market LESS than usual"
-                        if _loose else
-                        "Packers are about as covered as usual")
-            _side = ("so a larger share of the week's needs has to be bid for, which "
-                     "is the feedlot-friendly end of this measure"
-                     if _tight else
-                     "so more of the week arrives on commitments already made and the "
-                     "cash market decides less of it"
-                     if _loose else
-                     "so neither side gets much help from the mix this week")
+        _mix = lev_f.get("mix", pd.DataFrame())
+        _L = leverage.latest(lev_f) if lev_f else {}
+
+        if lev_err:
+            st.warning("⏳ **USDA data unavailable** — the purchase-mix reports are not "
+                       "responding. Use **Refresh now** in the sidebar to retry.")
+            with st.expander("Technical details"):
+                st.code(lev_err)
+        elif _mix.empty or "mix" not in _L:
+            st.info("USDA has published no purchase-mix data for this period.")
+        else:
+            _r = _L["mix"]
+            _wk = pd.Timestamp(_r["week"])
+            _pr = _L.get("mix_prior")
+            _yr = _L.get("mix_year")
+            _pct = leverage.percentile(_mix, "negotiated_pct", _r["negotiated_pct"])
+
             st.markdown(
-                f'<div style="border-left:3px solid {_col};background:#fafbfc;padding:8px 12px;'
-                f'margin:4px 0 14px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
-                f'<b style="color:{_col};">{_verdict}.</b> At '
-                f'<b>{_r["negotiated_pct"]:.1%}</b> the negotiated share sits in the '
-                f'<b>{_pct * 100:.0f}th percentile</b> of the last three years &mdash; {_side}.'
-                + (f'<br><span style="color:{MUTED};">A year ago it was '
-                   f'{_yr["negotiated_pct"]:.1%}.</span>' if _yr is not None else "")
-                + '</div>', unsafe_allow_html=True)
+                f'<div class="note" style="margin:-4px 0 12px;">Slaughter week ending '
+                f'<b>{_wk.strftime("%b %d, %Y")}</b>, from USDA&rsquo;s own split of the kill '
+                f'by how each animal was bought (LM_CT153). This is the SLAUGHTER side &mdash; '
+                f'cattle killed that week, bought whenever they were bought. The negotiated '
+                f'volume on the other tabs is the PURCHASE side and runs on a different '
+                f'clock.</div>', unsafe_allow_html=True)
 
-        # ── what the ratio costs them in head ───────────────────────────────
-        # A RUN RATE, NOT A FORECAST, and the wording has to carry that. There
-        # is no published "cattle still to buy this week": the week's purchases
-        # and the week's slaughter are different populations on different
-        # clocks, so subtracting one from the other would manufacture a figure
-        # rather than measure one. What can be said honestly is how many head
-        # recent weeks each required, how much that varied, and how close the
-        # average has landed to the week that followed.
-        _need = leverage.cash_need(_mix)
-        _acc = leverage.need_accuracy(_mix)
-        if _need:
-            st.markdown(
-                f'<div class="sec-header" style="border-left-color:{NEG};">'
-                f'Cash need &mdash; head they have to transact for in a week</div>',
-                unsafe_allow_html=True)
-
-            n1, n2 = st.columns(2)
-            with n1:
-                st.markdown(tile("Negotiated cash, per week",
-                                 fmt_hd(_need["cash"]),
-                                 f'<div class="tile-delta-neu">'
-                                 f'{_need["cash_lo"]:,.0f}&ndash;{_need["cash_hi"]:,.0f} hd '
-                                 f'over {_need["weeks"]} wks</div>',
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.markdown(tile("Negotiated share of kill",
+                                 f"{_r['negotiated_pct']:.1%}",
+                                 (f'<div class="tile-delta-{"neg" if _r["negotiated_pct"] < _pr["negotiated_pct"] else "pos"}">'
+                                  f'{"▼" if _r["negotiated_pct"] < _pr["negotiated_pct"] else "▲"} '
+                                  f'{abs(_r["negotiated_pct"] - _pr["negotiated_pct"]) * 100:.1f} pt vs week ago</div>')
+                                 if _pr is not None else "",
                                  "tile-conf"), unsafe_allow_html=True)
-            with n2:
-                st.markdown(tile("Including negotiated grid",
-                                 fmt_hd(_need["must"]),
-                                 f'<div class="tile-delta-neu">'
-                                 f'{_need["must_lo"]:,.0f}&ndash;{_need["must_hi"]:,.0f} hd '
-                                 f'over {_need["weeks"]} wks</div>',
+            with c2:
+                st.markdown(tile("Already committed",
+                                 f"{_r['committed_pct']:.1%}",
+                                 f'<div class="tile-delta-neu">formula + forward</div>',
+                                 "tile-d14"), unsafe_allow_html=True)
+            # c3/c4 ARE THE STANDING BOOK, not the weekly flow that used to sit
+            # here. "Committed inventory" and "weeks of coverage" both read
+            # LM_CT142, whose Committed column is head committed DURING the week —
+            # a flow — so the first was not an inventory and the second was not
+            # weeks of anything. The real inventory is LM_CT153's forward book:
+            # "Cumulative Total for Listed Months" on ams_2480.pdf, cattle bought
+            # and not yet delivered.
+            _sch = _L.get("schedule")
+            _fw = _L.get("forward")
+            _near = leverage.near_months(_sch, 3) if _sch is not None else {}
+            with c3:
+                st.markdown(tile("Forward book, undelivered",
+                                 fmt_hd(_fw["fwd_book"]) if _fw is not None else "—",
+                                 (hd_delta_html(_fw["fwd_book"], _L["forward_prior"]["fwd_book"])
+                                  if _fw is not None and _L.get("forward_prior") is not None else ""),
                                  "tile-del"), unsafe_allow_html=True)
+            with c4:
+                _nc = _near.get("change")
+                st.markdown(tile("Next 3 months vs year ago",
+                                 f"{_nc:+.0%}" if _nc is not None else "—",
+                                 (f'<div class="tile-delta-{"neg" if _nc < 0 else "pos"}">'
+                                  f'{_near["committed"]:,.0f} vs {_near["last_year"]:,.0f} hd</div>')
+                                 if _nc is not None else "",
+                                 "tile-neu"), unsafe_allow_html=True)
 
-            _acc_s = ""
-            if _acc.get("cash") and _acc.get("must"):
-                _acc_s = (
-                    f' Over the last {_acc["cash"]["n"]} weeks a '
-                    f'{_need["weeks"]}-week average has landed within a median '
-                    f'<b>{_acc["cash"]["median"]:.1%}</b> of the week that followed '
-                    f'({_acc["cash"]["p90"]:.0%} at the 90th percentile), and '
-                    f'<b>{_acc["must"]["median"]:.1%}</b> including grid &mdash; '
-                    f'grid and cash partly offset each other week to week, so the '
-                    f'wider measure is the steadier one.')
+            # ── what it means, in the market's own recent terms ─────────────────
+            if _pct == _pct:
+                _tight = _pct >= 0.67
+                _loose = _pct <= 0.33
+                _col = POS if _tight else (NEG if _loose else D30_COLOR)
+                _verdict = ("Packers are leaning on the cash market MORE than usual"
+                            if _tight else
+                            "Packers are leaning on the cash market LESS than usual"
+                            if _loose else
+                            "Packers are about as covered as usual")
+                _side = ("so a larger share of the week's needs has to be bid for, which "
+                         "is the feedlot-friendly end of this measure"
+                         if _tight else
+                         "so more of the week arrives on commitments already made and the "
+                         "cash market decides less of it"
+                         if _loose else
+                         "so neither side gets much help from the mix this week")
+                st.markdown(
+                    f'<div style="border-left:3px solid {_col};background:#fafbfc;padding:8px 12px;'
+                    f'margin:4px 0 14px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
+                    f'<b style="color:{_col};">{_verdict}.</b> At '
+                    f'<b>{_r["negotiated_pct"]:.1%}</b> the negotiated share sits in the '
+                    f'<b>{_pct * 100:.0f}th percentile</b> of the last three years &mdash; {_side}.'
+                    + (f'<br><span style="color:{MUTED};">A year ago it was '
+                       f'{_yr["negotiated_pct"]:.1%}.</span>' if _yr is not None else "")
+                    + '</div>', unsafe_allow_html=True)
+
+            # ── what the ratio costs them in head ───────────────────────────────
+            # A RUN RATE, NOT A FORECAST, and the wording has to carry that. There
+            # is no published "cattle still to buy this week": the week's purchases
+            # and the week's slaughter are different populations on different
+            # clocks, so subtracting one from the other would manufacture a figure
+            # rather than measure one. What can be said honestly is how many head
+            # recent weeks each required, how much that varied, and how close the
+            # average has landed to the week that followed.
+            _need = leverage.cash_need(_mix)
+            _acc = leverage.need_accuracy(_mix)
+            if _need:
+                st.markdown(
+                    f'<div class="sec-header" style="border-left-color:{NEG};">'
+                    f'Cash need &mdash; head they have to transact for in a week</div>',
+                    unsafe_allow_html=True)
+
+                n1, n2 = st.columns(2)
+                with n1:
+                    st.markdown(tile("Negotiated cash, per week",
+                                     fmt_hd(_need["cash"]),
+                                     f'<div class="tile-delta-neu">'
+                                     f'{_need["cash_lo"]:,.0f}&ndash;{_need["cash_hi"]:,.0f} hd '
+                                     f'over {_need["weeks"]} wks</div>',
+                                     "tile-conf"), unsafe_allow_html=True)
+                with n2:
+                    st.markdown(tile("Including negotiated grid",
+                                     fmt_hd(_need["must"]),
+                                     f'<div class="tile-delta-neu">'
+                                     f'{_need["must_lo"]:,.0f}&ndash;{_need["must_hi"]:,.0f} hd '
+                                     f'over {_need["weeks"]} wks</div>',
+                                     "tile-del"), unsafe_allow_html=True)
+
+                _acc_s = ""
+                if _acc.get("cash") and _acc.get("must"):
+                    _acc_s = (
+                        f' Over the last {_acc["cash"]["n"]} weeks a '
+                        f'{_need["weeks"]}-week average has landed within a median '
+                        f'<b>{_acc["cash"]["median"]:.1%}</b> of the week that followed '
+                        f'({_acc["cash"]["p90"]:.0%} at the 90th percentile), and '
+                        f'<b>{_acc["must"]["median"]:.1%}</b> including grid &mdash; '
+                        f'grid and cash partly offset each other week to week, so the '
+                        f'wider measure is the steadier one.')
+                st.markdown(
+                    f'<div class="note" style="margin-bottom:14px;">'
+                    f'<b>This is a run rate, not a forecast of the week in front of you.</b> '
+                    f'USDA publishes no &ldquo;still to buy&rdquo; figure, and the week&rsquo;s '
+                    f'purchases and the week&rsquo;s slaughter are different populations on '
+                    f'different clocks &mdash; subtracting one from the other would invent a '
+                    f'number rather than measure one. What this says is how many head the '
+                    f'{_need["weeks"]} weeks to '
+                    f'<b>{_need["to"].strftime("%b %d")}</b> each required, against an average '
+                    f'kill of <b>{_need["kill"]:,.0f} hd</b>.{_acc_s}</div>',
+                    unsafe_allow_html=True)
+
+            # ── the mix itself ──────────────────────────────────────────────────
             st.markdown(
-                f'<div class="note" style="margin-bottom:14px;">'
-                f'<b>This is a run rate, not a forecast of the week in front of you.</b> '
-                f'USDA publishes no &ldquo;still to buy&rdquo; figure, and the week&rsquo;s '
-                f'purchases and the week&rsquo;s slaughter are different populations on '
-                f'different clocks &mdash; subtracting one from the other would invent a '
-                f'number rather than measure one. What this says is how many head the '
-                f'{_need["weeks"]} weeks to '
-                f'<b>{_need["to"].strftime("%b %d")}</b> each required, against an average '
-                f'kill of <b>{_need["kill"]:,.0f} hd</b>.{_acc_s}</div>',
-                unsafe_allow_html=True)
-
-        # ── the mix itself ──────────────────────────────────────────────────
-        st.markdown(
-            f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
-            f'How the kill was bought</div>', unsafe_allow_html=True)
-        _bits = " &middot; ".join(
-            f'<b>{leverage.MIX_LABEL[k]}</b> {_r[k]:,.0f} hd ({_r[k + "_pct"]:.1%})'
-            for k in ("formula", "forward", "negotiated", "neg_grid"))
-        st.markdown(
-            f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-            f'{_bits} &mdash; <b>{_r["total"]:,.0f} hd</b> in all.</div>',
-            unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="note" style="margin-bottom:12px;"><b>Negotiated grid is kept '
-            f'separate and is not folded into the headline.</b> Its base price is '
-            f'negotiated in the week, so for &ldquo;did the packer have to transact&rdquo; it '
-            f'belongs with cash &mdash; on that reading they must buy '
-            f'<b>{_r["must_buy_pct"]:.1%}</b> of the week rather than '
-            f'{_r["negotiated_pct"]:.1%}. For &ldquo;what share of the kill discovered a cash '
-            f'price&rdquo;, the convention is cash alone. Both are defensible and they '
-            f'differ by a third, so the page shows both and picks neither for you.'
-            f'</div>', unsafe_allow_html=True)
-
-        _hist = _mix[_mix["week"] >= _mix["week"].max() - pd.Timedelta(weeks=156)]
-        if not _hist.empty:
-            fig = go.Figure()
-            for key, colr in (("formula", JPSI_BLUE), ("forward", D14_COLOR),
-                              ("neg_grid", D30_COLOR), ("negotiated", NEG)):
-                fig.add_trace(go.Scatter(
-                    x=_hist["week"], y=_hist[f"{key}_pct"], name=leverage.MIX_LABEL[key],
-                    mode="lines", stackgroup="one", line=dict(width=0.5, color=colr),
-                    hovertemplate="%{x|%b %d, %Y}<br>" + leverage.MIX_LABEL[key]
-                                  + " %{y:.1%}<extra></extra>"))
-            fig.update_layout(
-                height=320, margin=dict(l=10, r=10, t=10, b=10),
-                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-                font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
-                hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                xaxis=dict(showgrid=False, linecolor=BORDER),
-                yaxis=dict(title="share of kill", gridcolor="#f0f2f4", linecolor=BORDER,
-                           zeroline=False, tickformat=".0%", range=[0, 1]))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-            st.markdown(
-                '<div class="note" style="margin-top:-6px;">Three years. The red band at '
-                'the top is the only part of the week that has to find a price in the '
-                'cash market.</div>', unsafe_allow_html=True)
-
-        # ── the forward book and what else is captive ───────────────────────
-        st.markdown(
-            f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
-            f'The standing book &mdash; cattle bought and not yet delivered</div>',
-            unsafe_allow_html=True)
-        if _sch is not None and not _sch.empty and _fw is not None:
-            _ok = leverage.reconciles(_sch, _fw["fwd_book"])
+                f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
+                f'How the kill was bought</div>', unsafe_allow_html=True)
+            _bits = " &middot; ".join(
+                f'<b>{leverage.MIX_LABEL[k]}</b> {_r[k]:,.0f} hd ({_r[k + "_pct"]:.1%})'
+                for k in ("formula", "forward", "negotiated", "neg_grid"))
             st.markdown(
                 f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                f'<b>{_fw["fwd_book"]:,.0f} hd</b> on forward contract and not yet '
-                f'delivered, <b>{_fw["fwd_week"]:,.0f} hd</b> newly signed last week'
-                + (f'. Over the next {_near["n"]} delivery months they hold '
-                   f'<b>{_near["committed"]:,.0f} hd</b> against '
-                   f'<b>{_near["last_year"]:,.0f} hd</b> a year ago, '
-                   f'<b style="color:{NEG if _near["change"] < 0 else POS};">'
-                   f'{_near["change"]:+.1%}</b>.' if _near else ".")
-                + '</div>', unsafe_allow_html=True)
-
-            # WHICH CATTLE THESE ARE is the first thing anyone asks of the
-            # figure, and both wrong answers misread the market. Read it as
-            # all committed supply and the packer looks far shorter than he
-            # is, because formula is the bigger share by a wide margin; read
-            # it as "contracts, so basis contracts are somewhere else" and you
-            # go looking for a number that does not exist separately.
-            #
-            # LM_CT153's own section names settle it. Section B is
-            # "Prior Week Formula & Contract Slaughter" -- it names both and
-            # counts them apart. Section C, where this figure comes from, is
-            # "Forward Contract Purchases", and the word formula does not
-            # appear anywhere in it.
-            st.markdown(
-                f'<div style="border-left:3px solid {DEL_COLOR};'
-                f'background:#fbfbfa;padding:9px 13px;margin:2px 0 14px;'
-                f'font-size:0.78rem;line-height:1.6;color:{JPSI_DARK};">'
-                f'<b>What is in this book.</b> Forward-contract cattle only '
-                f'&mdash; head signed for delivery in a named month at a price '
-                f'struck as a <b>basis to a CME futures month</b>. USDA keys '
-                f'the table &ldquo;Delivery Mo./Basis Mo.&rdquo;, so a row '
-                f'reading <i>Oct&nbsp;&rsquo;26/Oct</i> is October delivery '
-                f'priced off October futures. <b>Basis contracts are not a '
-                f'separate category from these &mdash; they are these</b>, '
-                f'which is why the only prices in the table are basis levels '
-                f'rather than dollars per hundredweight.<br>'
-                f'<b>Formula cattle are not in it</b>, and could not be. A '
-                f'formula animal has no contracted delivery month and no '
-                f'agreed price &mdash; it is priced when it ships, off a '
-                f'published average &mdash; so there is nothing to inventory '
-                f'by month. USDA splits them for the same reason: section B '
-                f'of this report is &ldquo;Formula <i>&amp;</i> Contract&rdquo;, '
-                f'section C is forward contract alone.<br>'
-                f'<b>So the book understates committed supply on purpose.</b> '
-                f'Formula was <b>{_r["formula_pct"]:.1%}</b> of last '
-                f'week&rsquo;s reported kill against forward contract&rsquo;s '
-                f'<b>{_r["forward_pct"]:.1%}</b>. What is counted here is the '
-                f'part of the packer&rsquo;s cover that carries a date and a '
-                f'price; the formula share is cover of a different kind and '
-                f'sits in the purchase mix above, not here.</div>',
+                f'{_bits} &mdash; <b>{_r["total"]:,.0f} hd</b> in all.</div>',
                 unsafe_allow_html=True)
-
-            _s = _sch.head(12).copy()
-            _lbl = [f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])]
-            fig2 = go.Figure()
-            # THE YEAR-AGO BARS WERE DRAWN IN `BORDER` AND WERE EFFECTIVELY
-            # INVISIBLE — the same near-white used for table rules and axis
-            # lines. The series was plotted and nobody could see it, which is
-            # the same thing as not plotting it: Ross asked for a year-ago
-            # comparison on a chart that already had one. A data series needs
-            # a data colour; chrome colours are for chrome.
-            fig2.add_trace(go.Bar(
-                x=_lbl, y=_s["last_year"], name="A year ago",
-                marker=dict(color="#aeb6c0",
-                            line=dict(color="#8d95a0", width=1)),
-                hovertemplate="a year ago %{y:,.0f} hd<extra></extra>"))
-            fig2.add_trace(go.Bar(
-                x=_lbl, y=_s["committed"], name="Committed now",
-                marker_color=DEL_COLOR,
-                customdata=_s["vs_last_year"],
-                hovertemplate="committed %{y:,.0f} hd"
-                              "<br>%{customdata:+.1%} vs a year ago<extra></extra>"))
-            # The shortfall is the story, so it gets its own readable row under
-            # the axis rather than being left for the reader to subtract.
-            # Above the taller (year-ago) bar, not at y=0 — at the zero line
-            # they sit on top of the month labels and neither can be read.
-            fig2.add_trace(go.Scatter(
-                x=_lbl, y=_s["last_year"], mode="text",
-                text=[f"{v:+.0%}" if v == v else "" for v in _s["vs_last_year"]],
-                textposition="top center",
-                textfont=dict(size=10, color=NEG),
-                showlegend=False, hoverinfo="skip"))
-            fig2.update_layout(
-                height=330, margin=dict(l=10, r=10, t=26, b=10), barmode="overlay",
-                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-                font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
-                hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-                xaxis=dict(title="delivery month", showgrid=False, linecolor=BORDER),
-                yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
-                           zeroline=False, tickformat=",",
-                           rangemode="tozero"))
-            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
-
             st.markdown(
-                f'<div class="note" style="margin-top:-6px;margin-bottom:14px;">'
-                f'USDA&rsquo;s own heading is &ldquo;Cumulative Total for Listed Months&rdquo; '
-                f'&mdash; cattle contracted and still to be delivered, by the month they are '
-                f'due. <b>The near months are the ones that bear on this week&rsquo;s '
-                f'bidding</b>: cattle contracted for next spring do nothing for a packer '
-                f'filling a kill on Thursday. The sixteen monthly totals add back to the '
-                f'published book figure '
-                + ('<b>exactly</b>' if _ok else '<b style="color:%s;">— and currently do '
-                   'NOT, so the row layout has moved and these figures should not be '
-                   'trusted</b>' % NEG)
-                + f', which is the audit on this table.</div>', unsafe_allow_html=True)
+                f'<div class="note" style="margin-bottom:12px;"><b>Negotiated grid is kept '
+                f'separate and is not folded into the headline.</b> Its base price is '
+                f'negotiated in the week, so for &ldquo;did the packer have to transact&rdquo; it '
+                f'belongs with cash &mdash; on that reading they must buy '
+                f'<b>{_r["must_buy_pct"]:.1%}</b> of the week rather than '
+                f'{_r["negotiated_pct"]:.1%}. For &ldquo;what share of the kill discovered a cash '
+                f'price&rdquo;, the convention is cash alone. Both are defensible and they '
+                f'differ by a third, so the page shows both and picks neither for you.'
+                f'</div>', unsafe_allow_html=True)
 
-        _ow, _cm = _L.get("owned"), _L.get("committed")
-        _bits = []
-        if _ow is not None and pd.notna(_ow["packer_owned"]):
-            _bits.append(f'<b>{_ow["packer_owned"]:,.0f} hd</b> were packer-owned and fed')
-        if _cm is not None and pd.notna(_cm.get("signings_vs_pace")):
-            _bits.append(f'and new commitments ran at <b>{_cm["signings_vs_pace"]:.2f}&times;</b> '
-                         f'the four-week shipping pace, so the book '
-                         f'{"grew" if _cm["signings_vs_pace"] > 1 else "drained"} over the week')
-        if _bits:
-            st.markdown(
-                f'<div class="note" style="margin-bottom:14px;">In the reported kill, '
-                + " ".join(_bits) + '. That last ratio is a comparison of two weekly '
-                'FLOWS &mdash; head committed during the week against head shipped &mdash; '
-                'and is not a measure of supply on hand; the standing inventory is the '
-                'forward book above.</div>', unsafe_allow_html=True)
-
-        # ── how current the cattle are ──────────────────────────────────────
-        # The third leg of leverage, and the one with no published series
-        # behind it. NASS carries on-feed inventory, placements and
-        # marketings but NOTHING by days fed — the "120+ days" figure analysts
-        # quote is derived, not published. The weekly tell is carcass weight:
-        # cattle held past their window get heavier, so weights running above
-        # trend mean feedyards are not current and showlists are bigger than
-        # the head count alone suggests.
-        #
-        # NO NEW REQUEST. price_df is already fetched for the Weekly tab and
-        # `weight_range_avg` rides along on it, back to 2004.
-        _wts = leverage.weight_frame(price_df)
-        _wl = leverage.weight_context(_wts, "Live")
-        _wd = leverage.weight_context(_wts, "Dressed")
-        if _wl.get("vs_trend") is not None:
-            st.markdown(
-                f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
-                f'How current the cattle are &mdash; weight against its own trend</div>',
-                unsafe_allow_html=True)
-
-            w1, w2, w3 = st.columns(3)
-            with w1:
-                st.markdown(tile("Live weight",
-                                 f"{_wl['weight']:,.0f} lb",
-                                 hd_delta_html(_wl["weight"], _wl["year_ago"]).replace(" hd", " lb"),
-                                 "tile-d14"), unsafe_allow_html=True)
-            with w2:
-                _d = _wl["vs_trend"]
-                st.markdown(tile("Live vs trend",
-                                 f"{_d:+,.0f} lb",
-                                 f'<div class="tile-delta-neu">trend says '
-                                 f'{_wl["expected"]:,.0f} lb</div>',
-                                 "tile-conf"), unsafe_allow_html=True)
-            with w3:
-                st.markdown(tile("Dressed vs trend",
-                                 f"{_wd['vs_trend']:+,.0f} lb" if _wd.get("vs_trend") is not None else "—",
-                                 (f'<div class="tile-delta-neu">{_wd["weight"]:,.0f} lb, trend '
-                                  f'{_wd["expected"]:,.0f}</div>') if _wd.get("expected") else "",
-                                 "tile-del"), unsafe_allow_html=True)
-
-            _heavy = _wl["vs_trend"] > 0
-            _col = NEG if _heavy else POS
-            st.markdown(
-                f'<div style="border-left:3px solid {_col};background:#fafbfc;padding:8px 12px;'
-                f'margin:4px 0 12px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
-                f'<b style="color:{_col};">Cattle are '
-                f'{"heavier" if _heavy else "lighter"} than trend by '
-                f'{abs(_wl["vs_trend"]):,.0f} lb.</b> '
-                + ('Cattle held past their window put on weight, so this is feedyards '
-                   'running behind — the showlist is bigger than a head count says and '
-                   'the packer can afford to wait.'
-                   if _heavy else
-                   'Feedyards are current, so there is less standing inventory behind the '
-                   'showlist than usual and the packer has less room to wait.')
-                + f'<br><span style="color:{MUTED};">Up {_wl["vs_year_ago"]:+,.0f} lb on the '
-                f'year, of which about {_wl["slope"]:+,.0f} lb is the ordinary drift that '
-                f'happens every year &mdash; fitted on the same week of the last '
-                f'{_wl["n"]} years, so the season is not in it.</span></div>',
-                unsafe_allow_html=True)
-
-            _hist = _wts[_wts["report_date"] >= _wts["report_date"].max()
-                         - pd.Timedelta(weeks=156)]
-            if not _hist.empty and "Live" in _hist:
-                fig3 = go.Figure()
-                fig3.add_trace(go.Scatter(
-                    x=_hist["report_date"], y=_hist["Live"], name="Live weight",
-                    mode="lines", line=dict(color=JPSI_BLUE, width=2),
-                    hovertemplate="%{x|%b %d, %Y}<br>%{y:,.0f} lb<extra></extra>"))
-                fig3.update_layout(
-                    height=280, margin=dict(l=10, r=10, t=10, b=10),
+            _hist = _mix[_mix["week"] >= _mix["week"].max() - pd.Timedelta(weeks=156)]
+            if not _hist.empty:
+                fig = go.Figure()
+                for key, colr in (("formula", JPSI_BLUE), ("forward", D14_COLOR),
+                                  ("neg_grid", D30_COLOR), ("negotiated", NEG)):
+                    fig.add_trace(go.Scatter(
+                        x=_hist["week"], y=_hist[f"{key}_pct"], name=leverage.MIX_LABEL[key],
+                        mode="lines", stackgroup="one", line=dict(width=0.5, color=colr),
+                        hovertemplate="%{x|%b %d, %Y}<br>" + leverage.MIX_LABEL[key]
+                                      + " %{y:.1%}<extra></extra>"))
+                fig.update_layout(
+                    height=320, margin=dict(l=10, r=10, t=10, b=10),
                     plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
                     font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
-                    hovermode="x unified", showlegend=False,
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
                     xaxis=dict(showgrid=False, linecolor=BORDER),
-                    yaxis=dict(title="lb, live", gridcolor="#f0f2f4", linecolor=BORDER,
-                               zeroline=False, tickformat=","))
-                fig3.add_hline(y=_wl["expected"], line_dash="dot", line_color=MUTED,
-                               annotation_text="trend for this week",
-                               annotation_position="top left")
-                st.plotly_chart(fig3, use_container_width=True,
-                                config={"displayModeBar": False})
+                    yaxis=dict(title="share of kill", gridcolor="#f0f2f4", linecolor=BORDER,
+                               zeroline=False, tickformat=".0%", range=[0, 1]))
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<div class="note" style="margin-top:-6px;">Three years. The red band at '
+                    'the top is the only part of the week that has to find a price in the '
+                    'cash market.</div>', unsafe_allow_html=True)
+
+            # ── the forward book and what else is captive ───────────────────────
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
+                f'The standing book &mdash; cattle bought and not yet delivered</div>',
+                unsafe_allow_html=True)
+            if _sch is not None and not _sch.empty and _fw is not None:
+                _ok = leverage.reconciles(_sch, _fw["fwd_book"])
+                st.markdown(
+                    f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                    f'<b>{_fw["fwd_book"]:,.0f} hd</b> on forward contract and not yet '
+                    f'delivered, <b>{_fw["fwd_week"]:,.0f} hd</b> newly signed last week'
+                    + (f'. Over the next {_near["n"]} delivery months they hold '
+                       f'<b>{_near["committed"]:,.0f} hd</b> against '
+                       f'<b>{_near["last_year"]:,.0f} hd</b> a year ago, '
+                       f'<b style="color:{NEG if _near["change"] < 0 else POS};">'
+                       f'{_near["change"]:+.1%}</b>.' if _near else ".")
+                    + '</div>', unsafe_allow_html=True)
+
+                # WHICH CATTLE THESE ARE is the first thing anyone asks of the
+                # figure, and both wrong answers misread the market. Read it as
+                # all committed supply and the packer looks far shorter than he
+                # is, because formula is the bigger share by a wide margin; read
+                # it as "contracts, so basis contracts are somewhere else" and you
+                # go looking for a number that does not exist separately.
+                #
+                # LM_CT153's own section names settle it. Section B is
+                # "Prior Week Formula & Contract Slaughter" -- it names both and
+                # counts them apart. Section C, where this figure comes from, is
+                # "Forward Contract Purchases", and the word formula does not
+                # appear anywhere in it.
+                st.markdown(
+                    f'<div style="border-left:3px solid {DEL_COLOR};'
+                    f'background:#fbfbfa;padding:9px 13px;margin:2px 0 14px;'
+                    f'font-size:0.78rem;line-height:1.6;color:{JPSI_DARK};">'
+                    f'<b>What is in this book.</b> Forward-contract cattle only '
+                    f'&mdash; head signed for delivery in a named month at a price '
+                    f'struck as a <b>basis to a CME futures month</b>. USDA keys '
+                    f'the table &ldquo;Delivery Mo./Basis Mo.&rdquo;, so a row '
+                    f'reading <i>Oct&nbsp;&rsquo;26/Oct</i> is October delivery '
+                    f'priced off October futures. <b>Basis contracts are not a '
+                    f'separate category from these &mdash; they are these</b>, '
+                    f'which is why the only prices in the table are basis levels '
+                    f'rather than dollars per hundredweight.<br>'
+                    f'<b>Formula cattle are not in it</b>, and could not be. A '
+                    f'formula animal has no contracted delivery month and no '
+                    f'agreed price &mdash; it is priced when it ships, off a '
+                    f'published average &mdash; so there is nothing to inventory '
+                    f'by month. USDA splits them for the same reason: section B '
+                    f'of this report is &ldquo;Formula <i>&amp;</i> Contract&rdquo;, '
+                    f'section C is forward contract alone.<br>'
+                    f'<b>So the book understates committed supply on purpose.</b> '
+                    f'Formula was <b>{_r["formula_pct"]:.1%}</b> of last '
+                    f'week&rsquo;s reported kill against forward contract&rsquo;s '
+                    f'<b>{_r["forward_pct"]:.1%}</b>. What is counted here is the '
+                    f'part of the packer&rsquo;s cover that carries a date and a '
+                    f'price; the formula share is cover of a different kind and '
+                    f'sits in the purchase mix above, not here.</div>',
+                    unsafe_allow_html=True)
+
+                _s = _sch.head(12).copy()
+                _lbl = [f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])]
+                fig2 = go.Figure()
+                # THE YEAR-AGO BARS WERE DRAWN IN `BORDER` AND WERE EFFECTIVELY
+                # INVISIBLE — the same near-white used for table rules and axis
+                # lines. The series was plotted and nobody could see it, which is
+                # the same thing as not plotting it: Ross asked for a year-ago
+                # comparison on a chart that already had one. A data series needs
+                # a data colour; chrome colours are for chrome.
+                fig2.add_trace(go.Bar(
+                    x=_lbl, y=_s["last_year"], name="A year ago",
+                    marker=dict(color="#aeb6c0",
+                                line=dict(color="#8d95a0", width=1)),
+                    hovertemplate="a year ago %{y:,.0f} hd<extra></extra>"))
+                fig2.add_trace(go.Bar(
+                    x=_lbl, y=_s["committed"], name="Committed now",
+                    marker_color=DEL_COLOR,
+                    customdata=_s["vs_last_year"],
+                    hovertemplate="committed %{y:,.0f} hd"
+                                  "<br>%{customdata:+.1%} vs a year ago<extra></extra>"))
+                # The shortfall is the story, so it gets its own readable row under
+                # the axis rather than being left for the reader to subtract.
+                # Above the taller (year-ago) bar, not at y=0 — at the zero line
+                # they sit on top of the month labels and neither can be read.
+                fig2.add_trace(go.Scatter(
+                    x=_lbl, y=_s["last_year"], mode="text",
+                    text=[f"{v:+.0%}" if v == v else "" for v in _s["vs_last_year"]],
+                    textposition="top center",
+                    textfont=dict(size=10, color=NEG),
+                    showlegend=False, hoverinfo="skip"))
+                fig2.update_layout(
+                    height=330, margin=dict(l=10, r=10, t=26, b=10), barmode="overlay",
+                    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                    font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                    xaxis=dict(title="delivery month", showgrid=False, linecolor=BORDER),
+                    yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
+                               zeroline=False, tickformat=",",
+                               rangemode="tozero"))
+                st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+                st.markdown(
+                    f'<div class="note" style="margin-top:-6px;margin-bottom:14px;">'
+                    f'USDA&rsquo;s own heading is &ldquo;Cumulative Total for Listed Months&rdquo; '
+                    f'&mdash; cattle contracted and still to be delivered, by the month they are '
+                    f'due. <b>The near months are the ones that bear on this week&rsquo;s '
+                    f'bidding</b>: cattle contracted for next spring do nothing for a packer '
+                    f'filling a kill on Thursday. The sixteen monthly totals add back to the '
+                    f'published book figure '
+                    + ('<b>exactly</b>' if _ok else '<b style="color:%s;">— and currently do '
+                       'NOT, so the row layout has moved and these figures should not be '
+                       'trusted</b>' % NEG)
+                    + f', which is the audit on this table.</div>', unsafe_allow_html=True)
+
+            _ow, _cm = _L.get("owned"), _L.get("committed")
+            _bits = []
+            if _ow is not None and pd.notna(_ow["packer_owned"]):
+                _bits.append(f'<b>{_ow["packer_owned"]:,.0f} hd</b> were packer-owned and fed')
+            if _cm is not None and pd.notna(_cm.get("signings_vs_pace")):
+                _bits.append(f'and new commitments ran at <b>{_cm["signings_vs_pace"]:.2f}&times;</b> '
+                             f'the four-week shipping pace, so the book '
+                             f'{"grew" if _cm["signings_vs_pace"] > 1 else "drained"} over the week')
+            if _bits:
+                st.markdown(
+                    f'<div class="note" style="margin-bottom:14px;">In the reported kill, '
+                    + " ".join(_bits) + '. That last ratio is a comparison of two weekly '
+                    'FLOWS &mdash; head committed during the week against head shipped &mdash; '
+                    'and is not a measure of supply on hand; the standing inventory is the '
+                    'forward book above.</div>', unsafe_allow_html=True)
+
+            # ── how current the cattle are ──────────────────────────────────────
+            # The third leg of leverage, and the one with no published series
+            # behind it. NASS carries on-feed inventory, placements and
+            # marketings but NOTHING by days fed — the "120+ days" figure analysts
+            # quote is derived, not published. The weekly tell is carcass weight:
+            # cattle held past their window get heavier, so weights running above
+            # trend mean feedyards are not current and showlists are bigger than
+            # the head count alone suggests.
+            #
+            # NO NEW REQUEST. price_df is already fetched for the Weekly tab and
+            # `weight_range_avg` rides along on it, back to 2004.
+            _wts = leverage.weight_frame(price_df)
+            _wl = leverage.weight_context(_wts, "Live")
+            _wd = leverage.weight_context(_wts, "Dressed")
+            if _wl.get("vs_trend") is not None:
+                st.markdown(
+                    f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
+                    f'How current the cattle are &mdash; weight against its own trend</div>',
+                    unsafe_allow_html=True)
+
+                w1, w2, w3 = st.columns(3)
+                with w1:
+                    st.markdown(tile("Live weight",
+                                     f"{_wl['weight']:,.0f} lb",
+                                     hd_delta_html(_wl["weight"], _wl["year_ago"]).replace(" hd", " lb"),
+                                     "tile-d14"), unsafe_allow_html=True)
+                with w2:
+                    _d = _wl["vs_trend"]
+                    st.markdown(tile("Live vs trend",
+                                     f"{_d:+,.0f} lb",
+                                     f'<div class="tile-delta-neu">trend says '
+                                     f'{_wl["expected"]:,.0f} lb</div>',
+                                     "tile-conf"), unsafe_allow_html=True)
+                with w3:
+                    st.markdown(tile("Dressed vs trend",
+                                     f"{_wd['vs_trend']:+,.0f} lb" if _wd.get("vs_trend") is not None else "—",
+                                     (f'<div class="tile-delta-neu">{_wd["weight"]:,.0f} lb, trend '
+                                      f'{_wd["expected"]:,.0f}</div>') if _wd.get("expected") else "",
+                                     "tile-del"), unsafe_allow_html=True)
+
+                _heavy = _wl["vs_trend"] > 0
+                _col = NEG if _heavy else POS
+                st.markdown(
+                    f'<div style="border-left:3px solid {_col};background:#fafbfc;padding:8px 12px;'
+                    f'margin:4px 0 12px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
+                    f'<b style="color:{_col};">Cattle are '
+                    f'{"heavier" if _heavy else "lighter"} than trend by '
+                    f'{abs(_wl["vs_trend"]):,.0f} lb.</b> '
+                    + ('Cattle held past their window put on weight, so this is feedyards '
+                       'running behind — the showlist is bigger than a head count says and '
+                       'the packer can afford to wait.'
+                       if _heavy else
+                       'Feedyards are current, so there is less standing inventory behind the '
+                       'showlist than usual and the packer has less room to wait.')
+                    + f'<br><span style="color:{MUTED};">Up {_wl["vs_year_ago"]:+,.0f} lb on the '
+                    f'year, of which about {_wl["slope"]:+,.0f} lb is the ordinary drift that '
+                    f'happens every year &mdash; fitted on the same week of the last '
+                    f'{_wl["n"]} years, so the season is not in it.</span></div>',
+                    unsafe_allow_html=True)
+
+                _hist = _wts[_wts["report_date"] >= _wts["report_date"].max()
+                             - pd.Timedelta(weeks=156)]
+                if not _hist.empty and "Live" in _hist:
+                    fig3 = go.Figure()
+                    fig3.add_trace(go.Scatter(
+                        x=_hist["report_date"], y=_hist["Live"], name="Live weight",
+                        mode="lines", line=dict(color=JPSI_BLUE, width=2),
+                        hovertemplate="%{x|%b %d, %Y}<br>%{y:,.0f} lb<extra></extra>"))
+                    fig3.update_layout(
+                        height=280, margin=dict(l=10, r=10, t=10, b=10),
+                        plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                        font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                        hovermode="x unified", showlegend=False,
+                        xaxis=dict(showgrid=False, linecolor=BORDER),
+                        yaxis=dict(title="lb, live", gridcolor="#f0f2f4", linecolor=BORDER,
+                                   zeroline=False, tickformat=","))
+                    fig3.add_hline(y=_wl["expected"], line_dash="dot", line_color=MUTED,
+                                   annotation_text="trend for this week",
+                                   annotation_position="top left")
+                    st.plotly_chart(fig3, use_container_width=True,
+                                    config={"displayModeBar": False})
+
+                st.markdown(
+                    '<div class="note" style="margin-top:-6px;margin-bottom:14px;">'
+                    '<b>There is no published days-on-feed series.</b> NASS carries on-feed '
+                    'inventory, placements and marketings, and nothing by days fed — the '
+                    '"120+ days" figure analysts quote is derived from the placement flow, '
+                    'not reported. Weight is the weekly stand-in and it has the advantage of '
+                    'arriving every Monday rather than once a month.<br><br>'
+                    '<b>Against trend, not against last year.</b> Fed cattle have got heavier '
+                    'for two decades, so a raw year-ago comparison counts ordinary drift as '
+                    'market signal. The trend here is fitted on the same ISO week of prior '
+                    'years, which removes the season as well.</div>',
+                    unsafe_allow_html=True)
+
+            _tbl = _mix.tail(12).sort_values("week", ascending=False).copy()
+            _tbl["Week ending"] = _tbl["week"].dt.strftime("%b %d")
+            _tbl["Negotiated %"] = _tbl["negotiated_pct"].map(lambda v: f"{v:.1%}")
+            _tbl["Neg grid %"] = _tbl["neg_grid_pct"].map(lambda v: f"{v:.1%}")
+            _tbl["Committed %"] = _tbl["committed_pct"].map(lambda v: f"{v:.1%}")
+            for k in ("formula", "forward", "negotiated", "neg_grid"):
+                _tbl[leverage.MIX_LABEL[k]] = _tbl[k].map(lambda v: f"{v:,.0f}")
+            _tbl["Total kill"] = _tbl["total"].map(lambda v: f"{v:,.0f}")
+            st.dataframe(
+                _tbl[["Week ending", "Negotiated %", "Neg grid %", "Committed %",
+                      "Negotiated cash", "Negotiated grid", "Formula", "Forward contract",
+                      "Total kill"]],
+                use_container_width=True, hide_index=True)
 
             st.markdown(
-                '<div class="note" style="margin-top:-6px;margin-bottom:14px;">'
-                '<b>There is no published days-on-feed series.</b> NASS carries on-feed '
-                'inventory, placements and marketings, and nothing by days fed — the '
-                '"120+ days" figure analysts quote is derived from the placement flow, '
-                'not reported. Weight is the weekly stand-in and it has the advantage of '
-                'arriving every Monday rather than once a month.<br><br>'
-                '<b>Against trend, not against last year.</b> Fed cattle have got heavier '
-                'for two decades, so a raw year-ago comparison counts ordinary drift as '
-                'market signal. The trend here is fitted on the same ISO week of prior '
-                'years, which removes the season as well.</div>',
+                '<div class="note" style="margin-top:10px;">'
+                '<b>What this is.</b> USDA breaks the slaughter it reports down by how each '
+                'animal was bought. Formula and forward cattle were priced before the week '
+                'began, so they are supply the packer never has to bid for; only the '
+                'negotiated share has to find a price now. A low negotiated share means the '
+                'packer can stand back from the cash market, and a high one means they '
+                'cannot.<br><br>'
+                '<b>The number this does NOT give you.</b> It is the share of the '
+                '<i>reported</i> kill, not of total US fed slaughter — plants outside the '
+                'mandatory reporting universe are not in the denominator. Use it as a ratio '
+                'over time, which is how it is published, rather than as a head count of the '
+                'national market.<br><br>'
+                '<b>It also lags.</b> LM_CT153 reports the PRIOR week\'s slaughter, so the '
+                'newest row here is a week behind the daily cash prices on the other tabs. '
+                'That is USDA\'s publication schedule, not a staleness bug.</div>',
                 unsafe_allow_html=True)
-
-        _tbl = _mix.tail(12).sort_values("week", ascending=False).copy()
-        _tbl["Week ending"] = _tbl["week"].dt.strftime("%b %d")
-        _tbl["Negotiated %"] = _tbl["negotiated_pct"].map(lambda v: f"{v:.1%}")
-        _tbl["Neg grid %"] = _tbl["neg_grid_pct"].map(lambda v: f"{v:.1%}")
-        _tbl["Committed %"] = _tbl["committed_pct"].map(lambda v: f"{v:.1%}")
-        for k in ("formula", "forward", "negotiated", "neg_grid"):
-            _tbl[leverage.MIX_LABEL[k]] = _tbl[k].map(lambda v: f"{v:,.0f}")
-        _tbl["Total kill"] = _tbl["total"].map(lambda v: f"{v:,.0f}")
-        st.dataframe(
-            _tbl[["Week ending", "Negotiated %", "Neg grid %", "Committed %",
-                  "Negotiated cash", "Negotiated grid", "Formula", "Forward contract",
-                  "Total kill"]],
-            use_container_width=True, hide_index=True)
-
-        st.markdown(
-            '<div class="note" style="margin-top:10px;">'
-            '<b>What this is.</b> USDA breaks the slaughter it reports down by how each '
-            'animal was bought. Formula and forward cattle were priced before the week '
-            'began, so they are supply the packer never has to bid for; only the '
-            'negotiated share has to find a price now. A low negotiated share means the '
-            'packer can stand back from the cash market, and a high one means they '
-            'cannot.<br><br>'
-            '<b>The number this does NOT give you.</b> It is the share of the '
-            '<i>reported</i> kill, not of total US fed slaughter — plants outside the '
-            'mandatory reporting universe are not in the denominator. Use it as a ratio '
-            'over time, which is how it is published, rather than as a head count of the '
-            'national market.<br><br>'
-            '<b>It also lags.</b> LM_CT153 reports the PRIOR week\'s slaughter, so the '
-            'newest row here is a week behind the daily cash prices on the other tabs. '
-            'That is USDA\'s publication schedule, not a staleness bug.</div>',
-            unsafe_allow_html=True)
 
 
 # ── WASDE steer price ────────────────────────────────────────────────────────
@@ -3449,7 +3492,8 @@ with tab_lev:
 # means it already ran on every load from the weekly tab; it now runs from
 # here instead.
 with tab_wasde:
-    wasde_steer_panel()
+    if tab_wasde.open:
+        wasde_steer_panel()
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────

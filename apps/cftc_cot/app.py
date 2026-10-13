@@ -522,14 +522,19 @@ def tab_cit():
                "groups. Covers 13 ag markets, futures and options combined.")
 
 
-t1, t2, t3, t4, t5 = st.tabs(["Snapshot", "Market detail", "Seasonal", "Long history", "Index traders"])
+t1, t2, t3, t4, t5 = st.tabs(["Snapshot", "Market detail", "Seasonal", "Long history", "Index traders"], on_change="rerun")
 with t1:
-    tab_snapshot()
+    if t1.open:
+        tab_snapshot()
 with t2:
-    tab_detail()
+    if t2.open:
+        tab_detail()
 with t3:
-    tab_seasonal()
+    if t3.open:
+        tab_seasonal()
 with t4:
-    tab_history()
+    if t4.open:
+        tab_history()
 with t5:
-    tab_cit()
+    if t5.open:
+        tab_cit()

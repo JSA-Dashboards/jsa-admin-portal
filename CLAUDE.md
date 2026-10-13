@@ -38,7 +38,7 @@ which left 13 of 16 bundled apps behind their source by October 2026.
 
 ## Lazy tabs: only the open tab runs (2026-10-12)
 
-`st.tabs()` builds every tab on every run. Basis Tracker (13 tabs) and River FOB (11) now use
+`st.tabs()` builds every tab on every run. Basis Tracker (13 tabs), River FOB (11) and, since 2026-10-13, Cost of Carry, Grain Seasonal, Vessel Lineup, RMA map, CFTC COT, Domestic Production, USDA rail, and the livestock apps (inventory, beef weight, cattle on feed, cash trade, feeder cattle) now use
 `st.tabs(..., on_change="rerun")` with each body behind `if <tab>.open:`, so a first open or a
 tab click runs only the tab being viewed. The rewrite is done by `sync/lazy_tabs.py` (run it
 on the source repo's `app.py`, never on `apps/`): `check` lists any name a tab sets that another

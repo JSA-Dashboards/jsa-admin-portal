@@ -1120,11 +1120,13 @@ if raw.empty:
     # the forecast down with it") was true inside the tab and false about the
     # page.
     _sat, _wasde_tab = st.tabs(["📅  Saturday Slaughter",
-                                "🥩  USDA WASDE forecast"])
+                                "🥩  USDA WASDE forecast"], on_change="rerun")
     with _sat:
-        render_saturday_slaughter()
+        if _sat.open:
+            render_saturday_slaughter()
     with _wasde_tab:
-        _render_wasde_production()
+        if _wasde_tab.open:
+            _render_wasde_production()
     st.stop()
 
 wt  = raw[raw["unit_desc"].str.contains(unit_filter, case=False, na=False)].copy()
@@ -1352,7 +1354,7 @@ _page_summary, _page_nass, _page_ams, _page_sat, _page_prod = st.tabs([
     "🗓️  AMS Weekly Slaughter",
     "📅  Saturday Slaughter",
     "🥩  Beef Production",
-])
+], on_change="rerun")
 
 
 def _render_nass():
@@ -1535,332 +1537,336 @@ def _render_nass():
 
     tab_trend, tab_yoy, tab_vol, tab_data = st.tabs([
         "📈 Weekly Trend", "📊 Year-over-Year", "🔢 Slaughter Volume", "📋 Data"
-    ])
+    ], on_change="rerun")
 
 
     # ── Tab 1 — Weekly Trend ───────────────────────────────────────────────────────
 
     with tab_trend:
-        cls = trend_class
-        sub = wt[wt["class_desc"] == cls].sort_values("week_ending")
+        if tab_trend.open:
+            cls = trend_class
+            sub = wt[wt["class_desc"] == cls].sort_values("week_ending")
 
-        if sub.empty:
-            st.warning("No data for selected class.")
-        else:
-            # Build current year window — all weeks available for latest_year
-            curr_yr = sub[sub["year"] == latest_year].sort_values("week_ending")
-            # Apply trend window cutoff
-            cutoff = curr_yr["week_ending"].max() - pd.Timedelta(weeks=trend_weeks)
-            curr_yr = curr_yr[curr_yr["week_ending"] > cutoff]
+            if sub.empty:
+                st.warning("No data for selected class.")
+            else:
+                # Build current year window — all weeks available for latest_year
+                curr_yr = sub[sub["year"] == latest_year].sort_values("week_ending")
+                # Apply trend window cutoff
+                cutoff = curr_yr["week_ending"].max() - pd.Timedelta(weeks=trend_weeks)
+                curr_yr = curr_yr[curr_yr["week_ending"] > cutoff]
 
-            # Build an ISO-week → current-year date lookup for aligning all series to same X axis
-            iso_to_date = curr_yr.set_index("iso_week")["week_ending"].to_dict()
-            x_dates = curr_yr["week_ending"].values
-            iso_weeks = curr_yr["iso_week"].values
+                # Build an ISO-week → current-year date lookup for aligning all series to same X axis
+                iso_to_date = curr_yr.set_index("iso_week")["week_ending"].to_dict()
+                x_dates = curr_yr["week_ending"].values
+                iso_weeks = curr_yr["iso_week"].values
 
-            # Prior year — map onto current year dates by ISO week
-            prev_lookup = sub[sub["year"] == latest_year - 1].set_index("iso_week")["Value"].to_dict()
-            prev_y = [prev_lookup.get(w, float("nan")) for w in iso_weeks]
+                # Prior year — map onto current year dates by ISO week
+                prev_lookup = sub[sub["year"] == latest_year - 1].set_index("iso_week")["Value"].to_dict()
+                prev_y = [prev_lookup.get(w, float("nan")) for w in iso_weeks]
 
-            # 5yr avg and range — mapped to current year dates
-            prior_map = prior_years_series(sub, latest_year)
-            prior_y    = [prior_map.get(w, float("nan")) for w in iso_weeks]
-            prior_highs, prior_lows = [], []
-            for w in iso_weeks:
-                yr_vals = [_nearest_week(sub, latest_year - i, w) for i in range(1, 6)]
-                yr_vals = [v for v in yr_vals if not pd.isna(v)]
-                prior_highs.append(max(yr_vals) if yr_vals else float("nan"))
-                prior_lows.append(min(yr_vals) if yr_vals else float("nan"))
+                # 5yr avg and range — mapped to current year dates
+                prior_map = prior_years_series(sub, latest_year)
+                prior_y    = [prior_map.get(w, float("nan")) for w in iso_weeks]
+                prior_highs, prior_lows = [], []
+                for w in iso_weeks:
+                    yr_vals = [_nearest_week(sub, latest_year - i, w) for i in range(1, 6)]
+                    yr_vals = [v for v in yr_vals if not pd.isna(v)]
+                    prior_highs.append(max(yr_vals) if yr_vals else float("nan"))
+                    prior_lows.append(min(yr_vals) if yr_vals else float("nan"))
 
-            # 4-week rolling avg for current year
-            sub_roll = sub[sub["year"] == latest_year].sort_values("week_ending").copy()
-            sub_roll["t4w"] = sub_roll["Value"].rolling(4, min_periods=1).mean()
-            roll_lookup = sub_roll.set_index("iso_week")["t4w"].to_dict()
-            roll_y = [roll_lookup.get(w, float("nan")) for w in iso_weeks]
+                # 4-week rolling avg for current year
+                sub_roll = sub[sub["year"] == latest_year].sort_values("week_ending").copy()
+                sub_roll["t4w"] = sub_roll["Value"].rolling(4, min_periods=1).mean()
+                roll_lookup = sub_roll.set_index("iso_week")["t4w"].to_dict()
+                roll_y = [roll_lookup.get(w, float("nan")) for w in iso_weeks]
 
-            fig = go.Figure()
+                fig = go.Figure()
 
-            # 5yr range band
-            fig.add_trace(go.Scatter(
-                x=list(x_dates) + list(x_dates)[::-1],
-                y=prior_highs + prior_lows[::-1],
-                fill="toself", fillcolor="rgba(122,153,144,0.12)",
-                line=dict(color="rgba(0,0,0,0)"),
-                name="5yr Range", hoverinfo="skip", showlegend=True,
-            ))
+                # 5yr range band
+                fig.add_trace(go.Scatter(
+                    x=list(x_dates) + list(x_dates)[::-1],
+                    y=prior_highs + prior_lows[::-1],
+                    fill="toself", fillcolor="rgba(122,153,144,0.12)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="5yr Range", hoverinfo="skip", showlegend=True,
+                ))
 
-            # 5yr avg line
-            fig.add_trace(go.Scatter(
-                x=x_dates, y=prior_y,
-                name="5yr Avg", mode="lines",
-                line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
-                hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
-            ))
+                # 5yr avg line
+                fig.add_trace(go.Scatter(
+                    x=x_dates, y=prior_y,
+                    name="5yr Avg", mode="lines",
+                    line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
+                    hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
+                ))
 
-            # Prior year — same X dates as current year
-            fig.add_trace(go.Scatter(
-                x=x_dates, y=prev_y,
-                name=str(latest_year - 1), mode="lines",
-                line=dict(color="rgba(224,232,240,0.5)", width=1.5, dash="dot"),
-                hovertemplate=f"{latest_year-1}: %{{y:,.1f}} lb<extra></extra>",
-            ))
+                # Prior year — same X dates as current year
+                fig.add_trace(go.Scatter(
+                    x=x_dates, y=prev_y,
+                    name=str(latest_year - 1), mode="lines",
+                    line=dict(color="rgba(224,232,240,0.5)", width=1.5, dash="dot"),
+                    hovertemplate=f"{latest_year-1}: %{{y:,.1f}} lb<extra></extra>",
+                ))
 
-            # Current year
-            fig.add_trace(go.Scatter(
-                x=x_dates, y=curr_yr["Value"].values,
-                name=str(latest_year), mode="lines+markers",
-                line=dict(color=JPSI_GREEN, width=2.5),
-                marker=dict(size=5, color=JPSI_GREEN),
-                hovertemplate=f"{latest_year}: %{{y:,.1f}} lb<extra></extra>",
-            ))
+                # Current year
+                fig.add_trace(go.Scatter(
+                    x=x_dates, y=curr_yr["Value"].values,
+                    name=str(latest_year), mode="lines+markers",
+                    line=dict(color=JPSI_GREEN, width=2.5),
+                    marker=dict(size=5, color=JPSI_GREEN),
+                    hovertemplate=f"{latest_year}: %{{y:,.1f}} lb<extra></extra>",
+                ))
 
-            # 4-week rolling avg
-            fig.add_trace(go.Scatter(
-                x=x_dates, y=roll_y,
-                name="4-Wk Rolling Avg", mode="lines",
-                line=dict(color="#fbbf24", width=2, dash="dashdot"),
-                hovertemplate="4-wk avg: %{y:,.1f} lb<extra></extra>",
-            ))
+                # 4-week rolling avg
+                fig.add_trace(go.Scatter(
+                    x=x_dates, y=roll_y,
+                    name="4-Wk Rolling Avg", mode="lines",
+                    line=dict(color="#fbbf24", width=2, dash="dashdot"),
+                    hovertemplate="4-wk avg: %{y:,.1f} lb<extra></extra>",
+                ))
 
-            _wt_vals = list(curr_yr["Value"]) + [v for v in prev_y if not pd.isna(v)] + [v for v in prior_y if not pd.isna(v)]
-            _apply(fig, f"{cls.title()} — {weight_unit} · Last {trend_weeks} Weeks", 440, "lb / head",
-                   y_range=_tight_range(_wt_vals))
-            st.plotly_chart(fig, use_container_width=True)
+                _wt_vals = list(curr_yr["Value"]) + [v for v in prev_y if not pd.isna(v)] + [v for v in prior_y if not pd.isna(v)]
+                _apply(fig, f"{cls.title()} — {weight_unit} · Last {trend_weeks} Weeks", 440, "lb / head",
+                       y_range=_tight_range(_wt_vals))
+                st.plotly_chart(fig, use_container_width=True)
 
-            # WoW delta bars
-            recent = sub[sub["week_ending"] > cutoff].copy()
-            recent["wow_delta"] = recent["Value"].diff()
-            recent = recent.dropna(subset=["wow_delta"])
+                # WoW delta bars
+                recent = sub[sub["week_ending"] > cutoff].copy()
+                recent["wow_delta"] = recent["Value"].diff()
+                recent = recent.dropna(subset=["wow_delta"])
 
-            fig2 = go.Figure(go.Bar(
-                x=recent["week_ending"],
-                y=recent["wow_delta"],
-                marker_color=[COL_POS if v >= 0 else COL_NEG for v in recent["wow_delta"]],
-                hovertemplate="WoW: %{y:+.1f} lb<extra></extra>",
-            ))
-            fig2.add_hline(y=0, line_color=DM_BORDER)
-            _apply(fig2, "Week-over-Week Change", 240, "\u0394 lb / head")
-            st.plotly_chart(fig2, use_container_width=True)
+                fig2 = go.Figure(go.Bar(
+                    x=recent["week_ending"],
+                    y=recent["wow_delta"],
+                    marker_color=[COL_POS if v >= 0 else COL_NEG for v in recent["wow_delta"]],
+                    hovertemplate="WoW: %{y:+.1f} lb<extra></extra>",
+                ))
+                fig2.add_hline(y=0, line_color=DM_BORDER)
+                _apply(fig2, "Week-over-Week Change", 240, "\u0394 lb / head")
+                st.plotly_chart(fig2, use_container_width=True)
 
 
     # ── Tab 2 — Year-over-Year ─────────────────────────────────────────────────────
 
     with tab_yoy:
-        yoy_cls = st.selectbox(
-            "Class",
-            [c for c in CLASS_ORDER if not wt[wt["class_desc"] == c].empty],
-            format_func=_fmt_cls,
-            key="yoy_cls",
-        )
-        n_years = st.slider("Years to compare", 3, 10, 6, key="yoy_n")
+        if tab_yoy.open:
+            yoy_cls = st.selectbox(
+                "Class",
+                [c for c in CLASS_ORDER if not wt[wt["class_desc"] == c].empty],
+                format_func=_fmt_cls,
+                key="yoy_cls",
+            )
+            n_years = st.slider("Years to compare", 3, 10, 6, key="yoy_n")
 
-        yoy_sub = wt[wt["class_desc"] == yoy_cls].copy()
-        if yoy_sub.empty:
-            st.warning("No data.")
-        else:
-            yoy_sub["day_of_year"] = yoy_sub["week_ending"].dt.dayofyear
-            ly_max  = yoy_sub["year"].max()
-            yr_list = [y for y in range(ly_max - n_years + 1, ly_max + 1)
-                       if y in yoy_sub["year"].unique()]
+            yoy_sub = wt[wt["class_desc"] == yoy_cls].copy()
+            if yoy_sub.empty:
+                st.warning("No data.")
+            else:
+                yoy_sub["day_of_year"] = yoy_sub["week_ending"].dt.dayofyear
+                ly_max  = yoy_sub["year"].max()
+                yr_list = [y for y in range(ly_max - n_years + 1, ly_max + 1)
+                           if y in yoy_sub["year"].unique()]
 
-            month_ticks  = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
-            month_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+                month_ticks  = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+                month_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
-            # ── Multi-year overlay ────────────────────────────────────────────────
-            fig3 = go.Figure()
+                # ── Multi-year overlay ────────────────────────────────────────────────
+                fig3 = go.Figure()
 
-            # 5yr average band
-            prior_all = prior_years_series(yoy_sub, ly_max, n=5)
-            all_doys = sorted(yoy_sub["day_of_year"].unique())
-            doy_to_iso = yoy_sub.groupby("day_of_year")["iso_week"].first().to_dict()
-            prior_y_all = [prior_all.get(doy_to_iso.get(d, 0), float("nan")) for d in all_doys]
+                # 5yr average band
+                prior_all = prior_years_series(yoy_sub, ly_max, n=5)
+                all_doys = sorted(yoy_sub["day_of_year"].unique())
+                doy_to_iso = yoy_sub.groupby("day_of_year")["iso_week"].first().to_dict()
+                prior_y_all = [prior_all.get(doy_to_iso.get(d, 0), float("nan")) for d in all_doys]
 
-            # Range band
-            prior_high_all, prior_low_all = [], []
-            for d in all_doys:
-                iw = doy_to_iso.get(d, 0)
-                yr_vals = [_nearest_week(yoy_sub, ly_max - i, iw) for i in range(1, 6)]
-                yr_vals = [v for v in yr_vals if not pd.isna(v)]
-                prior_high_all.append(max(yr_vals) if yr_vals else float("nan"))
-                prior_low_all.append(min(yr_vals) if yr_vals else float("nan"))
+                # Range band
+                prior_high_all, prior_low_all = [], []
+                for d in all_doys:
+                    iw = doy_to_iso.get(d, 0)
+                    yr_vals = [_nearest_week(yoy_sub, ly_max - i, iw) for i in range(1, 6)]
+                    yr_vals = [v for v in yr_vals if not pd.isna(v)]
+                    prior_high_all.append(max(yr_vals) if yr_vals else float("nan"))
+                    prior_low_all.append(min(yr_vals) if yr_vals else float("nan"))
 
-            fig3.add_trace(go.Scatter(
-                x=all_doys + all_doys[::-1],
-                y=prior_high_all + prior_low_all[::-1],
-                fill="toself", fillcolor="rgba(122,153,144,0.10)",
-                line=dict(color="rgba(0,0,0,0)"),
-                name="5yr Range", hoverinfo="skip",
-            ))
-            fig3.add_trace(go.Scatter(
-                x=all_doys, y=prior_y_all,
-                name="5yr Avg",
-                mode="lines",
-                line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
-                hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
-            ))
-
-            for yr in yr_list:
-                yd = yoy_sub[yoy_sub["year"] == yr].sort_values("day_of_year")
-                is_cur = yr == ly_max
                 fig3.add_trace(go.Scatter(
-                    x=yd["day_of_year"], y=yd["Value"],
-                    name=str(yr), mode="lines",
-                    line=dict(
-                        color=JPSI_GREEN if is_cur else CLASS_COLORS.get(yoy_cls, DM_MUTED),
-                        width=2.5 if is_cur else 1.2,
-                        dash="solid" if is_cur else "dot",
-                    ),
-                    opacity=1.0 if is_cur else 0.5,
-                    hovertemplate=f"{yr}: %{{y:,.1f}} lb<extra></extra>",
+                    x=all_doys + all_doys[::-1],
+                    y=prior_high_all + prior_low_all[::-1],
+                    fill="toself", fillcolor="rgba(122,153,144,0.10)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="5yr Range", hoverinfo="skip",
+                ))
+                fig3.add_trace(go.Scatter(
+                    x=all_doys, y=prior_y_all,
+                    name="5yr Avg",
+                    mode="lines",
+                    line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
+                    hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
                 ))
 
-            _apply(fig3, f"{yoy_cls.title()} — Year-over-Year Overlay", 460, "lb / head")
-            fig3.update_xaxes(tickmode="array", tickvals=month_ticks, ticktext=month_labels)
-            st.plotly_chart(fig3, use_container_width=True)
+                for yr in yr_list:
+                    yd = yoy_sub[yoy_sub["year"] == yr].sort_values("day_of_year")
+                    is_cur = yr == ly_max
+                    fig3.add_trace(go.Scatter(
+                        x=yd["day_of_year"], y=yd["Value"],
+                        name=str(yr), mode="lines",
+                        line=dict(
+                            color=JPSI_GREEN if is_cur else CLASS_COLORS.get(yoy_cls, DM_MUTED),
+                            width=2.5 if is_cur else 1.2,
+                            dash="solid" if is_cur else "dot",
+                        ),
+                        opacity=1.0 if is_cur else 0.5,
+                        hovertemplate=f"{yr}: %{{y:,.1f}} lb<extra></extra>",
+                    ))
 
-            # ── Same-week YoY comparison bar chart ───────────────────────────────
-            st.markdown('<div class="sec-hdr">Same Week — Value by Year</div>', unsafe_allow_html=True)
-            wk_vals = []
-            for yr in range(ly_max - n_years + 1, ly_max + 1):
-                v = _nearest_week(yoy_sub, yr, latest_iso)
-                prior_val = prior_years_avg(yoy_sub, yr, latest_iso)
-                wk_vals.append({"Year": yr, "Value": v, "PriorAvg": prior_val})
-            wk_df = pd.DataFrame(wk_vals).dropna(subset=["Value"])
+                _apply(fig3, f"{yoy_cls.title()} — Year-over-Year Overlay", 460, "lb / head")
+                fig3.update_xaxes(tickmode="array", tickvals=month_ticks, ticktext=month_labels)
+                st.plotly_chart(fig3, use_container_width=True)
 
-            fig4 = go.Figure()
-            fig4.add_trace(go.Bar(
-                x=wk_df["Year"], y=wk_df["Value"],
-                name="Actual",
-                marker_color=[JPSI_GREEN if yr == ly_max else "rgba(74,222,128,0.45)"
-                              for yr in wk_df["Year"]],
-                hovertemplate="%{x}: %{y:,.1f} lb<extra></extra>",
-            ))
-            fig4.add_trace(go.Scatter(
-                x=wk_df["Year"], y=wk_df["PriorAvg"],
-                name="5yr Avg",
-                mode="lines+markers",
-                line=dict(color=DM_MUTED, dash="dash", width=1.5),
-                hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
-            ))
-            _apply(fig4, f"ISO Week {latest_iso} — Historical Comparison", 300, "lb / head")
-            fig4.update_xaxes(tickmode="linear", dtick=1)
-            st.plotly_chart(fig4, use_container_width=True)
+                # ── Same-week YoY comparison bar chart ───────────────────────────────
+                st.markdown('<div class="sec-hdr">Same Week — Value by Year</div>', unsafe_allow_html=True)
+                wk_vals = []
+                for yr in range(ly_max - n_years + 1, ly_max + 1):
+                    v = _nearest_week(yoy_sub, yr, latest_iso)
+                    prior_val = prior_years_avg(yoy_sub, yr, latest_iso)
+                    wk_vals.append({"Year": yr, "Value": v, "PriorAvg": prior_val})
+                wk_df = pd.DataFrame(wk_vals).dropna(subset=["Value"])
 
-            # ── YoY delta vs 5yr avg ──────────────────────────────────────────────
-            st.markdown('<div class="sec-hdr">Current Year vs 5yr Avg — Weekly Delta</div>', unsafe_allow_html=True)
-            curr_full = yoy_sub[yoy_sub["year"] == ly_max].sort_values("iso_week")
-            prior_curr = [prior_years_avg(yoy_sub, ly_max, w) for w in curr_full["iso_week"]]
-            curr_full = curr_full.copy()
-            curr_full["vs_prior_avg"] = curr_full["Value"].values - pd.array(prior_curr)
+                fig4 = go.Figure()
+                fig4.add_trace(go.Bar(
+                    x=wk_df["Year"], y=wk_df["Value"],
+                    name="Actual",
+                    marker_color=[JPSI_GREEN if yr == ly_max else "rgba(74,222,128,0.45)"
+                                  for yr in wk_df["Year"]],
+                    hovertemplate="%{x}: %{y:,.1f} lb<extra></extra>",
+                ))
+                fig4.add_trace(go.Scatter(
+                    x=wk_df["Year"], y=wk_df["PriorAvg"],
+                    name="5yr Avg",
+                    mode="lines+markers",
+                    line=dict(color=DM_MUTED, dash="dash", width=1.5),
+                    hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
+                ))
+                _apply(fig4, f"ISO Week {latest_iso} — Historical Comparison", 300, "lb / head")
+                fig4.update_xaxes(tickmode="linear", dtick=1)
+                st.plotly_chart(fig4, use_container_width=True)
 
-            fig5 = go.Figure(go.Bar(
-                x=curr_full["week_ending"],
-                y=curr_full["vs_prior_avg"],
-                marker_color=[COL_POS if v >= 0 else COL_NEG for v in curr_full["vs_prior_avg"]],
-                hovertemplate="%{x|%b %d}: %{y:+.1f} lb vs 5yr avg<extra></extra>",
-            ))
-            fig5.add_hline(y=0, line_color=DM_BORDER)
-            _apply(fig5, f"{ly_max} vs 5yr Avg — Weekly \u0394", 260, "\u0394 lb / head")
-            st.plotly_chart(fig5, use_container_width=True)
+                # ── YoY delta vs 5yr avg ──────────────────────────────────────────────
+                st.markdown('<div class="sec-hdr">Current Year vs 5yr Avg — Weekly Delta</div>', unsafe_allow_html=True)
+                curr_full = yoy_sub[yoy_sub["year"] == ly_max].sort_values("iso_week")
+                prior_curr = [prior_years_avg(yoy_sub, ly_max, w) for w in curr_full["iso_week"]]
+                curr_full = curr_full.copy()
+                curr_full["vs_prior_avg"] = curr_full["Value"].values - pd.array(prior_curr)
+
+                fig5 = go.Figure(go.Bar(
+                    x=curr_full["week_ending"],
+                    y=curr_full["vs_prior_avg"],
+                    marker_color=[COL_POS if v >= 0 else COL_NEG for v in curr_full["vs_prior_avg"]],
+                    hovertemplate="%{x|%b %d}: %{y:+.1f} lb vs 5yr avg<extra></extra>",
+                ))
+                fig5.add_hline(y=0, line_color=DM_BORDER)
+                _apply(fig5, f"{ly_max} vs 5yr Avg — Weekly \u0394", 260, "\u0394 lb / head")
+                st.plotly_chart(fig5, use_container_width=True)
 
 
     # ── Tab 3 — Slaughter Volume ───────────────────────────────────────────────────
 
     with tab_vol:
-        if vol.empty:
-            st.warning("No slaughter volume data.")
-        else:
-            vol_cls = st.multiselect(
-                "Classes",
-                CLASS_ORDER,
-                default=["GE 500 LBS", "STEERS", "HEIFERS"],
-                format_func=_fmt_cls,
-                key="vol_cls",
-            )
-            if not vol_cls:
-                vol_cls = ["GE 500 LBS"]
-
-            vol_cutoff = vol["week_ending"].max() - pd.Timedelta(weeks=trend_weeks)
-
-            fig6 = go.Figure()
-            for cls in vol_cls:
-                cd = vol[(vol["class_desc"] == cls) & (vol["week_ending"] > vol_cutoff)].sort_values("week_ending")
-                if cd.empty:
-                    continue
-                fig6.add_trace(go.Scatter(
-                    x=cd["week_ending"], y=cd["Value"],
-                    name=VOL_DISPLAY.get(cls, cls.title()), mode="lines",
-                    line=dict(color=CLASS_COLORS.get(cls, DM_MUTED), width=2),
-                    hovertemplate="%{y:,.0f} head<extra>%{fullData.name}</extra>",
-                ))
-            _vol_vals = [v for cls in vol_cls
-                         for v in vol[(vol["class_desc"]==cls)&(vol["week_ending"]>vol_cutoff)]["Value"]]
-            _apply(fig6, f"Weekly Slaughter — Head Count · Last {trend_weeks} Weeks", 420, "Head",
-                   y_range=_tight_range(_vol_vals))
-            st.plotly_chart(fig6, use_container_width=True)
-
-            # Latest week pie
-            latest_vol_date = vol["week_ending"].max()
-            pie_data = vol[
-                (vol["week_ending"] == latest_vol_date) &
-                (vol["class_desc"].isin(["STEERS", "HEIFERS", "COWS", "BULLS", "CALVES"]))
-            ]
-            if not pie_data.empty:
-                st.markdown(f'<div class="sec-hdr">Week of {latest_vol_date.strftime("%B %d, %Y")} — Class Mix</div>',
-                            unsafe_allow_html=True)
-                fig7 = go.Figure(go.Pie(
-                    labels=pie_data["class_desc"].map(lambda c: VOL_DISPLAY.get(c, c.title())),
-                    values=pie_data["Value"],
-                    marker_colors=[CLASS_COLORS.get(c, DM_MUTED) for c in pie_data["class_desc"]],
-                    hole=0.45, textinfo="label+percent",
-                    hovertemplate="%{label}: %{value:,.0f} head<extra></extra>",
-                ))
-                fig7.update_layout(
-                    paper_bgcolor=DM_SURFACE2, plot_bgcolor=DM_SURFACE2,
-                    font=dict(color=DM_TEXT), showlegend=False,
-                    height=300, margin=dict(l=20, r=20, t=10, b=10),
+        if tab_vol.open:
+            if vol.empty:
+                st.warning("No slaughter volume data.")
+            else:
+                vol_cls = st.multiselect(
+                    "Classes",
+                    CLASS_ORDER,
+                    default=["GE 500 LBS", "STEERS", "HEIFERS"],
+                    format_func=_fmt_cls,
+                    key="vol_cls",
                 )
-                st.plotly_chart(fig7, use_container_width=True)
+                if not vol_cls:
+                    vol_cls = ["GE 500 LBS"]
+
+                vol_cutoff = vol["week_ending"].max() - pd.Timedelta(weeks=trend_weeks)
+
+                fig6 = go.Figure()
+                for cls in vol_cls:
+                    cd = vol[(vol["class_desc"] == cls) & (vol["week_ending"] > vol_cutoff)].sort_values("week_ending")
+                    if cd.empty:
+                        continue
+                    fig6.add_trace(go.Scatter(
+                        x=cd["week_ending"], y=cd["Value"],
+                        name=VOL_DISPLAY.get(cls, cls.title()), mode="lines",
+                        line=dict(color=CLASS_COLORS.get(cls, DM_MUTED), width=2),
+                        hovertemplate="%{y:,.0f} head<extra>%{fullData.name}</extra>",
+                    ))
+                _vol_vals = [v for cls in vol_cls
+                             for v in vol[(vol["class_desc"]==cls)&(vol["week_ending"]>vol_cutoff)]["Value"]]
+                _apply(fig6, f"Weekly Slaughter — Head Count · Last {trend_weeks} Weeks", 420, "Head",
+                       y_range=_tight_range(_vol_vals))
+                st.plotly_chart(fig6, use_container_width=True)
+
+                # Latest week pie
+                latest_vol_date = vol["week_ending"].max()
+                pie_data = vol[
+                    (vol["week_ending"] == latest_vol_date) &
+                    (vol["class_desc"].isin(["STEERS", "HEIFERS", "COWS", "BULLS", "CALVES"]))
+                ]
+                if not pie_data.empty:
+                    st.markdown(f'<div class="sec-hdr">Week of {latest_vol_date.strftime("%B %d, %Y")} — Class Mix</div>',
+                                unsafe_allow_html=True)
+                    fig7 = go.Figure(go.Pie(
+                        labels=pie_data["class_desc"].map(lambda c: VOL_DISPLAY.get(c, c.title())),
+                        values=pie_data["Value"],
+                        marker_colors=[CLASS_COLORS.get(c, DM_MUTED) for c in pie_data["class_desc"]],
+                        hole=0.45, textinfo="label+percent",
+                        hovertemplate="%{label}: %{value:,.0f} head<extra></extra>",
+                    ))
+                    fig7.update_layout(
+                        paper_bgcolor=DM_SURFACE2, plot_bgcolor=DM_SURFACE2,
+                        font=dict(color=DM_TEXT), showlegend=False,
+                        height=300, margin=dict(l=20, r=20, t=10, b=10),
+                    )
+                    st.plotly_chart(fig7, use_container_width=True)
 
 
     # ── Tab 4 — Data ───────────────────────────────────────────────────────────────
 
     with tab_data:
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            tbl_cls = st.multiselect(
-                "Classes", CLASS_ORDER,
-                default=["GE 500 LBS", "STEERS", "HEIFERS"],
-                format_func=_fmt_cls,
-                key="tbl_cls",
-            )
-        with c2:
-            tbl_unit = st.selectbox(
-                "Unit",
-                ["LB / HEAD, DRESSED BASIS", "LB / HEAD, LIVE BASIS", "HEAD"],
-                key="tbl_unit",
-            )
+        if tab_data.open:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                tbl_cls = st.multiselect(
+                    "Classes", CLASS_ORDER,
+                    default=["GE 500 LBS", "STEERS", "HEIFERS"],
+                    format_func=_fmt_cls,
+                    key="tbl_cls",
+                )
+            with c2:
+                tbl_unit = st.selectbox(
+                    "Unit",
+                    ["LB / HEAD, DRESSED BASIS", "LB / HEAD, LIVE BASIS", "HEAD"],
+                    key="tbl_unit",
+                )
 
-        tbl = raw[
-            (raw["class_desc"].isin(tbl_cls or CLASS_ORDER)) &
-            (raw["unit_desc"] == tbl_unit)
-        ][["year", "week_ending", "class_desc", "unit_desc", "Value"]].copy()
-        tbl = tbl.sort_values(["week_ending", "class_desc"], ascending=[False, True])
-        tbl.columns = ["Year", "Week Ending", "Class", "Unit", "Value"]
+            tbl = raw[
+                (raw["class_desc"].isin(tbl_cls or CLASS_ORDER)) &
+                (raw["unit_desc"] == tbl_unit)
+            ][["year", "week_ending", "class_desc", "unit_desc", "Value"]].copy()
+            tbl = tbl.sort_values(["week_ending", "class_desc"], ascending=[False, True])
+            tbl.columns = ["Year", "Week Ending", "Class", "Unit", "Value"]
 
-        st.dataframe(
-            tbl, use_container_width=True, height=440,
-            column_config={
-                "Value": st.column_config.NumberColumn(format="%.1f"),
-                "Week Ending": st.column_config.DateColumn(format="MM/DD/YYYY"),
-            },
-        )
-        st.download_button(
-            "⬇ Download Excel",
-            data=_to_excel(tbl),
-            file_name=f"beef_weight_{current_year}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+            st.dataframe(
+                tbl, use_container_width=True, height=440,
+                column_config={
+                    "Value": st.column_config.NumberColumn(format="%.1f"),
+                    "Week Ending": st.column_config.DateColumn(format="MM/DD/YYYY"),
+                },
+            )
+            st.download_button(
+                "⬇ Download Excel",
+                data=_to_excel(tbl),
+                file_name=f"beef_weight_{current_year}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
 
     # ── Footer ──────────────────────────────────────────────────────────────────
@@ -2620,19 +2626,24 @@ def _render_beef_production():
 # ── Render pages ──────────────────────────────────────────────────────────────
 
 with _page_summary:
-    _render_summary()
+    if _page_summary.open:
+        _render_summary()
 
 with _page_nass:
-    _render_nass()
+    if _page_nass.open:
+        _render_nass()
 
 with _page_ams:
-    _render_ams_page()
+    if _page_ams.open:
+        _render_ams_page()
 
 with _page_sat:
-    render_saturday_slaughter()
+    if _page_sat.open:
+        render_saturday_slaughter()
 
 with _page_prod:
-    _render_beef_production()
+    if _page_prod.open:
+        _render_beef_production()
 
 # ── Disclaimer Footer ──────────────────────────────────────────────────────────
 _yr = datetime.now().year

@@ -95,7 +95,7 @@ def tab_key(expr) -> str:
     return ast.unparse(expr)
 
 
-def tab_blocks(tree: ast.Module, names: set[str]) -> list[ast.With]:
+def tab_blocks(stmts0, names: set[str]) -> list[ast.With]:
     """Module-level `with tab_x:` / `with tabs[i]:` blocks, including ones nested in module-level
     if/for/try."""
     out = []
@@ -112,7 +112,7 @@ def tab_blocks(tree: ast.Module, names: set[str]) -> list[ast.With]:
                     visit(getattr(s, f, []) or [])
                 for h in getattr(s, "handlers", []) or []:
                     visit(h.body)
-    visit(tree.body)
+    visit(stmts0)
     return out
 
 
@@ -215,12 +215,12 @@ def free_names(stmts, params=frozenset()) -> set[str]:
     return loads - bound
 
 
-def shared_names(tree, blocks) -> dict[str, set[str]]:
+def shared_names(stmts, blocks) -> dict[str, set[str]]:
     """{name: who reads it} for names a tab body binds that another tab, or code outside every
     tab, reads without binding itself. Reading a name you also bind (a loop counter, a temp)
     is not sharing."""
     skip = {id(n) for b in blocks for n in ast.walk(b)}
-    outside = [s for s in tree.body if id(s) not in skip]
+    outside = [s for s in stmts if id(s) not in skip]
     module_other: set[str] = set()
     for s in outside:
         module_other |= stored_names([s])
@@ -235,6 +235,55 @@ def shared_names(tree, blocks) -> dict[str, set[str]]:
             for where, free in readers:
                 if name in free:
                     out.setdefault(name, set()).add(f"bound in block line {b.lineno}, read by {where}")
+    return out
+
+
+def _is_state(node) -> bool:
+    return (isinstance(node, ast.Attribute) and node.attr == "session_state"
+            and isinstance(node.value, ast.Name) and node.value.id == "st")
+
+
+def state_keys(node) -> tuple[set[str], set[str]]:
+    """(keys written, keys read) in st.session_state with literal names. A widget's `key="x"`
+    counts as a write: that value only exists while the widget is on the page."""
+    written, read = set(), set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Subscript) and _is_state(n.value) and isinstance(n.slice, ast.Constant) \
+                and isinstance(n.slice.value, str):
+            (written if isinstance(n.ctx, ast.Store) else read).add(n.slice.value)
+        elif isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Attribute) and _is_state(f.value) and n.args \
+                    and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
+                (read if f.attr in ("get", "pop") else written).add(n.args[0].value)
+            for k in n.keywords:
+                if k.arg == "key" and isinstance(k.value, ast.Constant) and isinstance(k.value.value, str):
+                    written.add(k.value.value)
+        elif isinstance(n, ast.Compare) and any(_is_state(c) for c in n.comparators) \
+                and isinstance(n.left, ast.Constant) and isinstance(n.left.value, str):
+            read.add(n.left.value)
+    return written, read
+
+
+def state_crosstalk(stmts, blocks) -> list[str]:
+    """Literal session_state keys that one tab sets (or makes with a widget) and another tab, or
+    code outside every tab, reads. Not fatal (the reader may default it) but worth a look."""
+    skip = {id(n) for b in blocks for n in ast.walk(b)}
+    outside = [s for s in stmts if id(s) not in skip]
+    out = []
+    for b in blocks:
+        mine = tab_key(b.items[0].context_expr)
+        wrote, _ = state_keys(b)
+        for o in blocks:
+            if tab_key(o.items[0].context_expr) == mine:
+                continue
+            _, rd = state_keys(o)
+            for k in sorted(wrote & rd):
+                out.append(f"STATE {k!r}: set in block line {b.lineno}, read in tab block line {o.lineno}")
+        for s in outside:
+            _, rd = state_keys(s)
+            for k in sorted(wrote & rd):
+                out.append(f"STATE {k!r}: set in block line {b.lineno}, read by module code line {s.lineno}")
     return out
 
 
@@ -259,12 +308,29 @@ def string_continuation_lines(text: str) -> set[int]:
     return inside
 
 
+def scopes(tree):
+    """Statement lists to look for tab blocks in: the module and every function body."""
+    out = [tree.body]
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.append(n.body)
+    return out
+
+
 def rewrite(text: str, allow: set[str]) -> tuple[str, list[str]]:
     tree = ast.parse(text)
     names, calls = tab_variables(tree)
-    blocks = tab_blocks(tree, names)
-    notes = [f"{len(calls)} st.tabs call(s), {len(blocks)} tab block(s)"]
-    clashes = {k: v for k, v in shared_names(tree, blocks).items() if k not in allow}
+    blocks, notes, clashes = [], [], {}
+    for stmts in scopes(tree):
+        bl = tab_blocks(stmts, names)
+        if not bl:
+            continue
+        blocks += bl
+        notes += state_crosstalk(stmts, bl)             # warnings only
+        for k, v in shared_names(stmts, bl).items():
+            if k not in allow:
+                clashes.setdefault(k, set()).update(v)
+    notes.insert(0, f"{len(calls)} st.tabs call(s), {len(blocks)} tab block(s)")
     if clashes:
         for k, v in sorted(clashes.items()):
             notes.append(f"SHARED {k}: " + "; ".join(sorted(v))[:200])

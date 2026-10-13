@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "0b855c1619c46fa74618281a7ff2d0f16e29792a",
+ "commit": "34e96a6e517cf9bfb7b2b7279a6b4707d2f21a6b",
  "files": {
-  "app.py": "23ae2db330821384006e1763c87b21fac8728fea5ba8678fcf4b731ac4b7fd3b",
+  "app.py": "7e4b22ad1d60d6ebb7d54ba6070b5d8a66c29bbaf881f4e3cf07d8f54f64b219",
   "fact_model/__init__.py": "3b2fbce07dc79273614dd1834cc2018ab65b7fbd9dadafb6eca2171a5df508ff",
   "fact_model/adjustments.py": "30bb907684f144fb56afd957f127ee984d5c6c9534e377b4ca5a61114b7f1863",
   "fact_model/combos.py": "b1504a96075218659e10b45abc986582391b837551fddeffaa74c240036f160e",

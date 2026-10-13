@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "f81fcac41d2de75ef9f65122b225538cc3befbe5",
+ "commit": "6cde134481f7bec08af65e315c3bd32de8aeaf36",
  "files": {
-  "app.py": "7cbb38809e447fd4d27e8547932419932138b210ccbc0802be94e0455f78d030",
+  "app.py": "7170b6ea0b467729b801c3be2f9121bf798e12dd1e9d6d5a0f281258e4889bb4",
   "barn_basis.py": "493d3f79380b98a99e2c83fbbe62a70dd4c2e8dfd7bc47400a686775590134aa",
   "barn_report.py": "18e7173f4e5a787b0e406ca093a2d47781ce93987a18323990861f725a0b00d6",
   "bucketing.py": "8daa62ecd26d2b91c61fe54b808fc54c1269e1aa7afbc28c4669ba276eeb10c8",

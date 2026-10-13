@@ -2969,22 +2969,29 @@ hence the sign flip in the denominator.
         )
 
     tabs = st.tabs(["Summary", "Spread Builder", "Spread Matrix", "Crush", "Ethanol", "VSR Tracker"]
-                   + [c["label"] for c in COMMODITIES])
+                   + [c["label"] for c in COMMODITIES], on_change="rerun")
     with tabs[0]:
-        render_summary(api_key, as_of, default_rate_pct)
+        if tabs[0].open:
+            render_summary(api_key, as_of, default_rate_pct)
     with tabs[1]:
-        render_builder(api_key, as_of, default_rate_pct)
+        if tabs[1].open:
+            render_builder(api_key, as_of, default_rate_pct)
     with tabs[2]:
-        render_matrix(api_key, as_of, default_rate_pct)
+        if tabs[2].open:
+            render_matrix(api_key, as_of, default_rate_pct)
     with tabs[3]:
-        render_crush(api_key, as_of)
+        if tabs[3].open:
+            render_crush(api_key, as_of)
     with tabs[4]:
-        render_ethanol(api_key, as_of)
+        if tabs[4].open:
+            render_ethanol(api_key, as_of)
     with tabs[5]:
-        render_vsr_tracker(api_key, as_of)
+        if tabs[5].open:
+            render_vsr_tracker(api_key, as_of)
     for tab, commodity in zip(tabs[6:], COMMODITIES):
         with tab:
-            render_commodity(commodity, api_key, as_of, default_rate_pct)
+            if tab.open:
+                render_commodity(commodity, api_key, as_of, default_rate_pct)
 
 
 if __name__ == "__main__":
