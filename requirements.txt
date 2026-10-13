@@ -31,3 +31,4 @@ pyarrow<24  # rail_fob reads its bundled shipments parquet
 urllib3>=2.0.0
 pymupdf  # yield_portal's report text and PDF parsing (import fitz)
 python-docx  # yield_portal's Word report text
+scipy>=1.11  # risk_analyzer: Black-76 normal CDF (scipy.stats.norm)

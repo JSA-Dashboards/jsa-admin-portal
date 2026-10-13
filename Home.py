@@ -126,6 +126,9 @@ LIVE_DASHBOARDS = [
     {"title": "CFTC Commitments of Traders", "category": "Futures, Options & Spreads",
      "desc": "Managed money, producer, swap and index-trader positioning across ag futures, with history back to 1986.",
      "page": "apps/cftc_cot/app.py", "url_path": "cftc-cot"},
+    {"title": "Risk Analyzer", "category": "Futures, Options & Spreads",
+     "desc": "Black-76 options & futures portfolio risk: Greeks, price/vol/time stress grids, payoff charts and VaR.",
+     "page": "apps/risk_analyzer/app.py", "url_path": "risk-analyzer"},
 
     {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",

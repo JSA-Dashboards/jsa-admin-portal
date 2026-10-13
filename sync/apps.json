@@ -165,6 +165,13 @@
     "snowflake_admin",
     "logs"
    ]
+  },
+  "risk_analyzer": {
+   "repo": "JSA-Dashboards/jsa-risk-analyzer",
+   "wrapper": "sync/templates/risk_analyzer.py",
+   "exclude": [
+    "secrets.toml.example"
+   ]
   }
  },
  "root_files": [

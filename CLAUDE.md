@@ -47,6 +47,27 @@ are none. Both apps also had every tab body run alone with the rest skipped. Cos
 a tab are discarded when you leave it, so its dropdowns reset on return.
 
 
+## Risk Analyzer (`apps/risk_analyzer/`, added 2026-10-12)
+
+A synced mirror of `JSA-Dashboards/jsa-risk-analyzer`, tile under "Futures, Options & Spreads".
+Its own `app.py` (shell + `st.navigation` + shared-password gate) can't nest, so
+`sync/templates/risk_analyzer.py` is copied in as `app.py`: the same commodity picker and header,
+a segmented control for its three pages (Risk dashboard / Add position / Import from Excel), and
+each page script run as-is. The wrapper sets `authenticated` (the portal login is the only gate)
+and `_embedded`; `add_position.py` then asks the wrapper to open the dashboard after a save
+instead of calling `st.switch_page`.
+
+- **Secrets:** upstream `jsa_risk/config.py` uses a `[snowflake]` block when present, otherwise
+  this portal's root-level `SNOWFLAKE_ACCOUNT/USER/ROLE/WAREHOUSE/PRIVATE_KEY` against
+  `JSA.RISK_ANALYZER`. `MASSIVE_API_KEY` (already here) feeds the market strip; the CME DataMine
+  IV lookup needs optional root-level `CME_DATAMINE_API_ID` + `CME_DATAMINE_PASSWORD`. Don't add
+  `[snowflake]` etc. blocks here. The `plan` command's long NEW SECRETS list is mostly SQL column
+  constants; only those names are real.
+- **Grant:** `ADMIN_PORTAL_ROLE` needs `USAGE` on schema `JSA.RISK_ANALYZER` plus SELECT/INSERT/
+  UPDATE/DELETE on its tables (positions, import presets, IV snapshot, contract marks, audit log).
+- Header/disclaimer colors were made theme-neutral upstream (the standalone app is dark, the portal
+  light). `scipy` is in `requirements.txt` for it; adding it needs a Reboot.
+
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
 Several bundled dashboards read Snowflake, and each defaults
