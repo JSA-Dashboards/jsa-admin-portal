@@ -207,6 +207,7 @@ Where each bundled app reads Snowflake:
 | rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
 | yield_portal (JSA Yield Observations tile) | `YIELD_REPORTS.PUBLIC` + `JSA.NASS_CACHE` | pinned in `apps/yield_portal/yp_db.py` |
+| crop_conditions Field Check tab (beta, internal) | `YIELD_REPORTS.PUBLIC.FIELD_SIGNAL` | fully qualified in the query; the tab shows only where `FIELD_CHECK` is "1", which only this portal's sync pins (`pin_env`), so the public standalone app never shows it |
 
 **JSA Yield Observations (`apps/yield_portal/`) is the whole yield portal, a synced mirror
 of `JSA-Dashboards/yield-portal`**: Explore, Report text, Reports vs normal, Field issues,

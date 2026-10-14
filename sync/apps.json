@@ -76,7 +76,10 @@
   },
   "crop_conditions": {
    "repo": "JSA-Dashboards/crop-conditions-dashboard",
-   "private": true
+   "private": true,
+   "pin_env": {
+    "FIELD_CHECK": "1"
+   }
   },
   "domestic_production": {
    "repo": "JSA-Dashboards/domestic-production-dashboard"
