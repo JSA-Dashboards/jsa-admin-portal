@@ -5360,8 +5360,19 @@ _logo_html = (
     f'John Stewart<br><span style="font-size:0.75rem;letter-spacing:.08em;color:{DM_MUTED}">AND ASSOCIATES</span></div>'
 )
 
+# Field-check-only mode: the admin portal's JSA Yield Observations tile runs this
+# script with FIELD_CHECK_ONLY = True in its globals (runpy init_globals) to show
+# just the Field Check, with a commodity and season picker instead of the filter
+# bar and none of the tabs. Run as a page (here or in the portal), it's False.
+_FC_ONLY = bool(globals().get("FIELD_CHECK_ONLY"))
+
 # ── Header ─────────────────────────────────────────────────────────────────────
-st.markdown(f"""
+if _FC_ONLY:
+    st.markdown(f'<div class="sec-hdr">🧪 Field Check (beta) &nbsp;·&nbsp; <span style="color:'
+                f'{DM_MUTED};font-weight:400">the Crop Conditions yield model beside the field '
+                f'reports</span></div>', unsafe_allow_html=True)
+else:
+    st.markdown(f"""
 <div class="dash-header">
   <div class="dash-header-logo">
     {_logo_html}
@@ -5372,62 +5383,78 @@ st.markdown(f"""
   </div>
   <div style="width:56px"></div><!-- spacer to centre the title -->
 </div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # ── Top filter bar ─────────────────────────────────────────────────────────────
-st.markdown('<div class="filter-bar">', unsafe_allow_html=True)
+if _FC_ONLY:
+    _fxc = st.columns([1.3, 1.3, 4.4])
+    with _fxc[0]:
+        commodity_label = st.selectbox("Commodity", ["Corn", "Soybeans"], key="fcx_commodity")
+        commodity_cfg   = COMMODITIES[commodity_label]
+    with _fxc[1]:
+        usda_years    = available_usda_years(n=20)
+        mkt_labels    = [mkt_label(y) for y in usda_years]
+        default_label = mkt_label(default_usda_year())
+        default_idx   = mkt_labels.index(default_label) if default_label in mkt_labels else 0
+        selected_mkt  = st.selectbox("Marketing Year", mkt_labels, index=default_idx, key="fcx_mkt")
+        sel_usda_yr   = usda_year(selected_mkt)
+    compare_mkt, cmp_usda_yr = "— None —", None
+    condition   = "Good + Excellent"
+    wheat_class = "All Winter Wheat"
+else:
+    st.markdown('<div class="filter-bar">', unsafe_allow_html=True)
 
-_fc1, _fc2, _fc3, _fc4, _fc5, _fc6, _fc7, _fc8 = st.columns(
-    [1.3, 1.3, 1.3, 1.3, 1.6, 1.0, 1.1, 0.55]
-)
-
-with _fc1:
-    commodity_label = st.selectbox("Commodity", list(COMMODITIES.keys()))
-    commodity_cfg   = COMMODITIES[commodity_label]
-
-with _fc2:
-    usda_years    = available_usda_years(n=20)
-    mkt_labels    = [mkt_label(y) for y in usda_years]
-    default_label = mkt_label(default_usda_year())
-    default_idx   = mkt_labels.index(default_label) if default_label in mkt_labels else 0
-    selected_mkt  = st.selectbox("Marketing Year", mkt_labels, index=default_idx)
-    sel_usda_yr   = usda_year(selected_mkt)
-
-with _fc3:
-    # Placeholder — filled after data loads so available weeks are known
-    _week_slot = st.empty()
-
-with _fc4:
-    compare_mkt = st.selectbox(
-        "Compare Year",
-        ["— None —"] + mkt_labels,
-        index=0,
-    )
-    cmp_usda_yr = None if compare_mkt == "— None —" else usda_year(compare_mkt)
-
-with _fc5:
-    condition = st.selectbox(
-        "Condition",
-        ["Good + Excellent", "Fair", "Poor + Very Poor", "JSA Index"],
+    _fc1, _fc2, _fc3, _fc4, _fc5, _fc6, _fc7, _fc8 = st.columns(
+        [1.3, 1.3, 1.3, 1.3, 1.6, 1.0, 1.1, 0.55]
     )
 
-with _fc6:
-    if commodity_cfg.get("has_classes", True):
-        wheat_class = st.selectbox("Wheat Class", list(WHEAT_CLASSES.keys()), index=0)
-    else:
-        wheat_class = "All Winter Wheat"
-        st.empty()
+    with _fc1:
+        commodity_label = st.selectbox("Commodity", list(COMMODITIES.keys()))
+        commodity_cfg   = COMMODITIES[commodity_label]
 
-with _fc7:
-    # Placeholder — filled after data loads with states that have data
-    _state_dd_slot = st.empty()
+    with _fc2:
+        usda_years    = available_usda_years(n=20)
+        mkt_labels    = [mkt_label(y) for y in usda_years]
+        default_label = mkt_label(default_usda_year())
+        default_idx   = mkt_labels.index(default_label) if default_label in mkt_labels else 0
+        selected_mkt  = st.selectbox("Marketing Year", mkt_labels, index=default_idx)
+        sel_usda_yr   = usda_year(selected_mkt)
 
-with _fc8:
-    if st.button("🔄", help="Refresh data from USDA NASS (use after Monday ~3 PM ET when USDA posts weekly conditions)"):
-        st.cache_data.clear()
-        st.rerun()
+    with _fc3:
+        # Placeholder — filled after data loads so available weeks are known
+        _week_slot = st.empty()
 
-st.markdown('</div>', unsafe_allow_html=True)
+    with _fc4:
+        compare_mkt = st.selectbox(
+            "Compare Year",
+            ["— None —"] + mkt_labels,
+            index=0,
+        )
+        cmp_usda_yr = None if compare_mkt == "— None —" else usda_year(compare_mkt)
+
+    with _fc5:
+        condition = st.selectbox(
+            "Condition",
+            ["Good + Excellent", "Fair", "Poor + Very Poor", "JSA Index"],
+        )
+
+    with _fc6:
+        if commodity_cfg.get("has_classes", True):
+            wheat_class = st.selectbox("Wheat Class", list(WHEAT_CLASSES.keys()), index=0)
+        else:
+            wheat_class = "All Winter Wheat"
+            st.empty()
+
+    with _fc7:
+        # Placeholder — filled after data loads with states that have data
+        _state_dd_slot = st.empty()
+
+    with _fc8:
+        if st.button("🔄", help="Refresh data from USDA NASS (use after Monday ~3 PM ET when USDA posts weekly conditions)"):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Load Data ──────────────────────────────────────────────────────────────────
 # Fetch full NASS history back to 1986 plus the selected year
@@ -5764,7 +5791,9 @@ _yr_weeks = sorted(
     ]["week_ending"].unique()
 )
 
-if _yr_weeks:
+if _yr_weeks and _FC_ONLY:
+    sel_week = _yr_weeks[-1]          # field-check-only: the latest week
+elif _yr_weeks:
     _week_labels      = [f"{pd.Timestamp(w).strftime('%b %d, %Y')}  (Wk {int(pd.Timestamp(w).isocalendar().week)})" for w in _yr_weeks]
     _most_recent_lbl  = _week_labels[-1]
 
@@ -5845,13 +5874,16 @@ _state_name_lookup = {a: _ALPHA_TO_NAME.get(a, a) for a in _dd_alphas}
 _state_dd_names = ["All"] + sorted(_state_name_lookup.values())
 _state_dd_alpha = {"All": None, **{v: k for k, v in _state_name_lookup.items()}}
 
-with _state_dd_slot.container():
-    sel_state_name = st.selectbox(
-        "State",
-        _state_dd_names,
-        index=0,
-        key="state_dd",
-    )
+if _FC_ONLY:
+    sel_state_name = "All"
+else:
+    with _state_dd_slot.container():
+        sel_state_name = st.selectbox(
+            "State",
+            _state_dd_names,
+            index=0,
+            key="state_dd",
+        )
 sel_state_alpha = _state_dd_alpha[sel_state_name]   # None when "All"
 
 # Apply individual state filter — pull from map_result so states filtered out by
@@ -5913,6 +5945,211 @@ if commodity_label != "Winter Wheat" and not _prod_tab_acres_df.empty:
 # Pre-initialise so abandonment tab can read values computed in production tab
 _ph_cls: dict = {}
 
+# ── Model setup the tabs share ────────────────────────────────────────────────
+# The active series, the best-week scan, the effective week and the analog
+# forecasts: pure computation the Conditions, Yield Model, Production and Field
+# Check views all read. It ran inside the Conditions tab until 2026-10-14; it runs
+# here so the Field Check can be shown alone (field-check-only mode).
+# _use_hrw_index controls seasonal chart series (not KPI visibility)
+_use_hrw_index = (wheat_class == "HRW — Hard Red Winter")
+
+# Active series context — state filter overrides wheat class selection
+# _series_key  : lookup key for _yield_lookup / _trend_data
+# _series_label: human-readable label for chart titles
+if sel_state_alpha:
+    _series_key   = sel_state_alpha
+    _series_label = sel_state_name
+elif _use_hrw_index:
+    _series_key   = "HRW"
+    _series_label = "HRW Index"
+else:
+    _series_key   = "US"
+    _series_label = "National"
+
+# ── Option B: Best-signal week locking ────────────────────────────────────────
+# Run the best-week scan early (cached, so the Validation tab re-uses the result).
+# Once the current season has passed the peak-R² ISO week for a series, the JSA
+# index is locked to that week instead of the user-selected week — giving the most
+# historically predictive snapshot rather than a moving target.
+import json as _json_bw
+_bw_scan_devs = {
+    sk: {str(yr): v["dev"] for yr, v in yl.items() if v.get("dev") is not None}
+    for sk, yl in _yield_lookup.items()
+    if any(v.get("dev") is not None for v in yl.values())
+}
+_bw_iso_min, _bw_iso_max = commodity_cfg.get("scan_iso_range", (5, 22))
+_best_week_res: dict = {}
+if sel_week is not None and not _yield_full.empty and _bw_scan_devs:
+    _best_week_res = _scan_best_week(
+        raw_df, sel_usda_yr,
+        _json_bw.dumps(_bw_scan_devs),
+        tuple(sorted(_dynamic_hrw_weights.items())),
+        tuple(sorted(_dynamic_srw_weights.items())),
+        tuple(sorted(_dynamic_white_weights.items())),
+        _crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
+        _scan_iso_min=_bw_iso_min,
+        _scan_iso_max=_bw_iso_max,
+        commodity_key=commodity_label,
+    )
+
+_cur_iso_week: "int | None" = (
+    int(pd.Timestamp(sel_week).isocalendar().week) if sel_week is not None else None
+)
+
+def _effective_week_ts(sk: str) -> "pd.Timestamp | None":
+    """Return the timestamp to use for JSA snapping (Option B locking).
+
+    If the current season has already passed the peak-R² ISO week for
+    series `sk`, return a timestamp for that best week so the regression
+    uses the most predictive historical snapshot.  Otherwise fall back to
+    the user-selected week (no data available for the best week yet).
+    """
+    if sel_week is None or _cur_iso_week is None:
+        return None
+    _bw   = _best_week_res.get(sk, {})
+    _best = _bw.get("best_iso")
+    if _best is not None and _cur_iso_week >= int(_best):
+        try:
+            # Convert ISO week → calendar date (Sunday = day 7) in the same year
+            return pd.Timestamp.fromisocalendar(
+                int(pd.Timestamp(sel_week).year), int(_best), 7
+            )
+        except Exception:
+            pass
+    return pd.Timestamp(sel_week)
+
+# ── Analog forecasts — computed once here, reused in scatter, analog section, yield table ──
+_analog_result        = None
+_class_analog_results = {"US": None, "HRW": None, "SRW": None, "White": None}
+_multi_week_analog    = {}  # {sk: [(analog_result, r2), ...]} for top-4 predictive weeks
+if sel_week is not None and not _yield_full.empty:
+    _cwm = {"HRW": _dynamic_hrw_weights, "SRW": _dynamic_srw_weights, "White": _dynamic_white_weights}
+    _analog_result = _compute_analog_forecast(
+        _series_key, raw_df, _effective_week_ts(_series_key), sel_usda_yr,
+        _yield_lookup, _trend_data, _dynamic_hrw_weights, class_weights_map=_cwm,
+        crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
+        cond_weights=_active_cw,
+    )
+    _csk_list = ("US", "HRW", "SRW", "White") if commodity_cfg.get("has_classes", True) else ("US",)
+    for _csk in _csk_list:
+        if _csk == _series_key:
+            _class_analog_results[_csk] = _analog_result
+        else:
+            _class_analog_results[_csk] = _compute_analog_forecast(
+                _csk, raw_df, _effective_week_ts(_csk), sel_usda_yr,
+                _yield_lookup, _trend_data, _dynamic_hrw_weights, class_weights_map=_cwm,
+                crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
+                cond_weights=_active_cw,
+            )
+    # Build R²-weighted multi-week analog results for the top-4 most-predictive ISO weeks
+    for _csk in _csk_list:
+        _bw_csk = _best_week_res.get(_csk, {})
+        _top4   = _bw_csk.get("top4_iso", [])
+        _wf     = []
+        for _tw in _top4:
+            _iso_w = _tw["iso_w"]
+            _r2_w  = _tw["r2"]
+            if _cur_iso_week is not None and _cur_iso_week >= _iso_w:
+                try:
+                    _ts_w = pd.Timestamp.fromisocalendar(
+                        int(pd.Timestamp(sel_week).year), int(_iso_w), 7
+                    )
+                except Exception:
+                    continue
+                _af_w = _compute_analog_forecast(
+                    _csk, raw_df, _ts_w, sel_usda_yr,
+                    _yield_lookup, _trend_data, _dynamic_hrw_weights,
+                    class_weights_map=_cwm,
+                    crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
+                    cond_weights=_active_cw,
+                )
+                if _af_w is not None:
+                    _wf.append((_af_w, _r2_w))
+        _multi_week_analog[_csk] = _wf
+
+# ── Yield model helpers (used inline below each class row) ────────────────────
+def _yield_mkt_lbl(harvest_yr: int) -> str:
+    return mkt_label(harvest_yr)
+
+def _ykpi(state_key: str):
+    if _yield_full.empty or state_key not in _trend_data:
+        return None
+    td    = _trend_data[state_key]
+    rows  = _yield_full[_yield_full["state_alpha"] == state_key].sort_values("year")
+    if rows.empty:
+        return None
+    latest     = rows.iloc[-1]
+    h_yr       = int(latest["year"])
+    actual     = float(latest["yield_bu_ac"])
+    trend_same = _trend_at(td, h_yr)
+    proj_trend = _trend_at(td, sel_usda_yr)
+    return {
+        "h_yr":       h_yr,
+        "mkt_lbl":    _yield_mkt_lbl(h_yr),
+        "actual":     actual,
+        "trend_same": trend_same,
+        "dev":        _dev_pct(actual, trend_same),
+        "proj_trend": proj_trend,
+        "r2":         td["r2"],
+        "equation":   td["equation"],
+        "n":          td["n"],
+    }
+
+def _jsa_reg_forecast(sk: str):
+    """Return (forecast_bu_ac, dev_pct) from R²-weighted OLS across the top-4
+    most-predictive ISO weeks that have already passed this season.
+    Falls back to the single current-week snapshot when no top-4 week has
+    passed yet.  Returns (None, None) if insufficient data."""
+    _yk2    = _ykpi(sk)
+    _lkup2  = _yield_lookup.get(sk, {})
+    _trend2 = (_yk2 or {}).get("proj_trend")
+    if _trend2 is None:
+        return None, None
+
+    # Primary path: R²-weighted average over available top-4 weeks
+    _wf = _multi_week_analog.get(sk, [])
+    if not _wf:
+        # No top-4 week has passed yet — fall back to current-week analog
+        _af2 = _class_analog_results.get(sk)
+        if not _af2:
+            return None, None
+        _bw_r2 = float(_best_week_res.get(sk, {}).get("r2") or 1.0)
+        _wf = [(_af2, _bw_r2)]
+
+    _forecasts = []
+    for _af_w, _r2_w in _wf:
+        _snap_w = _af_w.get("jsa_snap", {})
+        _cj_w   = _af_w.get("cur_jsa")
+        if _cj_w is None:
+            continue
+        _pts = [
+            (_snap_w[cy], _lkup2[cy]["dev"])
+            for cy in _snap_w
+            if cy != sel_usda_yr and cy in _lkup2 and _lkup2[cy].get("dev") is not None
+        ]
+        if len(_pts) < 3:
+            continue
+        _xw = np.array([p[0] for p in _pts])
+        _yw = np.array([p[1] for p in _pts])
+        _lc = np.linalg.lstsq(np.vstack([_xw, np.ones(len(_xw))]).T, _yw, rcond=None)[0]
+        _dev_w = float(_lc[0] * float(_cj_w) + _lc[1])
+        _fc_w  = _trend2 * (1 + _dev_w / 100)
+        _forecasts.append((_fc_w, _dev_w, _r2_w))
+
+    if not _forecasts:
+        return None, None
+    if len(_forecasts) == 1:
+        return round(_forecasts[0][0], 1), round(_forecasts[0][1], 1)
+
+    # R²-weighted average across contributing weeks
+    _tot_r2  = sum(f[2] for f in _forecasts)
+    if _tot_r2 <= 0:
+        _tot_r2 = float(len(_forecasts))
+    _fc_avg  = sum(f[0] * f[2] / _tot_r2 for f in _forecasts)
+    _dev_avg = sum(f[1] * f[2] / _tot_r2 for f in _forecasts)
+    return round(_fc_avg, 1), round(_dev_avg, 1)
+
+
 # ── Field check (beta, internal): the yield portal's field signal ─────────────
 # YIELD_REPORTS.PUBLIC.FIELD_SIGNAL is written daily by the yield portal's
 # field_signal.py: what the season's field reports (Ag Trader Talk + JSA) say
@@ -5960,6 +6197,412 @@ if _FIELD_CHECK_ON and commodity_label in ("Corn", "Soybeans"):
     _fs_all = _field_signal()
     if _fs_all is not None and (_fs_all["crop"] == commodity_label).any():
         _fs_rows = _fs_all[_fs_all["crop"] == commodity_label].copy()
+
+# ── Field Check tab (beta, internal) ──────────────────────────────────────────
+# The conditions model beside the field reports, per state, blended by how far
+# each has missed NASS's final and how much their misses move together:
+#   weight on the field read = (σm² − ρ·σm·σf) / (σm² + σf² − 2ρ·σm·σf), in [0, 1]
+# the minimum-variance mix of two reads whose errors correlate ρ. σm is the
+# state's conditions model refitted leaving each year out (this week); σf comes
+# with the signal, fitted on past seasons' field reads vs NASS finals; ρ is the
+# correlation of the two misses, each over its σ, in the finished seasons. With
+# ρ = 0 this is plain inverse-variance weighting, which the 2023-25 backtest
+# showed over-weights the field for soybeans (their misses correlate ~ +0.35).
+# The tab body is a fragment: its state picker reruns only this tab.
+_FC_FIELD, _FC_MODEL, _FC_BLEND = "#eb6834", DM_MUTED, JPSI_BLUE
+_FC_MIN_RHO_ROWS = 8          # finished state-seasons needed to measure ρ (else 0)
+_fc_fragment = getattr(st, "fragment", lambda f: f)
+
+
+def _fc_state_model(sk: str):
+    """The Yield Model tab's state forecast (as _sfcast: OLS of the yield's % off
+    trend on the JSA index at the effective week, every other year), plus the same
+    model refitted leaving each year out -> {forecast, sigma_pct, n_years, loo}."""
+    if sel_week is None or sk not in _trend_data:
+        return None
+    _af = _compute_analog_forecast(
+        sk, raw_df, _effective_week_ts(sk), sel_usda_yr, _yield_lookup, _trend_data,
+        _dynamic_hrw_weights,
+        class_weights_map={"HRW": _dynamic_hrw_weights, "SRW": _dynamic_srw_weights,
+                           "White": _dynamic_white_weights},
+        crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9), cond_weights=_active_cw,
+    )
+    if not _af or _af.get("cur_jsa") is None:
+        return None
+    _snap, _lk = _af["jsa_snap"], _yield_lookup.get(sk, {})
+    _yrs = [cy for cy in sorted(_snap) if cy != sel_usda_yr and cy in _lk
+            and _lk[cy].get("dev") is not None and _lk[cy].get("yield")]
+    if len(_yrs) < 4:
+        return None
+    _x = np.array([_snap[cy] for cy in _yrs], dtype=float)
+    _y = np.array([_lk[cy]["dev"] for cy in _yrs], dtype=float)
+    _A = np.vstack([_x, np.ones(len(_x))]).T
+    _a, _b = np.linalg.lstsq(_A, _y, rcond=None)[0]
+    _fcst = _trend_at(_trend_data[sk], sel_usda_yr) * (1 + (_a * float(_af["cur_jsa"]) + _b) / 100)
+    _loo = {}
+    for _i, _cy in enumerate(_yrs):
+        _keep = np.arange(len(_yrs)) != _i
+        _ai, _bi = np.linalg.lstsq(_A[_keep], _y[_keep], rcond=None)[0]
+        _loo[_cy] = _lk[_cy]["trend"] * (1 + (_ai * _x[_i] + _bi) / 100)
+    _errs = [100 * math.log(_loo[cy] / _lk[cy]["yield"]) for cy in _yrs if _loo[cy] > 0]
+    return {"forecast": float(_fcst), "n_years": len(_errs), "loo": _loo,
+            "sigma_pct": math.sqrt(sum(e * e for e in _errs) / len(_errs))}
+
+
+def _fc_weight(sig_m, sig_f, rho: float = 0.0) -> float:
+    """Weight on the field read: (σm² − ρσmσf) / (σm² + σf² − 2ρσmσf), clipped to
+    [0, 1]; 0 without both σ's."""
+    if not sig_m or sig_f is None or pd.isna(sig_f) or not sig_f:
+        return 0.0
+    _den = sig_m ** 2 + sig_f ** 2 - 2 * rho * sig_m * sig_f
+    if _den <= 0:
+        return 0.0
+    return min(1.0, max(0.0, (sig_m ** 2 - rho * sig_m * sig_f) / _den))
+
+
+def _fc_rho(bt: pd.DataFrame, leave_out=None) -> float:
+    """Correlation of the model's and the field's misses, each over its σ, in the
+    finished state-seasons (other than season `leave_out`); 0 with too few."""
+    _b = bt if leave_out is None else bt[bt["Season"] != leave_out]
+    if len(_b) < _FC_MIN_RHO_ROWS:
+        return 0.0
+    _r = (_b["_eM"] / _b["_sM"]).corr(_b["_eF"] / _b["_sF"])
+    return 0.0 if pd.isna(_r) else float(_r)
+
+
+def _fc_backtest(done: pd.DataFrame, models: dict) -> pd.DataFrame:
+    """One row per finished state-season with both reads: the model refitted
+    without that year, the field read (premium from the other seasons), their σ's
+    and USDA's monthly forecasts, misses as 100·ln(read / NASS final). Each
+    season's blend uses ρ from the other seasons, never its own misses."""
+    _rows = []
+    for _r in done.itertuples():
+        _m = models.get(_r.state)
+        if not _m or pd.isna(_r.implied) or pd.isna(_r.sigma_pct):
+            continue
+        _M = _m["loo"].get(int(_r.season))
+        if _M is None and int(_r.season) == sel_usda_yr:
+            _M = _m["forecast"]
+        if _M is None or _M <= 0:
+            continue
+        _fin = float(_r.nass_final)
+
+        def _miss(v, fin=_fin):
+            return 100 * math.log(v / fin) if (v is not None and pd.notna(v) and v > 0) else None
+        _rows.append({"Season": int(_r.season), "State": _r.state, "Reports": int(_r.n_reports),
+                      "NASS final": _fin, "_M": _M, "_F": float(_r.implied),
+                      "_eM": _miss(_M), "_eF": _miss(_r.implied),
+                      "_sM": _m["sigma_pct"], "_sF": float(_r.sigma_pct),
+                      "USDA Sep": _miss(_r.usda_sep), "USDA Oct": _miss(_r.usda_oct),
+                      "USDA Nov": _miss(_r.usda_nov)})
+    bt = pd.DataFrame(_rows)
+    if bt.empty:
+        return bt
+    _rho_without = {s: _fc_rho(bt, leave_out=s) for s in bt["Season"].unique()}
+    _w = [_fc_weight(sm, sf, _rho_without[s]) for sm, sf, s in zip(bt["_sM"], bt["_sF"], bt["Season"])]
+    bt["Weight on field"] = [w * 100 for w in _w]
+    bt["Model"], bt["Field"] = bt["_eM"], bt["_eF"]
+    bt["Blend"] = 100 * np.log((bt["_M"] + np.array(_w) * (bt["_F"] - bt["_M"])) / bt["NASS final"])
+    return bt
+
+
+def _fc_harvested(sk: str):
+    """Harvested acres for the season, NASS's latest (the season's own once
+    published, else the harvest fallback's estimate); for "US" the sum over states.
+    One source in both modes: the Production tab's figures aren't built when the
+    Field Check runs alone."""
+    _a = _prod_tab_acres_df
+    if _a is None or _a.empty or "harvested_ac" not in _a:
+        return None
+    _a = _a[(_a["year"] <= sel_usda_yr) & _a["harvested_ac"].notna()]
+    if sk == "US":
+        _a = _a[(_a["state_alpha"].str.len() == 2) & (_a["state_alpha"] != "US")]
+        return float(_a[_a["year"] == _a["year"].max()]["harvested_ac"].sum()) if len(_a) else None
+    _a = _a[_a["state_alpha"] == sk].sort_values("year")
+    return float(_a["harvested_ac"].iloc[-1]) if len(_a) else None
+
+
+def _fc_kpi(value: str, label: str, color: str = JPSI_BLUE):
+    st.markdown(f'<div class="kpi-card" style="border-top-color:{color}">'
+                f'<div class="kpi-main">{value}</div><div class="kpi-label">{label}</div></div>',
+                unsafe_allow_html=True)
+
+
+@_fc_fragment
+def _fc_tab():
+    st.markdown(
+        '<div class="season-note">🧪 <b>Beta · internal.</b> The conditions model beside what '
+        "the season's field reports (Ag Trader Talk + JSA) say each state will yield, blended "
+        "by how far each has missed NASS's final in the past. Built from field reports: not "
+        "for clients.</div>", unsafe_allow_html=True)
+    _fs = _fs_rows.copy()
+    for _c in ("n_reports", "n_undated", "ratio", "premium", "state_avg5", "implied",
+               "sigma_pct", "sigma_base_pct", "sigma_one_pct", "fit_states", "nass_final",
+               "usda_current", "usda_aug", "usda_sep", "usda_oct", "usda_nov"):
+        _fs[_c] = pd.to_numeric(_fs[_c], errors="coerce")
+    _season = _fs[_fs["season"] == sel_usda_yr]
+    _cur = _season[_season["kind"] == "latest"]
+    if _cur.empty:
+        _cur = _season[_season["kind"] == "season"]
+    _done = _fs[(_fs["kind"] == "season") & _fs["nass_final"].notna()]
+    _states = sorted(set(_cur["state"]) | set(_done["state"]))
+    with st.spinner("Running the conditions model for the reporting states…"):
+        _models = {s: _fc_state_model(s) for s in _states}
+    _bt = _fc_backtest(_done, _models)
+    _rho = _fc_rho(_bt) if not _bt.empty else 0.0
+    _wk_lbl = (f"{pd.Timestamp(sel_week).strftime('%b %d')} · Wk "
+               f"{int(pd.Timestamp(sel_week).isocalendar().week)}" if sel_week is not None else "—")
+
+    if _cur.empty:
+        st.info(f"No {commodity_label.lower()} field reports for {sel_usda_yr}; they start in "
+                f"{int(_fs['season'].min())}. The backtest below covers the finished seasons.")
+    else:
+        _rows = []
+        for _r in _cur.itertuples():
+            _m = _models.get(_r.state)
+            _M = _m["forecast"] if _m else None
+            _sM = _m["sigma_pct"] if _m else None
+            _F = _r.implied if pd.notna(_r.implied) else None
+            _sF = _r.sigma_pct if pd.notna(_r.sigma_pct) else None
+            _w = _fc_weight(_sM, _sF, _rho) if (_M is not None and _F is not None) else None
+            _B = _M + _w * (_F - _M) if _w is not None else None
+            _z = None
+            if _w is not None and _sF:
+                _bm, _bf = _M * _sM / 100, _F * _sF / 100
+                _sd = _bm ** 2 + _bf ** 2 - 2 * _rho * _bm * _bf
+                _z = abs(_F - _M) / math.sqrt(_sd) if _sd > 0 else None
+            _rows.append({
+                "State": _r.state, "Reports": int(_r.n_reports), "Tier": _r.tier,
+                "Field": _F, "± field": _F * _sF / 100 if (_F and _sF) else None,
+                "Model": _M, "± model": _M * _sM / 100 if _M else None,
+                "Weight on field": _w * 100 if _w is not None else None, "Blend": _B,
+                "USDA": _r.usda_current if pd.notna(_r.usda_current) else None,
+                "USDA is": _r.usda_label,
+                "5-yr avg": _r.state_avg5, "Field − model": (_F - _M) if _w is not None else None,
+                "Field vs model": (None if _z is None else "within 1σ" if _z <= 1
+                                   else "1–2σ apart" if _z <= 2 else "over 2σ apart"),
+                "_harv": _fc_harvested(_r.state), "_sF": _sF, "_sM": _sM,
+            })
+        _tbl = pd.DataFrame(_rows).sort_values("_harv", ascending=False, na_position="last")
+
+        # US: the national model, shifted by each reporting state's blend over its
+        # model, weighted by harvested acres; states without reports keep the model.
+        _us_model = None
+        if sel_week is not None and "_jsa_reg_forecast" in globals():
+            _us_model, _ = _jsa_reg_forecast("US")
+        _us_harv = _fc_harvested("US")
+        _shift, _covered = 0.0, 0.0
+        for _bl, _mo, _h in zip(_tbl["Blend"], _tbl["Model"], _tbl["_harv"]):
+            if pd.notna(_bl) and pd.notna(_mo) and pd.notna(_h) and _h:
+                _shift += _h * (_bl - _mo)
+                _covered += _h
+        _us_blend = _us_model + _shift / _us_harv if (_us_model and _us_harv) else None
+        _us_usda = (_yield_lookup.get("US", {}).get(sel_usda_yr) or {}).get("yield")
+        _n_rep = int(_cur["n_reports"].sum())
+        _last = pd.to_datetime(_cur["last_report"], errors="coerce").max()
+
+        st.markdown(f'<div class="sec-hdr">{commodity_label} {sel_usda_yr}: model, field reports '
+                    f'and the blend &nbsp;·&nbsp; <span style="color:{JPSI_BLUE}">{_wk_lbl}</span>'
+                    f'</div>', unsafe_allow_html=True)
+        _k = st.columns(4)
+        with _k[0]:
+            _fc_kpi(f"{_us_model:.1f}" if _us_model else "—", "Conditions model · US bu/ac", _FC_MODEL)
+        with _k[1]:
+            _d = f" ({_us_blend - _us_model:+.1f})" if (_us_blend and _us_model) else ""
+            _fc_kpi(f"{_us_blend:.1f}{_d}" if _us_blend else "—", "Blend · US bu/ac", _FC_BLEND)
+        with _k[2]:
+            _fc_kpi(f"{_us_usda:.1f}" if _us_usda else "—", "USDA · US bu/ac", DM_TEXT)
+        with _k[3]:
+            _share = f" · {_covered / _us_harv:.0%} of US acres" if _us_harv else ""
+            _fc_kpi(f"{_n_rep}", f"Field reports · {len(_cur)} states{_share}", _FC_FIELD)
+        st.caption(
+            (f"Reports through {_last:%b %d}. " if pd.notna(_last) else "")
+            + "US blend = the national model plus each reporting state's blend shift, by harvested "
+              "acres. USDA is its latest for the season (the final once it's out).")
+
+        # Dot plot: each state against its own model forecast, so every state reads
+        # on one scale; bars are ±1σ.
+        _p = _tbl[_tbl["Model"].notna() & _tbl["Field"].notna()].reset_index(drop=True)
+        if not _p.empty:
+            _yy = list(range(len(_p)))[::-1]
+            _lbl = [f"{s} ({n})" for s, n in zip(_p["State"], _p["Reports"])]
+            _fig = go.Figure()
+            _fig.add_vline(x=0, line=dict(color=DM_BORDER, width=1))
+            _fig.add_trace(go.Scatter(
+                x=[0] * len(_p), y=[y + 0.2 for y in _yy], mode="markers", name="Conditions model ±1σ",
+                marker=dict(color=_FC_MODEL, size=9),
+                error_x=dict(type="data", array=_p["_sM"], color=_FC_MODEL, thickness=1.5, width=0),
+                customdata=_p[["Model"]], hovertemplate="Model %{customdata[0]:.1f}<extra></extra>"))
+            _fig.add_trace(go.Scatter(
+                x=(_p["Field"] / _p["Model"] - 1) * 100, y=[y - 0.2 for y in _yy], mode="markers",
+                name="Field reports ±1σ", marker=dict(color=_FC_FIELD, size=10, symbol="diamond"),
+                error_x=dict(type="data", array=_p["± field"] / _p["Model"] * 100, color=_FC_FIELD,
+                             thickness=1.5, width=0),
+                customdata=_p[["Field", "Reports"]],
+                hovertemplate="Field %{customdata[0]:.1f} from %{customdata[1]} reports<extra></extra>"))
+            _fig.add_trace(go.Scatter(
+                x=(_p["Blend"] / _p["Model"] - 1) * 100, y=_yy, mode="markers", name="Blend",
+                marker=dict(color=_FC_BLEND, size=13, symbol="star"),
+                customdata=_p[["Blend", "Weight on field"]],
+                hovertemplate="Blend %{customdata[0]:.1f} (%{customdata[1]:.0f}% field)<extra></extra>"))
+            _u = _p[_p["USDA"].notna()]
+            _fig.add_trace(go.Scatter(
+                x=(_u["USDA"] / _u["Model"] - 1) * 100, y=[_yy[i] for i in _u.index], mode="markers",
+                name="USDA", marker=dict(color=DM_TEXT, size=16, symbol="line-ns-open",
+                                         line=dict(width=2.5, color=DM_TEXT)),
+                customdata=_u[["USDA"]], hovertemplate="USDA %{customdata[0]:.1f}<extra></extra>"))
+            _fig.update_layout(
+                paper_bgcolor=DM_BG, plot_bgcolor=DM_SURFACE2, height=90 + 46 * len(_p),
+                margin=dict(l=10, r=10, t=30, b=10), font=dict(color=DM_TEXT),
+                xaxis=dict(title="% vs the state's conditions model", ticksuffix="%", zeroline=False,
+                           gridcolor=DM_BORDER),
+                yaxis=dict(tickvals=_yy, ticktext=_lbl, gridcolor=DM_SURFACE2),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                            bgcolor=DM_SURFACE, bordercolor=DM_BORDER, borderwidth=1),
+                hovermode="closest")
+            _show_chart(_fig, "field_check_states", key="fc_states_chart")
+
+        _show = _tbl.drop(columns=["_harv", "_sF", "_sM"])
+        _fin = _cur.set_index("state")["nass_final"]
+        if _fin.notna().any():
+            _show.insert(_show.columns.get_loc("USDA is") + 1, "NASS final",
+                         _show["State"].map(_fin))
+        _bu = st.column_config.NumberColumn(format="%.1f")
+        st.dataframe(_show, hide_index=True, width="stretch", height=35 * (len(_show) + 1) + 3,
+                     column_config={
+                         "Field": _bu, "± field": _bu, "Model": _bu, "± model": _bu, "Blend": _bu,
+                         "USDA": _bu, "NASS final": _bu, "5-yr avg": _bu,
+                         "Field − model": st.column_config.NumberColumn(format="%+.1f"),
+                         "Weight on field": st.column_config.NumberColumn(format="%.0f%%"),
+                     })
+        _dl_btn(_show, f"field_check_{commodity_label.lower()}_{sel_usda_yr}.xlsx")
+
+        # Season so far: the field read week by week for one state.
+        _wk = _season[_season["kind"].isin(["week", "latest"])]
+        if not _wk.empty:
+            st.markdown('<div class="sec-hdr">Season so far</div>', unsafe_allow_html=True)
+            _opts = _tbl["State"].tolist()
+            _dflt = sel_state_alpha if sel_state_alpha in _opts else _opts[0]
+            _st = st.selectbox("State", _opts, index=_opts.index(_dflt), key="fc_line_state")
+            _g = _wk[_wk["state"] == _st].sort_values("as_of")
+            _g = _g.assign(as_of=pd.to_datetime(_g["as_of"]))
+            _lo = _g["implied"] * (1 - _g["sigma_pct"] / 100)
+            _hi = _g["implied"] * (1 + _g["sigma_pct"] / 100)
+            _f2 = go.Figure()
+            _f2.add_trace(go.Scatter(x=list(_g["as_of"]) + list(_g["as_of"])[::-1],
+                                     y=list(_hi) + list(_lo)[::-1], fill="toself", mode="lines",
+                                     fillcolor="rgba(235,104,52,0.15)", line=dict(width=0),
+                                     hoverinfo="skip", name="Field ±1σ"))
+            _f2.add_trace(go.Scatter(x=_g["as_of"], y=_g["implied"], mode="lines+markers",
+                                     name="Field reports", line=dict(color=_FC_FIELD, width=2),
+                                     customdata=_g[["n_reports"]],
+                                     hovertemplate="%{y:.1f} from %{customdata[0]} reports<extra></extra>"))
+            _m = _models.get(_st)
+            if _m:
+                _f2.add_hline(y=_m["forecast"], line=dict(color=_FC_MODEL, dash="dash"),
+                              annotation_text=f"Model {_m['forecast']:.1f}",
+                              annotation_font_color=_FC_MODEL)
+            _lt = _g.iloc[-1]
+            _rel = [(pd.Timestamp(sel_usda_yr, mo, 12), _lt[c], lb) for mo, c, lb in (
+                (8, "usda_aug", "Aug"), (9, "usda_sep", "Sep"), (10, "usda_oct", "Oct"),
+                (11, "usda_nov", "Nov")) if pd.notna(_lt[c])]
+            if _rel:
+                _f2.add_trace(go.Scatter(x=[r[0] for r in _rel], y=[r[1] for r in _rel],
+                                         mode="markers+text", name="USDA",
+                                         text=[r[2] for r in _rel], textposition="top center",
+                                         marker=dict(color=DM_TEXT, size=9, symbol="square")))
+            _f2.update_layout(paper_bgcolor=DM_BG, plot_bgcolor=DM_SURFACE2, height=330,
+                              margin=dict(l=10, r=10, t=30, b=10), font=dict(color=DM_TEXT),
+                              yaxis=dict(title="bu/ac", gridcolor=DM_BORDER),
+                              xaxis=dict(gridcolor=DM_BORDER),
+                              legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right",
+                                          x=1, bgcolor=DM_SURFACE, bordercolor=DM_BORDER,
+                                          borderwidth=1))
+            _show_chart(_f2, f"field_check_{_st}_season", key="fc_season_chart")
+            st.caption("Each point counts the reports dated through that Sunday; the last one, "
+                       "everything so far (undated reports too). USDA markers sit at the month's report.")
+
+    # ── Backtest: how each read did in the finished seasons ─────────────────────
+    st.markdown('<div class="sec-hdr">Backtest · finished seasons</div>', unsafe_allow_html=True)
+    if _bt.empty:
+        st.info("No finished season has both field reports and a conditions model for the same states.")
+    else:
+        def _mae(s):
+            return s.abs().mean() if len(s) else None
+
+        def _rms(s):
+            return math.sqrt((s ** 2).mean()) if len(s) else None
+        _summ = []
+        for _src, _what in (("Model", "Conditions model, each year left out of its own fit"),
+                            ("Field", "Field reports, premium from the other seasons"),
+                            ("Blend", "Blend, ρ from the other seasons"),
+                            ("USDA Sep", "USDA September forecast"),
+                            ("USDA Oct", "USDA October forecast"),
+                            ("USDA Nov", "USDA November forecast")):
+            _v = _bt.loc[_bt[_src].notna(), [_src, "Reports"]]
+            _v10 = _v.loc[_v["Reports"] >= 10, _src]
+            _summ.append({"Source": _what, "Avg miss": _mae(_v[_src]), "RMS miss": _rms(_v[_src]),
+                          "Avg miss, 10+ reports": _mae(_v10), "RMS miss, 10+ reports": _rms(_v10),
+                          "State-seasons": len(_v)})
+        _pct1 = st.column_config.NumberColumn(format="%.1f%%")
+        st.dataframe(pd.DataFrame(_summ), hide_index=True, width="stretch", column_config={
+            "Avg miss": _pct1, "RMS miss": _pct1, "Avg miss, 10+ reports": _pct1,
+            "RMS miss, 10+ reports": _pct1})
+        _better = int((_bt["Blend"].abs() < _bt["Model"].abs()).sum())
+        _in_f = float((_bt["Field"].abs() <= _bt["_sF"]).mean())
+        _in_m = float((_bt["Model"].abs() <= _bt["_sM"]).mean())
+        st.caption(
+            f"Miss = % off NASS's final, {', '.join(map(str, sorted(_bt['Season'].unique())))}, "
+            f"states with both reads. RMS counts a big miss more; the weights are set to shrink it. "
+            f"The blend beat the model in {_better} of {len(_bt)} state-seasons. Within ±1σ: field "
+            f"{_in_f:.0%}, model {_in_m:.0%} (68% if the σ's are right). The two misses correlate "
+            f"{_rho:+.2f}, which the weights allow for; each season's blend uses the correlation "
+            f"from the other seasons. Past seasons' reports aren't dated, so their field read is "
+            f"season-end; the model is at this week ({_wk_lbl}).")
+        with st.expander("State-season detail", expanded=False):
+            _bt_show = (_bt.drop(columns=["_M", "_F", "_eM", "_eF", "_sM", "_sF"])
+                        .sort_values(["Season", "Reports"], ascending=[True, False]))
+            _bt_show = _bt_show[["Season", "State", "Reports", "NASS final", "Model", "Field",
+                                 "Blend", "Weight on field", "USDA Sep", "USDA Oct", "USDA Nov"]]
+            _sg = st.column_config.NumberColumn(format="%+.1f%%")
+            st.dataframe(_bt_show, hide_index=True, width="stretch", column_config={
+                "NASS final": st.column_config.NumberColumn(format="%.1f"),
+                "Model": _sg, "Field": _sg, "Blend": _sg, "USDA Sep": _sg, "USDA Oct": _sg,
+                "USDA Nov": _sg, "Weight on field": st.column_config.NumberColumn(format="%.0f%%")})
+
+    _fit = _fs.dropna(subset=["sigma_base_pct"])
+    with st.expander("How the numbers are set", expanded=False):
+        _prem = _cur["premium"].dropna()
+        _from = _cur["premium_from"].dropna()
+        st.markdown(
+            "- **Field**: the median report against its county's 5-season NASS average, divided by "
+            "how far reports have run above NASS's final in the other seasons (the premium"
+            + (f", {_prem.iloc[0]:.3f} from {_from.iloc[0].replace(',', ', ')}"
+               if len(_prem) and len(_from) else "")
+            + "), times the state's 5-season average. The yield portal's Reports vs normal reports: "
+              "no seed plots, no silage.\n"
+            + ("- **± field**: from past seasons only. Each season's field read (premium from the "
+               "other seasons) against NASS's final, fitted as σ² = base² + one²/n for n reports: "
+               f"base {_fit['sigma_base_pct'].iloc[0]:.1f}% (the premium moving season to season), "
+               f"one report {_fit['sigma_one_pct'].iloc[0]:.1f}%, from "
+               f"{int(_fit['fit_states'].iloc[0])} state-seasons.\n" if len(_fit) else "")
+            + "- **± model**: the state's conditions model at this week, refitted with each past "
+              "year left out; its typical miss.\n"
+            "- **Blend** = model + weight × (field − model), weight = (σm² − ρσmσf) / (σm² + σf² − "
+            "2ρσmσf), between 0 and 1: the less a read has missed, the more it counts, and the more "
+            f"the two misses move together (ρ, {_rho:+.2f} here, measured on the finished seasons), "
+            "the less the field adds. A state with few reports gets little weight.\n"
+            "- **US**: the national model plus each reporting state's blend shift, by harvested "
+            "acres; states without reports keep the model.")
+
+
+if _FC_ONLY:                     # the JSA Yield Observations tile: the Field Check alone
+    if _fs_rows is None:
+        st.info("The Field Check covers corn and soybeans, from the yield portal's field "
+                "signal, which this login can't read.")
+    else:
+        _fc_tab()
+    st.stop()
 
 _tab_names = ["📊 Conditions", "📈 Yield Model", "📦 Production",
               "🌾 Abandonment Analysis", "📐 Model Validation", "ℹ️ Wheat Classes Reference"]
@@ -6289,204 +6932,6 @@ with _tab_cond:
         )
         _show_chart(fig_diff, "conditions_diff")
 
-    # _use_hrw_index controls seasonal chart series (not KPI visibility)
-    _use_hrw_index = (wheat_class == "HRW — Hard Red Winter")
-
-    # Active series context — state filter overrides wheat class selection
-    # _series_key  : lookup key for _yield_lookup / _trend_data
-    # _series_label: human-readable label for chart titles
-    if sel_state_alpha:
-        _series_key   = sel_state_alpha
-        _series_label = sel_state_name
-    elif _use_hrw_index:
-        _series_key   = "HRW"
-        _series_label = "HRW Index"
-    else:
-        _series_key   = "US"
-        _series_label = "National"
-
-    # ── Option B: Best-signal week locking ────────────────────────────────────────
-    # Run the best-week scan early (cached, so the Validation tab re-uses the result).
-    # Once the current season has passed the peak-R² ISO week for a series, the JSA
-    # index is locked to that week instead of the user-selected week — giving the most
-    # historically predictive snapshot rather than a moving target.
-    import json as _json_bw
-    _bw_scan_devs = {
-        sk: {str(yr): v["dev"] for yr, v in yl.items() if v.get("dev") is not None}
-        for sk, yl in _yield_lookup.items()
-        if any(v.get("dev") is not None for v in yl.values())
-    }
-    _bw_iso_min, _bw_iso_max = commodity_cfg.get("scan_iso_range", (5, 22))
-    _best_week_res: dict = {}
-    if sel_week is not None and not _yield_full.empty and _bw_scan_devs:
-        _best_week_res = _scan_best_week(
-            raw_df, sel_usda_yr,
-            _json_bw.dumps(_bw_scan_devs),
-            tuple(sorted(_dynamic_hrw_weights.items())),
-            tuple(sorted(_dynamic_srw_weights.items())),
-            tuple(sorted(_dynamic_white_weights.items())),
-            _crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
-            _scan_iso_min=_bw_iso_min,
-            _scan_iso_max=_bw_iso_max,
-            commodity_key=commodity_label,
-        )
-
-    _cur_iso_week: "int | None" = (
-        int(pd.Timestamp(sel_week).isocalendar().week) if sel_week is not None else None
-    )
-
-    def _effective_week_ts(sk: str) -> "pd.Timestamp | None":
-        """Return the timestamp to use for JSA snapping (Option B locking).
-
-        If the current season has already passed the peak-R² ISO week for
-        series `sk`, return a timestamp for that best week so the regression
-        uses the most predictive historical snapshot.  Otherwise fall back to
-        the user-selected week (no data available for the best week yet).
-        """
-        if sel_week is None or _cur_iso_week is None:
-            return None
-        _bw   = _best_week_res.get(sk, {})
-        _best = _bw.get("best_iso")
-        if _best is not None and _cur_iso_week >= int(_best):
-            try:
-                # Convert ISO week → calendar date (Sunday = day 7) in the same year
-                return pd.Timestamp.fromisocalendar(
-                    int(pd.Timestamp(sel_week).year), int(_best), 7
-                )
-            except Exception:
-                pass
-        return pd.Timestamp(sel_week)
-
-    # ── Analog forecasts — computed once here, reused in scatter, analog section, yield table ──
-    _analog_result        = None
-    _class_analog_results = {"US": None, "HRW": None, "SRW": None, "White": None}
-    _multi_week_analog    = {}  # {sk: [(analog_result, r2), ...]} for top-4 predictive weeks
-    if sel_week is not None and not _yield_full.empty:
-        _cwm = {"HRW": _dynamic_hrw_weights, "SRW": _dynamic_srw_weights, "White": _dynamic_white_weights}
-        _analog_result = _compute_analog_forecast(
-            _series_key, raw_df, _effective_week_ts(_series_key), sel_usda_yr,
-            _yield_lookup, _trend_data, _dynamic_hrw_weights, class_weights_map=_cwm,
-            crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
-            cond_weights=_active_cw,
-        )
-        _csk_list = ("US", "HRW", "SRW", "White") if commodity_cfg.get("has_classes", True) else ("US",)
-        for _csk in _csk_list:
-            if _csk == _series_key:
-                _class_analog_results[_csk] = _analog_result
-            else:
-                _class_analog_results[_csk] = _compute_analog_forecast(
-                    _csk, raw_df, _effective_week_ts(_csk), sel_usda_yr,
-                    _yield_lookup, _trend_data, _dynamic_hrw_weights, class_weights_map=_cwm,
-                    crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
-                    cond_weights=_active_cw,
-                )
-        # Build R²-weighted multi-week analog results for the top-4 most-predictive ISO weeks
-        for _csk in _csk_list:
-            _bw_csk = _best_week_res.get(_csk, {})
-            _top4   = _bw_csk.get("top4_iso", [])
-            _wf     = []
-            for _tw in _top4:
-                _iso_w = _tw["iso_w"]
-                _r2_w  = _tw["r2"]
-                if _cur_iso_week is not None and _cur_iso_week >= _iso_w:
-                    try:
-                        _ts_w = pd.Timestamp.fromisocalendar(
-                            int(pd.Timestamp(sel_week).year), int(_iso_w), 7
-                        )
-                    except Exception:
-                        continue
-                    _af_w = _compute_analog_forecast(
-                        _csk, raw_df, _ts_w, sel_usda_yr,
-                        _yield_lookup, _trend_data, _dynamic_hrw_weights,
-                        class_weights_map=_cwm,
-                        crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
-                        cond_weights=_active_cw,
-                    )
-                    if _af_w is not None:
-                        _wf.append((_af_w, _r2_w))
-            _multi_week_analog[_csk] = _wf
-
-    # ── Yield model helpers (used inline below each class row) ────────────────────
-    def _yield_mkt_lbl(harvest_yr: int) -> str:
-        return mkt_label(harvest_yr)
-
-    def _ykpi(state_key: str):
-        if _yield_full.empty or state_key not in _trend_data:
-            return None
-        td    = _trend_data[state_key]
-        rows  = _yield_full[_yield_full["state_alpha"] == state_key].sort_values("year")
-        if rows.empty:
-            return None
-        latest     = rows.iloc[-1]
-        h_yr       = int(latest["year"])
-        actual     = float(latest["yield_bu_ac"])
-        trend_same = _trend_at(td, h_yr)
-        proj_trend = _trend_at(td, sel_usda_yr)
-        return {
-            "h_yr":       h_yr,
-            "mkt_lbl":    _yield_mkt_lbl(h_yr),
-            "actual":     actual,
-            "trend_same": trend_same,
-            "dev":        _dev_pct(actual, trend_same),
-            "proj_trend": proj_trend,
-            "r2":         td["r2"],
-            "equation":   td["equation"],
-            "n":          td["n"],
-        }
-
-    def _jsa_reg_forecast(sk: str):
-        """Return (forecast_bu_ac, dev_pct) from R²-weighted OLS across the top-4
-        most-predictive ISO weeks that have already passed this season.
-        Falls back to the single current-week snapshot when no top-4 week has
-        passed yet.  Returns (None, None) if insufficient data."""
-        _yk2    = _ykpi(sk)
-        _lkup2  = _yield_lookup.get(sk, {})
-        _trend2 = (_yk2 or {}).get("proj_trend")
-        if _trend2 is None:
-            return None, None
-
-        # Primary path: R²-weighted average over available top-4 weeks
-        _wf = _multi_week_analog.get(sk, [])
-        if not _wf:
-            # No top-4 week has passed yet — fall back to current-week analog
-            _af2 = _class_analog_results.get(sk)
-            if not _af2:
-                return None, None
-            _bw_r2 = float(_best_week_res.get(sk, {}).get("r2") or 1.0)
-            _wf = [(_af2, _bw_r2)]
-
-        _forecasts = []
-        for _af_w, _r2_w in _wf:
-            _snap_w = _af_w.get("jsa_snap", {})
-            _cj_w   = _af_w.get("cur_jsa")
-            if _cj_w is None:
-                continue
-            _pts = [
-                (_snap_w[cy], _lkup2[cy]["dev"])
-                for cy in _snap_w
-                if cy != sel_usda_yr and cy in _lkup2 and _lkup2[cy].get("dev") is not None
-            ]
-            if len(_pts) < 3:
-                continue
-            _xw = np.array([p[0] for p in _pts])
-            _yw = np.array([p[1] for p in _pts])
-            _lc = np.linalg.lstsq(np.vstack([_xw, np.ones(len(_xw))]).T, _yw, rcond=None)[0]
-            _dev_w = float(_lc[0] * float(_cj_w) + _lc[1])
-            _fc_w  = _trend2 * (1 + _dev_w / 100)
-            _forecasts.append((_fc_w, _dev_w, _r2_w))
-
-        if not _forecasts:
-            return None, None
-        if len(_forecasts) == 1:
-            return round(_forecasts[0][0], 1), round(_forecasts[0][1], 1)
-
-        # R²-weighted average across contributing weeks
-        _tot_r2  = sum(f[2] for f in _forecasts)
-        if _tot_r2 <= 0:
-            _tot_r2 = float(len(_forecasts))
-        _fc_avg  = sum(f[0] * f[2] / _tot_r2 for f in _forecasts)
-        _dev_avg = sum(f[1] * f[2] / _tot_r2 for f in _forecasts)
-        return round(_fc_avg, 1), round(_dev_avg, 1)
 
     def _yield_kpi_cards(sk, yk, card_class, label_prefix, color, subtitle=""):
         if not yk:
@@ -12971,405 +13416,6 @@ with _tab_info:
 
     else:
         st.info("The Wheat Classes Reference is available when Winter Wheat is selected as the commodity.")
-
-
-# ── Field Check tab (beta, internal) ──────────────────────────────────────────
-# The conditions model beside the field reports, per state, blended by how far
-# each has missed NASS's final and how much their misses move together:
-#   weight on the field read = (σm² − ρ·σm·σf) / (σm² + σf² − 2ρ·σm·σf), in [0, 1]
-# the minimum-variance mix of two reads whose errors correlate ρ. σm is the
-# state's conditions model refitted leaving each year out (this week); σf comes
-# with the signal, fitted on past seasons' field reads vs NASS finals; ρ is the
-# correlation of the two misses, each over its σ, in the finished seasons. With
-# ρ = 0 this is plain inverse-variance weighting, which the 2023-25 backtest
-# showed over-weights the field for soybeans (their misses correlate ~ +0.35).
-# The tab body is a fragment: its state picker reruns only this tab.
-_FC_FIELD, _FC_MODEL, _FC_BLEND = "#eb6834", DM_MUTED, JPSI_BLUE
-_FC_MIN_RHO_ROWS = 8          # finished state-seasons needed to measure ρ (else 0)
-_fc_fragment = getattr(st, "fragment", lambda f: f)
-
-
-def _fc_state_model(sk: str):
-    """The Yield Model tab's state forecast (as _sfcast: OLS of the yield's % off
-    trend on the JSA index at the effective week, every other year), plus the same
-    model refitted leaving each year out -> {forecast, sigma_pct, n_years, loo}."""
-    if sel_week is None or sk not in _trend_data:
-        return None
-    _af = _compute_analog_forecast(
-        sk, raw_df, _effective_week_ts(sk), sel_usda_yr, _yield_lookup, _trend_data,
-        _dynamic_hrw_weights,
-        class_weights_map={"HRW": _dynamic_hrw_weights, "SRW": _dynamic_srw_weights,
-                           "White": _dynamic_white_weights},
-        crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9), cond_weights=_active_cw,
-    )
-    if not _af or _af.get("cur_jsa") is None:
-        return None
-    _snap, _lk = _af["jsa_snap"], _yield_lookup.get(sk, {})
-    _yrs = [cy for cy in sorted(_snap) if cy != sel_usda_yr and cy in _lk
-            and _lk[cy].get("dev") is not None and _lk[cy].get("yield")]
-    if len(_yrs) < 4:
-        return None
-    _x = np.array([_snap[cy] for cy in _yrs], dtype=float)
-    _y = np.array([_lk[cy]["dev"] for cy in _yrs], dtype=float)
-    _A = np.vstack([_x, np.ones(len(_x))]).T
-    _a, _b = np.linalg.lstsq(_A, _y, rcond=None)[0]
-    _fcst = _trend_at(_trend_data[sk], sel_usda_yr) * (1 + (_a * float(_af["cur_jsa"]) + _b) / 100)
-    _loo = {}
-    for _i, _cy in enumerate(_yrs):
-        _keep = np.arange(len(_yrs)) != _i
-        _ai, _bi = np.linalg.lstsq(_A[_keep], _y[_keep], rcond=None)[0]
-        _loo[_cy] = _lk[_cy]["trend"] * (1 + (_ai * _x[_i] + _bi) / 100)
-    _errs = [100 * math.log(_loo[cy] / _lk[cy]["yield"]) for cy in _yrs if _loo[cy] > 0]
-    return {"forecast": float(_fcst), "n_years": len(_errs), "loo": _loo,
-            "sigma_pct": math.sqrt(sum(e * e for e in _errs) / len(_errs))}
-
-
-def _fc_weight(sig_m, sig_f, rho: float = 0.0) -> float:
-    """Weight on the field read: (σm² − ρσmσf) / (σm² + σf² − 2ρσmσf), clipped to
-    [0, 1]; 0 without both σ's."""
-    if not sig_m or sig_f is None or pd.isna(sig_f) or not sig_f:
-        return 0.0
-    _den = sig_m ** 2 + sig_f ** 2 - 2 * rho * sig_m * sig_f
-    if _den <= 0:
-        return 0.0
-    return min(1.0, max(0.0, (sig_m ** 2 - rho * sig_m * sig_f) / _den))
-
-
-def _fc_rho(bt: pd.DataFrame, leave_out=None) -> float:
-    """Correlation of the model's and the field's misses, each over its σ, in the
-    finished state-seasons (other than season `leave_out`); 0 with too few."""
-    _b = bt if leave_out is None else bt[bt["Season"] != leave_out]
-    if len(_b) < _FC_MIN_RHO_ROWS:
-        return 0.0
-    _r = (_b["_eM"] / _b["_sM"]).corr(_b["_eF"] / _b["_sF"])
-    return 0.0 if pd.isna(_r) else float(_r)
-
-
-def _fc_backtest(done: pd.DataFrame, models: dict) -> pd.DataFrame:
-    """One row per finished state-season with both reads: the model refitted
-    without that year, the field read (premium from the other seasons), their σ's
-    and USDA's monthly forecasts, misses as 100·ln(read / NASS final). Each
-    season's blend uses ρ from the other seasons, never its own misses."""
-    _rows = []
-    for _r in done.itertuples():
-        _m = models.get(_r.state)
-        if not _m or pd.isna(_r.implied) or pd.isna(_r.sigma_pct):
-            continue
-        _M = _m["loo"].get(int(_r.season))
-        if _M is None and int(_r.season) == sel_usda_yr:
-            _M = _m["forecast"]
-        if _M is None or _M <= 0:
-            continue
-        _fin = float(_r.nass_final)
-
-        def _miss(v, fin=_fin):
-            return 100 * math.log(v / fin) if (v is not None and pd.notna(v) and v > 0) else None
-        _rows.append({"Season": int(_r.season), "State": _r.state, "Reports": int(_r.n_reports),
-                      "NASS final": _fin, "_M": _M, "_F": float(_r.implied),
-                      "_eM": _miss(_M), "_eF": _miss(_r.implied),
-                      "_sM": _m["sigma_pct"], "_sF": float(_r.sigma_pct),
-                      "USDA Sep": _miss(_r.usda_sep), "USDA Oct": _miss(_r.usda_oct),
-                      "USDA Nov": _miss(_r.usda_nov)})
-    bt = pd.DataFrame(_rows)
-    if bt.empty:
-        return bt
-    _rho_without = {s: _fc_rho(bt, leave_out=s) for s in bt["Season"].unique()}
-    _w = [_fc_weight(sm, sf, _rho_without[s]) for sm, sf, s in zip(bt["_sM"], bt["_sF"], bt["Season"])]
-    bt["Weight on field"] = [w * 100 for w in _w]
-    bt["Model"], bt["Field"] = bt["_eM"], bt["_eF"]
-    bt["Blend"] = 100 * np.log((bt["_M"] + np.array(_w) * (bt["_F"] - bt["_M"])) / bt["NASS final"])
-    return bt
-
-
-def _fc_harvested(sk: str):
-    """Harvested acres for the season: the Production tab's estimate, else the
-    latest NASS figure; for "US" the sum over states."""
-    _v = ((globals().get("_jsa_col") or {}).get(sk) or {}).get("harvested_ac")
-    if _v:
-        return float(_v)
-    _a = _prod_tab_acres_df
-    if _a is None or _a.empty or "harvested_ac" not in _a:
-        return None
-    _a = _a[(_a["year"] <= sel_usda_yr) & _a["harvested_ac"].notna()]
-    if sk == "US":
-        _a = _a[(_a["state_alpha"].str.len() == 2) & (_a["state_alpha"] != "US")]
-        return float(_a[_a["year"] == _a["year"].max()]["harvested_ac"].sum()) if len(_a) else None
-    _a = _a[_a["state_alpha"] == sk].sort_values("year")
-    return float(_a["harvested_ac"].iloc[-1]) if len(_a) else None
-
-
-def _fc_kpi(value: str, label: str, color: str = JPSI_BLUE):
-    st.markdown(f'<div class="kpi-card" style="border-top-color:{color}">'
-                f'<div class="kpi-main">{value}</div><div class="kpi-label">{label}</div></div>',
-                unsafe_allow_html=True)
-
-
-@_fc_fragment
-def _fc_tab():
-    st.markdown(
-        '<div class="season-note">🧪 <b>Beta · internal.</b> The conditions model beside what '
-        "the season's field reports (Ag Trader Talk + JSA) say each state will yield, blended "
-        "by how far each has missed NASS's final in the past. Built from field reports: not "
-        "for clients.</div>", unsafe_allow_html=True)
-    _fs = _fs_rows.copy()
-    for _c in ("n_reports", "n_undated", "ratio", "premium", "state_avg5", "implied",
-               "sigma_pct", "sigma_base_pct", "sigma_one_pct", "fit_states", "nass_final",
-               "usda_current", "usda_aug", "usda_sep", "usda_oct", "usda_nov"):
-        _fs[_c] = pd.to_numeric(_fs[_c], errors="coerce")
-    _season = _fs[_fs["season"] == sel_usda_yr]
-    _cur = _season[_season["kind"] == "latest"]
-    if _cur.empty:
-        _cur = _season[_season["kind"] == "season"]
-    _done = _fs[(_fs["kind"] == "season") & _fs["nass_final"].notna()]
-    _states = sorted(set(_cur["state"]) | set(_done["state"]))
-    with st.spinner("Running the conditions model for the reporting states…"):
-        _models = {s: _fc_state_model(s) for s in _states}
-    _bt = _fc_backtest(_done, _models)
-    _rho = _fc_rho(_bt) if not _bt.empty else 0.0
-    _wk_lbl = (f"{pd.Timestamp(sel_week).strftime('%b %d')} · Wk "
-               f"{int(pd.Timestamp(sel_week).isocalendar().week)}" if sel_week is not None else "—")
-
-    if _cur.empty:
-        st.info(f"No {commodity_label.lower()} field reports for {sel_usda_yr}; they start in "
-                f"{int(_fs['season'].min())}. The backtest below covers the finished seasons.")
-    else:
-        _rows = []
-        for _r in _cur.itertuples():
-            _m = _models.get(_r.state)
-            _M = _m["forecast"] if _m else None
-            _sM = _m["sigma_pct"] if _m else None
-            _F = _r.implied if pd.notna(_r.implied) else None
-            _sF = _r.sigma_pct if pd.notna(_r.sigma_pct) else None
-            _w = _fc_weight(_sM, _sF, _rho) if (_M is not None and _F is not None) else None
-            _B = _M + _w * (_F - _M) if _w is not None else None
-            _z = None
-            if _w is not None and _sF:
-                _bm, _bf = _M * _sM / 100, _F * _sF / 100
-                _sd = _bm ** 2 + _bf ** 2 - 2 * _rho * _bm * _bf
-                _z = abs(_F - _M) / math.sqrt(_sd) if _sd > 0 else None
-            _rows.append({
-                "State": _r.state, "Reports": int(_r.n_reports), "Tier": _r.tier,
-                "Field": _F, "± field": _F * _sF / 100 if (_F and _sF) else None,
-                "Model": _M, "± model": _M * _sM / 100 if _M else None,
-                "Weight on field": _w * 100 if _w is not None else None, "Blend": _B,
-                "USDA": _r.usda_current if pd.notna(_r.usda_current) else None,
-                "USDA is": _r.usda_label,
-                "5-yr avg": _r.state_avg5, "Field − model": (_F - _M) if _w is not None else None,
-                "Field vs model": (None if _z is None else "within 1σ" if _z <= 1
-                                   else "1–2σ apart" if _z <= 2 else "over 2σ apart"),
-                "_harv": _fc_harvested(_r.state), "_sF": _sF, "_sM": _sM,
-            })
-        _tbl = pd.DataFrame(_rows).sort_values("_harv", ascending=False, na_position="last")
-
-        # US: the national model, shifted by each reporting state's blend over its
-        # model, weighted by harvested acres; states without reports keep the model.
-        _us_model = None
-        if sel_week is not None and "_jsa_reg_forecast" in globals():
-            _us_model, _ = _jsa_reg_forecast("US")
-        _us_harv = _fc_harvested("US")
-        _shift, _covered = 0.0, 0.0
-        for _bl, _mo, _h in zip(_tbl["Blend"], _tbl["Model"], _tbl["_harv"]):
-            if pd.notna(_bl) and pd.notna(_mo) and pd.notna(_h) and _h:
-                _shift += _h * (_bl - _mo)
-                _covered += _h
-        _us_blend = _us_model + _shift / _us_harv if (_us_model and _us_harv) else None
-        _us_usda = (_yield_lookup.get("US", {}).get(sel_usda_yr) or {}).get("yield")
-        _n_rep = int(_cur["n_reports"].sum())
-        _last = pd.to_datetime(_cur["last_report"], errors="coerce").max()
-
-        st.markdown(f'<div class="sec-hdr">{commodity_label} {sel_usda_yr}: model, field reports '
-                    f'and the blend &nbsp;·&nbsp; <span style="color:{JPSI_BLUE}">{_wk_lbl}</span>'
-                    f'</div>', unsafe_allow_html=True)
-        _k = st.columns(4)
-        with _k[0]:
-            _fc_kpi(f"{_us_model:.1f}" if _us_model else "—", "Conditions model · US bu/ac", _FC_MODEL)
-        with _k[1]:
-            _d = f" ({_us_blend - _us_model:+.1f})" if (_us_blend and _us_model) else ""
-            _fc_kpi(f"{_us_blend:.1f}{_d}" if _us_blend else "—", "Blend · US bu/ac", _FC_BLEND)
-        with _k[2]:
-            _fc_kpi(f"{_us_usda:.1f}" if _us_usda else "—", "USDA · US bu/ac", DM_TEXT)
-        with _k[3]:
-            _share = f" · {_covered / _us_harv:.0%} of US acres" if _us_harv else ""
-            _fc_kpi(f"{_n_rep}", f"Field reports · {len(_cur)} states{_share}", _FC_FIELD)
-        st.caption(
-            (f"Reports through {_last:%b %d}. " if pd.notna(_last) else "")
-            + "US blend = the national model plus each reporting state's blend shift, by harvested "
-              "acres. USDA is its latest for the season (the final once it's out).")
-
-        # Dot plot: each state against its own model forecast, so every state reads
-        # on one scale; bars are ±1σ.
-        _p = _tbl[_tbl["Model"].notna() & _tbl["Field"].notna()].reset_index(drop=True)
-        if not _p.empty:
-            _yy = list(range(len(_p)))[::-1]
-            _lbl = [f"{s} ({n})" for s, n in zip(_p["State"], _p["Reports"])]
-            _fig = go.Figure()
-            _fig.add_vline(x=0, line=dict(color=DM_BORDER, width=1))
-            _fig.add_trace(go.Scatter(
-                x=[0] * len(_p), y=[y + 0.2 for y in _yy], mode="markers", name="Conditions model ±1σ",
-                marker=dict(color=_FC_MODEL, size=9),
-                error_x=dict(type="data", array=_p["_sM"], color=_FC_MODEL, thickness=1.5, width=0),
-                customdata=_p[["Model"]], hovertemplate="Model %{customdata[0]:.1f}<extra></extra>"))
-            _fig.add_trace(go.Scatter(
-                x=(_p["Field"] / _p["Model"] - 1) * 100, y=[y - 0.2 for y in _yy], mode="markers",
-                name="Field reports ±1σ", marker=dict(color=_FC_FIELD, size=10, symbol="diamond"),
-                error_x=dict(type="data", array=_p["± field"] / _p["Model"] * 100, color=_FC_FIELD,
-                             thickness=1.5, width=0),
-                customdata=_p[["Field", "Reports"]],
-                hovertemplate="Field %{customdata[0]:.1f} from %{customdata[1]} reports<extra></extra>"))
-            _fig.add_trace(go.Scatter(
-                x=(_p["Blend"] / _p["Model"] - 1) * 100, y=_yy, mode="markers", name="Blend",
-                marker=dict(color=_FC_BLEND, size=13, symbol="star"),
-                customdata=_p[["Blend", "Weight on field"]],
-                hovertemplate="Blend %{customdata[0]:.1f} (%{customdata[1]:.0f}% field)<extra></extra>"))
-            _u = _p[_p["USDA"].notna()]
-            _fig.add_trace(go.Scatter(
-                x=(_u["USDA"] / _u["Model"] - 1) * 100, y=[_yy[i] for i in _u.index], mode="markers",
-                name="USDA", marker=dict(color=DM_TEXT, size=16, symbol="line-ns-open",
-                                         line=dict(width=2.5, color=DM_TEXT)),
-                customdata=_u[["USDA"]], hovertemplate="USDA %{customdata[0]:.1f}<extra></extra>"))
-            _fig.update_layout(
-                paper_bgcolor=DM_BG, plot_bgcolor=DM_SURFACE2, height=90 + 46 * len(_p),
-                margin=dict(l=10, r=10, t=30, b=10), font=dict(color=DM_TEXT),
-                xaxis=dict(title="% vs the state's conditions model", ticksuffix="%", zeroline=False,
-                           gridcolor=DM_BORDER),
-                yaxis=dict(tickvals=_yy, ticktext=_lbl, gridcolor=DM_SURFACE2),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                            bgcolor=DM_SURFACE, bordercolor=DM_BORDER, borderwidth=1),
-                hovermode="closest")
-            _show_chart(_fig, "field_check_states", key="fc_states_chart")
-
-        _show = _tbl.drop(columns=["_harv", "_sF", "_sM"])
-        _fin = _cur.set_index("state")["nass_final"]
-        if _fin.notna().any():
-            _show.insert(_show.columns.get_loc("USDA is") + 1, "NASS final",
-                         _show["State"].map(_fin))
-        _bu = st.column_config.NumberColumn(format="%.1f")
-        st.dataframe(_show, hide_index=True, width="stretch", height=35 * (len(_show) + 1) + 3,
-                     column_config={
-                         "Field": _bu, "± field": _bu, "Model": _bu, "± model": _bu, "Blend": _bu,
-                         "USDA": _bu, "NASS final": _bu, "5-yr avg": _bu,
-                         "Field − model": st.column_config.NumberColumn(format="%+.1f"),
-                         "Weight on field": st.column_config.NumberColumn(format="%.0f%%"),
-                     })
-        _dl_btn(_show, f"field_check_{commodity_label.lower()}_{sel_usda_yr}.xlsx")
-
-        # Season so far: the field read week by week for one state.
-        _wk = _season[_season["kind"].isin(["week", "latest"])]
-        if not _wk.empty:
-            st.markdown('<div class="sec-hdr">Season so far</div>', unsafe_allow_html=True)
-            _opts = _tbl["State"].tolist()
-            _dflt = sel_state_alpha if sel_state_alpha in _opts else _opts[0]
-            _st = st.selectbox("State", _opts, index=_opts.index(_dflt), key="fc_line_state")
-            _g = _wk[_wk["state"] == _st].sort_values("as_of")
-            _g = _g.assign(as_of=pd.to_datetime(_g["as_of"]))
-            _lo = _g["implied"] * (1 - _g["sigma_pct"] / 100)
-            _hi = _g["implied"] * (1 + _g["sigma_pct"] / 100)
-            _f2 = go.Figure()
-            _f2.add_trace(go.Scatter(x=list(_g["as_of"]) + list(_g["as_of"])[::-1],
-                                     y=list(_hi) + list(_lo)[::-1], fill="toself", mode="lines",
-                                     fillcolor="rgba(235,104,52,0.15)", line=dict(width=0),
-                                     hoverinfo="skip", name="Field ±1σ"))
-            _f2.add_trace(go.Scatter(x=_g["as_of"], y=_g["implied"], mode="lines+markers",
-                                     name="Field reports", line=dict(color=_FC_FIELD, width=2),
-                                     customdata=_g[["n_reports"]],
-                                     hovertemplate="%{y:.1f} from %{customdata[0]} reports<extra></extra>"))
-            _m = _models.get(_st)
-            if _m:
-                _f2.add_hline(y=_m["forecast"], line=dict(color=_FC_MODEL, dash="dash"),
-                              annotation_text=f"Model {_m['forecast']:.1f}",
-                              annotation_font_color=_FC_MODEL)
-            _lt = _g.iloc[-1]
-            _rel = [(pd.Timestamp(sel_usda_yr, mo, 12), _lt[c], lb) for mo, c, lb in (
-                (8, "usda_aug", "Aug"), (9, "usda_sep", "Sep"), (10, "usda_oct", "Oct"),
-                (11, "usda_nov", "Nov")) if pd.notna(_lt[c])]
-            if _rel:
-                _f2.add_trace(go.Scatter(x=[r[0] for r in _rel], y=[r[1] for r in _rel],
-                                         mode="markers+text", name="USDA",
-                                         text=[r[2] for r in _rel], textposition="top center",
-                                         marker=dict(color=DM_TEXT, size=9, symbol="square")))
-            _f2.update_layout(paper_bgcolor=DM_BG, plot_bgcolor=DM_SURFACE2, height=330,
-                              margin=dict(l=10, r=10, t=30, b=10), font=dict(color=DM_TEXT),
-                              yaxis=dict(title="bu/ac", gridcolor=DM_BORDER),
-                              xaxis=dict(gridcolor=DM_BORDER),
-                              legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right",
-                                          x=1, bgcolor=DM_SURFACE, bordercolor=DM_BORDER,
-                                          borderwidth=1))
-            _show_chart(_f2, f"field_check_{_st}_season", key="fc_season_chart")
-            st.caption("Each point counts the reports dated through that Sunday; the last one, "
-                       "everything so far (undated reports too). USDA markers sit at the month's report.")
-
-    # ── Backtest: how each read did in the finished seasons ─────────────────────
-    st.markdown('<div class="sec-hdr">Backtest · finished seasons</div>', unsafe_allow_html=True)
-    if _bt.empty:
-        st.info("No finished season has both field reports and a conditions model for the same states.")
-    else:
-        def _mae(s):
-            return s.abs().mean() if len(s) else None
-
-        def _rms(s):
-            return math.sqrt((s ** 2).mean()) if len(s) else None
-        _summ = []
-        for _src, _what in (("Model", "Conditions model, each year left out of its own fit"),
-                            ("Field", "Field reports, premium from the other seasons"),
-                            ("Blend", "Blend, ρ from the other seasons"),
-                            ("USDA Sep", "USDA September forecast"),
-                            ("USDA Oct", "USDA October forecast"),
-                            ("USDA Nov", "USDA November forecast")):
-            _v = _bt.loc[_bt[_src].notna(), [_src, "Reports"]]
-            _v10 = _v.loc[_v["Reports"] >= 10, _src]
-            _summ.append({"Source": _what, "Avg miss": _mae(_v[_src]), "RMS miss": _rms(_v[_src]),
-                          "Avg miss, 10+ reports": _mae(_v10), "RMS miss, 10+ reports": _rms(_v10),
-                          "State-seasons": len(_v)})
-        _pct1 = st.column_config.NumberColumn(format="%.1f%%")
-        st.dataframe(pd.DataFrame(_summ), hide_index=True, width="stretch", column_config={
-            "Avg miss": _pct1, "RMS miss": _pct1, "Avg miss, 10+ reports": _pct1,
-            "RMS miss, 10+ reports": _pct1})
-        _better = int((_bt["Blend"].abs() < _bt["Model"].abs()).sum())
-        _in_f = float((_bt["Field"].abs() <= _bt["_sF"]).mean())
-        _in_m = float((_bt["Model"].abs() <= _bt["_sM"]).mean())
-        st.caption(
-            f"Miss = % off NASS's final, {', '.join(map(str, sorted(_bt['Season'].unique())))}, "
-            f"states with both reads. RMS counts a big miss more; the weights are set to shrink it. "
-            f"The blend beat the model in {_better} of {len(_bt)} state-seasons. Within ±1σ: field "
-            f"{_in_f:.0%}, model {_in_m:.0%} (68% if the σ's are right). The two misses correlate "
-            f"{_rho:+.2f}, which the weights allow for; each season's blend uses the correlation "
-            f"from the other seasons. Past seasons' reports aren't dated, so their field read is "
-            f"season-end; the model is at this week ({_wk_lbl}).")
-        with st.expander("State-season detail", expanded=False):
-            _bt_show = (_bt.drop(columns=["_M", "_F", "_eM", "_eF", "_sM", "_sF"])
-                        .sort_values(["Season", "Reports"], ascending=[True, False]))
-            _bt_show = _bt_show[["Season", "State", "Reports", "NASS final", "Model", "Field",
-                                 "Blend", "Weight on field", "USDA Sep", "USDA Oct", "USDA Nov"]]
-            _sg = st.column_config.NumberColumn(format="%+.1f%%")
-            st.dataframe(_bt_show, hide_index=True, width="stretch", column_config={
-                "NASS final": st.column_config.NumberColumn(format="%.1f"),
-                "Model": _sg, "Field": _sg, "Blend": _sg, "USDA Sep": _sg, "USDA Oct": _sg,
-                "USDA Nov": _sg, "Weight on field": st.column_config.NumberColumn(format="%.0f%%")})
-
-    _fit = _fs.dropna(subset=["sigma_base_pct"])
-    with st.expander("How the numbers are set", expanded=False):
-        _prem = _cur["premium"].dropna()
-        _from = _cur["premium_from"].dropna()
-        st.markdown(
-            "- **Field**: the median report against its county's 5-season NASS average, divided by "
-            "how far reports have run above NASS's final in the other seasons (the premium"
-            + (f", {_prem.iloc[0]:.3f} from {_from.iloc[0].replace(',', ', ')}"
-               if len(_prem) and len(_from) else "")
-            + "), times the state's 5-season average. The yield portal's Reports vs normal reports: "
-              "no seed plots, no silage.\n"
-            + ("- **± field**: from past seasons only. Each season's field read (premium from the "
-               "other seasons) against NASS's final, fitted as σ² = base² + one²/n for n reports: "
-               f"base {_fit['sigma_base_pct'].iloc[0]:.1f}% (the premium moving season to season), "
-               f"one report {_fit['sigma_one_pct'].iloc[0]:.1f}%, from "
-               f"{int(_fit['fit_states'].iloc[0])} state-seasons.\n" if len(_fit) else "")
-            + "- **± model**: the state's conditions model at this week, refitted with each past "
-              "year left out; its typical miss.\n"
-            "- **Blend** = model + weight × (field − model), weight = (σm² − ρσmσf) / (σm² + σf² − "
-            "2ρσmσf), between 0 and 1: the less a read has missed, the more it counts, and the more "
-            f"the two misses move together (ρ, {_rho:+.2f} here, measured on the finished seasons), "
-            "the less the field adds. A state with few reports gets little weight.\n"
-            "- **US**: the national model plus each reporting state's blend shift, by harvested "
-            "acres; states without reports keep the model.")
 
 
 if _tab_field is not None:

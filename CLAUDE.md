@@ -219,7 +219,16 @@ own `?view=1` client link is a separate app). The entry screens write to `YIELD_
 so `ADMIN_PORTAL_ROLE` needs INSERT/UPDATE/DELETE on `YIELD_OBSERVATIONS` and
 `REVIEW_DECISIONS` plus CREATE TABLE on the schema (granted 2026-10-11), on top of the
 SELECT it already had. `yp_db.py` pins `YIELD_REPORTS.PUBLIC` itself, so the shell's
-`SNOWFLAKE_DATABASE` doesn't matter. ISA states its copyright and no other terms, which is
+`SNOWFLAKE_DATABASE` doesn't matter.
+
+**Field check (beta)** in that tile (2026-10-14, Kolten: "I want it in the JSA Yield
+observations as well but under the admin page") is not a yield portal page: the wrapper
+runs `apps/crop_conditions/app.py` with `FIELD_CHECK_ONLY = True` in its globals
+(`runpy` `init_globals`), and the Conditions script then shows a commodity/season picker
+and only its Field Check (the conditions model beside the yield portal's
+`FIELD_SIGNAL`), then stops. Same code and numbers as the Crop Conditions tab, no copy of
+the model; it needs both mirrors present and `FIELD_CHECK` pinned for crop_conditions.
+First open is as slow as the Conditions page (shared caches after). ISA states its copyright and no other terms, which is
 why the strip trials live only behind passwords. The old `apps/strip_trials/` copy is deleted.
 
 The local `.streamlit/secrets.toml` still holds the old `GNC89034` personal key,

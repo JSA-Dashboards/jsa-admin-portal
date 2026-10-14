@@ -20,10 +20,19 @@ sys.path.insert(0, str(HERE))
 # share link. This portal is internal (password-gated), so they show everything.
 st.session_state["view_only"] = False
 
+# Field check (beta) is the Crop Conditions page's Field Check tab, shown alone: the
+# conditions model lives in crop-conditions-dashboard, so this tile runs that page's
+# script (apps/crop_conditions) with FIELD_CHECK_ONLY in its globals, which swaps its
+# filter bar and tabs for a commodity/season picker and the Field Check. Same code,
+# same numbers as the tab. Only this portal has the page; the yield portal's own app
+# never shows the field signal.
+FIELD_CHECK_APP = HERE.parent / "crop_conditions" / "app.py"
+
 PAGES = {
     "Explore": "explore.py",
     "Report text": "report_text.py",
     "Reports vs normal": "normal.py",
+    "Field check (beta)": None,          # FIELD_CHECK_APP in field-check-only mode
     "Field issues": "field_issues.py",
     "Variety trials": "trials.py",
     "Strip trials": "strip_trials.py",
@@ -31,8 +40,13 @@ PAGES = {
     "Review & edit": "review.py",
     "Import PDF": "import_pdf.py",
 }
-PAGES = {title: f for title, f in PAGES.items() if (HERE / "app_pages" / f).exists()}
+PAGES = {title: f for title, f in PAGES.items()
+         if (FIELD_CHECK_APP.exists() if f is None else (HERE / "app_pages" / f).exists())}
 
 choice = st.segmented_control("Yield portal page", list(PAGES), default="Explore",
                               key="yp_page", label_visibility="collapsed") or "Explore"
-runpy.run_path(str(HERE / "app_pages" / PAGES[choice]), run_name="__main__")
+if PAGES[choice] is None:
+    runpy.run_path(str(FIELD_CHECK_APP), run_name="__main__",
+                   init_globals={"FIELD_CHECK_ONLY": True})
+else:
+    runpy.run_path(str(HERE / "app_pages" / PAGES[choice]), run_name="__main__")
