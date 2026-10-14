@@ -3821,8 +3821,14 @@ def _scan_best_week(_raw_df, _sel_usda_yr, _yield_devs_json,
                 best_r2, best_iso = r2, iso_w
 
         if best_iso is not None:
-            results[sk] = {"best_iso": best_iso, "r2": round(best_r2, 4),
-                           "n_years": len(devs), "all_r2": all_r2}
+            _top4_w = sorted(all_r2.items(), key=lambda kv: kv[1], reverse=True)[:4]
+            results[sk] = {
+                "best_iso":  best_iso,
+                "r2":        round(best_r2, 4),
+                "n_years":   len(devs),
+                "all_r2":    all_r2,
+                "top4_iso":  [{"iso_w": int(w), "r2": float(r)} for w, r in _top4_w],
+            }
     return results
 
 
@@ -6303,6 +6309,7 @@ with _tab_cond:
     # ── Analog forecasts — computed once here, reused in scatter, analog section, yield table ──
     _analog_result        = None
     _class_analog_results = {"US": None, "HRW": None, "SRW": None, "White": None}
+    _multi_week_analog    = {}  # {sk: [(analog_result, r2), ...]} for top-4 predictive weeks
     if sel_week is not None and not _yield_full.empty:
         _cwm = {"HRW": _dynamic_hrw_weights, "SRW": _dynamic_srw_weights, "White": _dynamic_white_weights}
         _analog_result = _compute_analog_forecast(
@@ -6322,6 +6329,31 @@ with _tab_cond:
                     crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
                     cond_weights=_active_cw,
                 )
+        # Build R²-weighted multi-week analog results for the top-4 most-predictive ISO weeks
+        for _csk in _csk_list:
+            _bw_csk = _best_week_res.get(_csk, {})
+            _top4   = _bw_csk.get("top4_iso", [])
+            _wf     = []
+            for _tw in _top4:
+                _iso_w = _tw["iso_w"]
+                _r2_w  = _tw["r2"]
+                if _cur_iso_week is not None and _cur_iso_week >= _iso_w:
+                    try:
+                        _ts_w = pd.Timestamp.fromisocalendar(
+                            int(pd.Timestamp(sel_week).year), int(_iso_w), 7
+                        )
+                    except Exception:
+                        continue
+                    _af_w = _compute_analog_forecast(
+                        _csk, raw_df, _ts_w, sel_usda_yr,
+                        _yield_lookup, _trend_data, _dynamic_hrw_weights,
+                        class_weights_map=_cwm,
+                        crop_yr_cutoff=commodity_cfg.get("crop_yr_cutoff", 9),
+                        cond_weights=_active_cw,
+                    )
+                    if _af_w is not None:
+                        _wf.append((_af_w, _r2_w))
+            _multi_week_analog[_csk] = _wf
 
     # ── Yield model helpers (used inline below each class row) ────────────────────
     def _yield_mkt_lbl(harvest_yr: int) -> str:
@@ -6352,33 +6384,58 @@ with _tab_cond:
         }
 
     def _jsa_reg_forecast(sk: str):
-        """Return (forecast_bu_ac, dev_pct) from a linear OLS regression of
-        historical (JSA index, yield deviation) pairs for series key sk.
-        Returns (None, None) if insufficient data."""
-        _af2      = _class_analog_results.get(sk)
-        _yk2      = _ykpi(sk)
-        if not _af2 or not _yk2:
+        """Return (forecast_bu_ac, dev_pct) from R²-weighted OLS across the top-4
+        most-predictive ISO weeks that have already passed this season.
+        Falls back to the single current-week snapshot when no top-4 week has
+        passed yet.  Returns (None, None) if insufficient data."""
+        _yk2    = _ykpi(sk)
+        _lkup2  = _yield_lookup.get(sk, {})
+        _trend2 = (_yk2 or {}).get("proj_trend")
+        if _trend2 is None:
             return None, None
-        _snap2    = _af2.get("jsa_snap", {})
-        _cj2      = _af2.get("cur_jsa")
-        _lkup2    = _yield_lookup.get(sk, {})
-        _trend2   = _yk2.get("proj_trend")
-        if _cj2 is None or not _trend2:
+
+        # Primary path: R²-weighted average over available top-4 weeks
+        _wf = _multi_week_analog.get(sk, [])
+        if not _wf:
+            # No top-4 week has passed yet — fall back to current-week analog
+            _af2 = _class_analog_results.get(sk)
+            if not _af2:
+                return None, None
+            _bw_r2 = float(_best_week_res.get(sk, {}).get("r2") or 1.0)
+            _wf = [(_af2, _bw_r2)]
+
+        _forecasts = []
+        for _af_w, _r2_w in _wf:
+            _snap_w = _af_w.get("jsa_snap", {})
+            _cj_w   = _af_w.get("cur_jsa")
+            if _cj_w is None:
+                continue
+            _pts = [
+                (_snap_w[cy], _lkup2[cy]["dev"])
+                for cy in _snap_w
+                if cy != sel_usda_yr and cy in _lkup2 and _lkup2[cy].get("dev") is not None
+            ]
+            if len(_pts) < 3:
+                continue
+            _xw = np.array([p[0] for p in _pts])
+            _yw = np.array([p[1] for p in _pts])
+            _lc = np.linalg.lstsq(np.vstack([_xw, np.ones(len(_xw))]).T, _yw, rcond=None)[0]
+            _dev_w = float(_lc[0] * float(_cj_w) + _lc[1])
+            _fc_w  = _trend2 * (1 + _dev_w / 100)
+            _forecasts.append((_fc_w, _dev_w, _r2_w))
+
+        if not _forecasts:
             return None, None
-        _pts2 = [
-            (_snap2[cy], _lkup2[cy]["dev"])
-            for cy in _snap2
-            if cy != sel_usda_yr and cy in _lkup2 and _lkup2[cy].get("dev") is not None
-        ]
-        if len(_pts2) < 3:
-            return None, None
-        _x2 = np.array([p[0] for p in _pts2])
-        _y2 = np.array([p[1] for p in _pts2])
-        _lc2 = np.linalg.lstsq(np.vstack([_x2, np.ones(len(_x2))]).T, _y2, rcond=None)[0]
-        _cj2_f = float(_cj2)
-        _dev2 = float(_lc2[0] * _cj2_f + _lc2[1])
-        _raw2 = _trend2 * (1 + _dev2 / 100)
-        return round(_raw2, 1), round(_dev2, 1)
+        if len(_forecasts) == 1:
+            return round(_forecasts[0][0], 1), round(_forecasts[0][1], 1)
+
+        # R²-weighted average across contributing weeks
+        _tot_r2  = sum(f[2] for f in _forecasts)
+        if _tot_r2 <= 0:
+            _tot_r2 = float(len(_forecasts))
+        _fc_avg  = sum(f[0] * f[2] / _tot_r2 for f in _forecasts)
+        _dev_avg = sum(f[1] * f[2] / _tot_r2 for f in _forecasts)
+        return round(_fc_avg, 1), round(_dev_avg, 1)
 
     def _yield_kpi_cards(sk, yk, card_class, label_prefix, color, subtitle=""):
         if not yk:
@@ -6390,16 +6447,16 @@ with _tab_cond:
         r2_pct  = f"{yk['r2']*100:.1f}%"
         cur_mkt = mkt_label(sel_usda_yr)
         # Effective-week label on the JSA Model card
-        _kb      = _best_week_res.get(sk, {})
-        _kb_iso  = _kb.get("best_iso")
-        _kb_lock = (
-            _kb_iso is not None
-            and _cur_iso_week is not None
-            and _cur_iso_week >= int(_kb_iso)
-        )
+        _kb        = _best_week_res.get(sk, {})
+        _avail_wks = [
+            t["iso_w"] for t in _kb.get("top4_iso", [])
+            if _cur_iso_week is not None and _cur_iso_week >= t["iso_w"]
+        ]
+        _n_avail   = len(_avail_wks)
         _kb_wk_lbl = (
-            f" · 📌 Wk {_kb_iso}" if _kb_lock
-            else (f" · Wk {_cur_iso_week}" if _cur_iso_week else "")
+            f" · 📊 {_n_avail}-wk avg" if _n_avail >= 2
+            else (f" · 📌 Wk {_avail_wks[0]}" if _n_avail == 1
+                  else (f" · Wk {_cur_iso_week}" if _cur_iso_week else ""))
         )
         st.markdown(
             f'<div style="font-size:0.72rem;color:{color};text-transform:uppercase;'
@@ -7159,6 +7216,30 @@ with _tab_yield:
                 _r2w_peak_r2 = float(
                     _r2w_df.loc[_r2w_df["iso_week"] == int(_r2w_best), "r2_pct"].iloc[0]
                 )
+                # Mark non-peak top-4 weeks first (so the peak star renders on top)
+                for _t4 in _r2w_bw.get("top4_iso", []):
+                    _t4_w = _t4["iso_w"]
+                    if _t4_w == int(_r2w_best):
+                        continue
+                    if _t4_w in _r2w_df["iso_week"].values:
+                        _t4_r2 = float(
+                            _r2w_df.loc[_r2w_df["iso_week"] == _t4_w, "r2_pct"].iloc[0]
+                        )
+                        _r2w_fig.add_trace(go.Scatter(
+                            x=[_t4_w], y=[_t4_r2],
+                            mode="markers",
+                            name=f"Top-4 Wk {_t4_w}",
+                            marker=dict(size=11, color="#34d399", symbol="diamond",
+                                        line=dict(color=DM_TEXT, width=1)),
+                            hovertemplate=(
+                                f"<b>Top-4 Week {_t4_w}</b><br>"
+                                f"R²: {_t4_r2:.1f}%<extra></extra>"
+                            ),
+                        ))
+                        _r2w_fig.add_vline(
+                            x=_t4_w,
+                            line_dash="dot", line_color="#34d399", opacity=0.30,
+                        )
                 _r2w_fig.add_trace(go.Scatter(
                     x=[int(_r2w_best)],
                     y=[_r2w_peak_r2],
@@ -7207,7 +7288,7 @@ with _tab_yield:
                 hovermode="x unified",
                 title=dict(
                     text=(
-                        f"<b>{_r2w_lbl}</b>  —  R² by ISO Week"
+                        f"<b>{_r2w_lbl}</b>  —  R² by ISO Week  ·  Top-4 avg"
                         + (f"  ·  Peak Wk {_r2w_best}"
                            f" ({_r2w_bw.get('r2', 0)*100:.0f}%)" if _r2w_best else "")
                         + (f"  ·  n = {_r2w_n} yrs" if _r2w_n else "")
