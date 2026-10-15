@@ -1,9 +1,10 @@
 {
  "branch": "main",
- "commit": "9ed79137deb10c22f06d98beea3489e425bb273c",
+ "commit": "b5b9bec5c516efbb0b49978ffbead64c513d875c",
  "files": {
-  "app.py": "277634bd555979c07b56e335d3597fbdc00809b0c9a0f81a0c0d224a925c5d7f",
+  "app.py": "8f19879008c1e1636fbaffbcb71631893596594f5636a3b0c0380ebac45f3f53",
   "cso/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cso/auth.py": "6aa16e4d333060e11e51cef52480b2ffef28dd933f19206c28389bc8290e9955",
   "cso/book.py": "8e68ffa9fc4040c25732df1ce746c25f756dd3c25669efd5eaa6955ee1b40229",
   "cso/pricing.py": "4f1f5d44f51e22d73eb124ba49c0a8fb917aba8bd90204523ffbc3edca4fed84"
  },

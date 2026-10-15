@@ -70,17 +70,23 @@ instead of calling `st.switch_page`.
 
 ## CSO & Spread Risk Analyzer (`apps/cso_risk_analyzer/`, added 2026-10-15)
 
-A synced mirror of the **private** repo `JSA-Dashboards/cso-risk-analyzer` (branch `main`), tile under
-"Futures, Options & Spreads". CME calendar spread options priced as one option on the nearby-minus-deferred
-spread (Bachelier), with quote-implied skew and hedged-vs-unhedged analysis. Unlike the Risk Analyzer it
-needs nothing from the portal: no Snowflake, no secrets, no grant, no new package (scipy and altair were
-already here), so merging or pushing it is the whole deploy. Its entry `app.py` is the source's own (no
-wrapper: single page, no `st.navigation`, no password); session and widget keys are `cso_`-prefixed because
-every bundled app shares one session; tabs use the lazy `on_change="rerun"` pattern.
+A synced mirror of `JSA-Dashboards/cso-risk-analyzer` (branch `main`; **public since 2026-10-15**, made
+public "for now"), tile under "Futures, Options & Spreads". CME calendar spread options priced as one
+option on the nearby-minus-deferred spread (Bachelier), with quote-implied skew and hedged-vs-unhedged
+analysis. Unlike the Risk Analyzer it needs nothing from the portal: no Snowflake, no secrets, no grant,
+no new package (scipy and altair were already here), so merging or pushing it is the whole deploy. Its
+entry `app.py` is the source's own (no wrapper: single page, no `st.navigation`); session and widget keys
+are `cso_`-prefixed because every bundled app shares one session; tabs use the lazy `on_change="rerun"`
+pattern.
 
-- **CI reads a private repo:** the daily sync clones it with `SYNC_TOKEN`, like `cftc_cot` and
-  `crop_conditions`. If that PAT is a fine-grained one limited to selected repos, add
-  `cso-risk-analyzer` to it, or `apply` fails on this app and the day's sync PR doesn't open.
+- **Password:** the standalone app sits behind a shared-password gate (`cso/auth.py`, keyed on
+  `st.session_state["_authed"]`). `"preauth": true` in `sync/apps.json` makes the sync pre-set that key, so
+  the portal login stays the only gate here. Take `preauth` away and the tile asks for a second password.
+- **Source visibility:** it is public, so CI clones it without a token. If it goes private again, put
+  `"private": true` back in `sync/apps.json` and make sure the `SYNC_TOKEN` PAT (as for `cftc_cot` and
+  `crop_conditions`) can read it. A fine-grained PAT limited to selected repos would otherwise make `apply`
+  fail on this app and stop the day's sync PR from opening. This portal repo is public, so every mirrored
+  app's code is readable here whatever its source repo's visibility.
 - Locally, `sync/smoke.py` times a page out at 25 s and a cold scipy import alone can take that long on a
   slow disk: run `SMOKE_TIMEOUT=200 python sync/smoke.py cso_risk_analyzer`.
 

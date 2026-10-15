@@ -179,7 +179,7 @@
   "cso_risk_analyzer": {
    "repo": "JSA-Dashboards/cso-risk-analyzer",
    "branch": "main",
-   "private": true
+   "preauth": true
   }
  },
  "root_files": [

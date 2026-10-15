@@ -6,14 +6,18 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+st.session_state.setdefault("_authed", True)  # portal-sync: portal login already passed
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cso import book, pricing
+from cso.auth import require_password
 
 pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
 # Hide the Streamlit Community Cloud viewer badge (profile avatar -> the account's other apps).
 st.markdown("<style>[class*='_profileContainer_']{display:none !important;}</style>", unsafe_allow_html=True)
+
+require_password()      # nothing below renders until it passes (the admin portal pre-passes it)
 
 TODAY = date.today()
 NEAR_FAR, FAR_NEAR = "Near − far", "Far − near"
