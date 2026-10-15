@@ -68,6 +68,22 @@ instead of calling `st.switch_page`.
 - Header/disclaimer colors were made theme-neutral upstream (the standalone app is dark, the portal
   light). `scipy` is in `requirements.txt` for it; adding it needs a Reboot.
 
+## CSO & Spread Risk Analyzer (`apps/cso_risk_analyzer/`, added 2026-10-15)
+
+A synced mirror of the **private** repo `JSA-Dashboards/cso-risk-analyzer` (branch `main`), tile under
+"Futures, Options & Spreads". CME calendar spread options priced as one option on the nearby-minus-deferred
+spread (Bachelier), with quote-implied skew and hedged-vs-unhedged analysis. Unlike the Risk Analyzer it
+needs nothing from the portal: no Snowflake, no secrets, no grant, no new package (scipy and altair were
+already here), so merging or pushing it is the whole deploy. Its entry `app.py` is the source's own (no
+wrapper: single page, no `st.navigation`, no password); session and widget keys are `cso_`-prefixed because
+every bundled app shares one session; tabs use the lazy `on_change="rerun"` pattern.
+
+- **CI reads a private repo:** the daily sync clones it with `SYNC_TOKEN`, like `cftc_cot` and
+  `crop_conditions`. If that PAT is a fine-grained one limited to selected repos, add
+  `cso-risk-analyzer` to it, or `apply` fails on this app and the day's sync PR doesn't open.
+- Locally, `sync/smoke.py` times a page out at 25 s and a cold scipy import alone can take that long on a
+  slow disk: run `SMOKE_TIMEOUT=200 python sync/smoke.py cso_risk_analyzer`.
+
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
 Several bundled dashboards read Snowflake, and each defaults

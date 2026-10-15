@@ -175,6 +175,11 @@
    "exclude": [
     "secrets.toml.example"
    ]
+  },
+  "cso_risk_analyzer": {
+   "repo": "JSA-Dashboards/cso-risk-analyzer",
+   "branch": "main",
+   "private": true
   }
  },
  "root_files": [

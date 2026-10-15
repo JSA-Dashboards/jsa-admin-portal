@@ -129,6 +129,9 @@ LIVE_DASHBOARDS = [
     {"title": "Risk Analyzer", "category": "Futures, Options & Spreads",
      "desc": "Black-76 options & futures portfolio risk: Greeks, price/vol/time stress grids, payoff charts and VaR.",
      "page": "apps/risk_analyzer/app.py", "url_path": "risk-analyzer"},
+    {"title": "CSO & Spread Risk Analyzer", "category": "Futures, Options & Spreads",
+     "desc": "CME calendar spread options on the nearby-minus-deferred spread: Greeks, stress grids, quote-implied skew and hedge effectiveness.",
+     "page": "apps/cso_risk_analyzer/app.py", "url_path": "cso-risk-analyzer"},
 
     {"title": "RMA Production Map", "category": "Supply & Demand",
      "desc": "Interactive state → county drill-down of RMA yield & production.",
