@@ -6,7 +6,7 @@ dashboards under `apps/`. Most of what bites here comes from that merge.
 ## `apps/<name>/` is a generated mirror. Never edit it here.
 
 Each bundled dashboard is owned by another repo (listed in `sync/apps.json`:
-a standalone repo, or `livestock-portal` for the livestock family). **Change the
+a standalone repo). **Change the
 dashboard in that repo, then run `python sync/sync_apps.py apply <name>`.** Edits
 made inside `apps/` are overwritten by the next sync. This replaced hand-copying,
 which left 13 of 16 bundled apps behind their source by October 2026.
@@ -45,14 +45,14 @@ via `st.iframe(... "?embed=true")`), instead of listing its dashboards: that por
 ever bundled six. It sends no frame-blocking headers, runs its own top navigation inside the frame,
 and has no login of its own, so it is the portal login that gates the tab, not the iframe.
 
-The six livestock mirrors (`cme_feeder_cattle`, `cattle_on_feed`, `beef_weight`, `beef_cutout`,
-`livestock_inventory`, `cash_trade`) are no longer in `LIVE_DASHBOARDS`, so they have no nav entry or tile;
-their `apps/` folders and `sync/apps.json` entries are still there (dormant). Delete both if you don't want
-the daily sync to keep refreshing them. `wasde.py` (a `root_files` entry from the same repo) is unrelated and stays.
+The six livestock mirrors that used to back the tiles (`cme_feeder_cattle`, `cattle_on_feed`, `beef_weight`,
+`beef_cutout`, `livestock_inventory`, `cash_trade`) were deleted on 2026-10-15, with their `sync/apps.json`
+entries. To bring one back, re-add its entry (`repo` livestock-portal, `subdir` `apps/<name>`), a `LIVE_DASHBOARDS`
+tile, and the Snowflake grant it needed. `wasde.py` (a `root_files` entry from the same repo) stays.
 
 ## Lazy tabs: only the open tab runs (2026-10-12)
 
-`st.tabs()` builds every tab on every run. Basis Tracker (13 tabs), River FOB (11) and, since 2026-10-13, Cost of Carry, Grain Seasonal, Vessel Lineup, RMA map, CFTC COT, Domestic Production, USDA rail, and the livestock apps (inventory, beef weight, cattle on feed, cash trade, feeder cattle) now use
+`st.tabs()` builds every tab on every run. Basis Tracker (13 tabs), River FOB (11) and, since 2026-10-13, Cost of Carry, Grain Seasonal, Vessel Lineup, RMA map, CFTC COT, Domestic Production, USDA rail now use (the livestock apps did too until they left the portal for the embedded Livestock Portal)
 `st.tabs(..., on_change="rerun")` with each body behind `if <tab>.open:`, so a first open or a
 tab click runs only the tab being viewed. The rewrite is done by `sync/lazy_tabs.py` (run it
 on the source repo's `app.py`, never on `apps/`): `check` lists any name a tab sets that another
@@ -111,8 +111,7 @@ Several bundled dashboards read Snowflake, and each defaults
 
 | module | its default |
 |---|---|
-| `apps/*/nass_cache_client.py` (beef_weight, crop_conditions, domestic_production, livestock_inventory) | `NASS_CACHE` |
-| `apps/cme_feeder_cattle/snowflake_db.py` | `CME_FEEDER_CATTLE` |
+| `apps/*/nass_cache_client.py` (crop_conditions, domestic_production) | `NASS_CACHE` |
 | `apps/teams_broadcast/app.py` | `TEAMS_BROADCAST` |
 
 Setting `SNOWFLAKE_SCHEMA` to any one value overrides all of them and silently

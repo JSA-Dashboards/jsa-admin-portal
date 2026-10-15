@@ -45,26 +45,6 @@
   ]
  },
  "apps": {
-  "beef_cutout": {
-   "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/beef_cutout"
-  },
-  "beef_weight": {
-   "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/beef_weight"
-  },
-  "cash_trade": {
-   "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/cash_trade"
-  },
-  "cattle_on_feed": {
-   "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/cattle_on_feed"
-  },
-  "cme_feeder_cattle": {
-   "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/cme_feeder_cattle"
-  },
   "cost_of_carry": {
    "repo": "JSA-Dashboards/cost-of-carry-calculator",
    "branch": "main",
@@ -89,10 +69,6 @@
   },
   "grain_seasonal": {
    "repo": "JSA-Dashboards/grain-seasonal-dashboard"
-  },
-  "livestock_inventory": {
-   "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/livestock_inventory"
   },
   "rail_fob": {
    "repo": "JSA-Dashboards/rail-fob-portal"
