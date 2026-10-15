@@ -36,6 +36,20 @@ which left 13 of 16 bundled apps behind their source by October 2026.
 - `.github/workflows/sync-apps.yml` runs the sync daily and opens one pull request.
   Merging it is the update; the push deploys itself.
 
+## Home page: Grain Apps / Livestock Apps tabs (2026-10-15)
+
+`render_home` shows two tabs (lazy, `on_change="rerun"`, so only the open one runs). **Grain Apps**
+is the tile grid (every category except the old Livestock one). **Livestock Apps** embeds the
+deployed Livestock Portal, `LIVESTOCK_PORTAL_URL` in `Home.py` (`https://jsa-livestock.streamlit.app/`,
+via `st.iframe(... "?embed=true")`), instead of listing its dashboards: that portal has ~17, this one only
+ever bundled six. It sends no frame-blocking headers, runs its own top navigation inside the frame,
+and has no login of its own, so it is the portal login that gates the tab, not the iframe.
+
+The six livestock mirrors (`cme_feeder_cattle`, `cattle_on_feed`, `beef_weight`, `beef_cutout`,
+`livestock_inventory`, `cash_trade`) are no longer in `LIVE_DASHBOARDS`, so they have no nav entry or tile;
+their `apps/` folders and `sync/apps.json` entries are still there (dormant). Delete both if you don't want
+the daily sync to keep refreshing them. `wasde.py` (a `root_files` entry from the same repo) is unrelated and stays.
+
 ## Lazy tabs: only the open tab runs (2026-10-12)
 
 `st.tabs()` builds every tab on every run. Basis Tracker (13 tabs), River FOB (11) and, since 2026-10-13, Cost of Carry, Grain Seasonal, Vessel Lineup, RMA map, CFTC COT, Domestic Production, USDA rail, and the livestock apps (inventory, beef weight, cattle on feed, cash trade, feeder cattle) now use

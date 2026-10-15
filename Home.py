@@ -164,25 +164,6 @@ LIVE_DASHBOARDS = [
      "desc": "Export vessel lineup by region — USG, PNW, TXG — and commodity.",
      "page": "apps/vessel_lineup/app.py", "url_path": "vessel-lineup"},
 
-    {"title": "CME Feeder Cattle Index", "category": "Livestock",
-     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location.",
-     "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index"},
-    {"title": "Cattle on Feed", "category": "Livestock",
-     "desc": "USDA on-feed inventory, placements, marketings, and the quarterly heifers-on-feed share.",
-     "page": "apps/cattle_on_feed/app.py", "url_path": "cattle-on-feed"},
-    {"title": "Beef Weight", "category": "Livestock",
-     "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live.",
-     "page": "apps/beef_weight/app.py", "url_path": "beef-weight"},
-    {"title": "Beef Cutout", "category": "Livestock",
-     "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume.",
-     "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout"},
-    {"title": "Livestock Inventory", "category": "Livestock",
-     "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production.",
-     "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory"},
-    {"title": "Cash Cattle Trade", "category": "Livestock",
-     "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume.",
-     "page": "apps/cash_trade/app.py", "url_path": "cash-trade"},
-
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
      "page": "apps/teams_broadcast/app.py", "url_path": "teams-broadcast"},
@@ -191,6 +172,10 @@ LIVE_DASHBOARDS = [
      "desc": "Status of the broker grain marketing app: live link, what is done, what is still open.",
      "page": "admin_pages/grain_desk_status.py", "url_path": "grain-desk-status"},
 ]
+
+# The livestock family lives in its own deployed app (JSA-Dashboards/livestock-portal), which has
+# more dashboards than were ever bundled here; the Livestock Apps tab embeds it as-is.
+LIVESTOCK_PORTAL_URL = "https://jsa-livestock.streamlit.app/"
 
 COMING_SOON = [
     "High/Low Model",
@@ -319,6 +304,18 @@ def render_home():
 
     st.write("")
 
+    # Two overall tabs. Only the open one runs (on_change="rerun" + .open), so the
+    # Livestock Portal's iframe isn't loaded on every visit to the grain tiles.
+    grain_tab, livestock_tab = st.tabs(["Grain Apps", "Livestock Apps"], on_change="rerun")
+    if grain_tab.open:
+        with grain_tab:
+            _render_grain_tiles()
+    if livestock_tab.open:
+        with livestock_tab:
+            _render_livestock()
+
+
+def _render_grain_tiles():
     categories = []
     for d in LIVE_DASHBOARDS:
         if d["category"] not in categories:
@@ -353,6 +350,14 @@ def render_home():
                     f"<div><span class='jsa-soon-tag'>Coming soon</span><p>{title}</p></div>",
                     unsafe_allow_html=True,
                 )
+
+
+def _render_livestock():
+    st.markdown(
+        f"The full JSA Livestock Portal, embedded as its own app. "
+        f"[Open it in its own tab]({LIVESTOCK_PORTAL_URL})."
+    )
+    st.iframe(LIVESTOCK_PORTAL_URL + "?embed=true", height=1100)
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)
