@@ -347,7 +347,12 @@ def figure_png(fig_json: str) -> bytes | None:
     a rerun that doesn't change the chart doesn't pay for it twice."""
     try:
         import plotly.io as pio
-        return pio.from_json(fig_json).to_image(format="png", width=1400, height=700, scale=2)
+        fig = pio.from_json(fig_json)
+        # Streamlit stubs the template, dropping the axis automargin the on-screen chart relies on.
+        fig.update_xaxes(automargin=True, title_standoff=12)
+        fig.update_yaxes(automargin=True, title_standoff=12)
+        fig.update_layout(margin_l=max(fig.layout.margin.l or 0, 90))
+        return fig.to_image(format="png", width=1400, height=700, scale=2)
     except Exception:
         return None
 

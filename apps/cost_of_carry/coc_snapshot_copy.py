@@ -66,9 +66,25 @@ function loadPlotly() {{
   return window.__jsaPlotlyLoading;
 }}
 
+function fitAxes(layout) {{
+  // Streamlit stubs the figure's template, dropping the axis automargin the on-screen chart relies on.
+  const keys = new Set(["xaxis", "yaxis"]);
+  Object.keys(layout).forEach((k) => {{ if (/^[xy]axis[0-9]*$/.test(k)) keys.add(k); }});
+  keys.forEach((k) => {{
+    const axis = Object.assign({{}}, layout[k]);
+    const title = typeof axis.title === "string" ? {{ text: axis.title }} : axis.title;
+    axis.automargin = true;
+    axis.title = Object.assign({{ standoff: 12 }}, title);
+    layout[k] = axis;
+  }});
+  layout.margin = Object.assign({{}}, layout.margin);
+  layout.margin.l = Math.max(layout.margin.l || 0, 90);
+}}
+
 async function chartBlob(figure) {{
   const Plotly = await loadPlotly();
   const layout = Object.assign({{}}, figure.layout || {{}});
+  fitAxes(layout);
   layout.paper_bgcolor = "#ffffff";
   if (!layout.plot_bgcolor || layout.plot_bgcolor.startsWith("rgba(0, 0, 0, 0") ||
       layout.plot_bgcolor.startsWith("rgba(0,0,0,0")) {{
