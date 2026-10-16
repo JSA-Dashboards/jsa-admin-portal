@@ -17,7 +17,7 @@ from pathlib import Path
 from PIL import Image
 import geopandas as gpd
 from shapely.geometry import shape
-from demand_module import load_asd_demand
+from demand_module import load_asd_demand, load_canola_asd
 
 _HERE = Path(__file__).parent
 pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
@@ -127,7 +127,25 @@ NASS_CROP_STAT_PARAMS = {
         "yield":         {"commodity_desc": "SORGHUM", "util_practice_desc": "GRAIN"},
         "prevent_plant": {"commodity_desc": "SORGHUM"},
     },
+    # NASS reports canola in LB and LB / ACRE (ALL CLASSES = spring + winter); the
+    # loaders convert to 50-lb bushels so the tab's bu labels hold (_lb_to_bu_scale).
+    "Canola": {
+        "production":    {"commodity_desc": "CANOLA", "unit_desc": "LB"},
+        "planted":       {"commodity_desc": "CANOLA"},
+        "harvested":     {"commodity_desc": "CANOLA"},
+        "yield":         {"commodity_desc": "CANOLA", "unit_desc": "LB / ACRE"},
+        "prevent_plant": {"commodity_desc": "CANOLA"},
+    },
 }
+
+_CANOLA_LB_PER_BU = 50
+
+
+def _lb_to_bu_scale(crop: str, stat_type: str = "production") -> float:
+    """Multiplier turning NASS canola pounds (production, yield) into 50-lb bushels."""
+    if crop == "Canola" and stat_type in ("production", "yield"):
+        return 1.0 / _CANOLA_LB_PER_BU
+    return 1.0
 
 # Base API params per stat type
 # prevent_plant uses AREA PLANTED — rows are filtered to "PREVENTED" in load_nass_stat
@@ -752,6 +770,7 @@ NASS_CROP_PARAMS = {
     "Soybeans": {"commodity_desc": "SOYBEANS"},
     "Wheat":    {"commodity_desc": "WHEAT",   "class_desc": "ALL CLASSES"},
     "Sorghum":  {"commodity_desc": "SORGHUM", "util_practice_desc": "GRAIN"},
+    "Canola":   {"commodity_desc": "CANOLA", "unit_desc": "LB"},
 }
 
 # ── State lookups ─────────────────────────────────────────────────────────────
@@ -833,9 +852,14 @@ METRIC_FMT = {
     "Production": ",.0f", "Production Acres": ",.0f",
     "Yield": ".1f",        "Prevent Planted Acres": ",.0f",
 }
+# Sage sequential / red-green diverging scales shared by every map (replaces the named
+# YlOrBr / YlGn / OrRd / YlOrRd / RdYlGn scales so maps match the JSA sage theme).
+SAGE_SEQ = [[0, "#f0f6f3"], [0.2, "#cfe6da"], [0.55, "#98d0b6"], [1, "#58a784"]]  # darkest stop stays light enough for the dark map labels
+SAGE_DIV = [[0, "#b22222"], [0.25, "#e08080"], [0.5, "#f5f5f5"], [0.75, "#7dbfa7"], [1, "#1a6645"]]
+
 COLOR_SCALE = {
-    "Production": "YlOrBr", "Production Acres": "YlGn",
-    "Yield": "RdYlGn",      "Prevent Planted Acres": "OrRd",
+    "Production": SAGE_SEQ, "Production Acres": SAGE_SEQ,
+    "Yield": SAGE_DIV,      "Prevent Planted Acres": SAGE_SEQ,
 }
 
 DISPLAY_DIVISOR = {
@@ -847,17 +871,16 @@ DISPLAY_UNIT = {
     "Yield": "bu/ac",          "Prevent Planted Acres": "×100K ac",
 }
 
-# ── JPSI brand palette — light theme, matched to jpsi.com ───────────────────
-# Site white nav + dark green hero: #425248  |  Teal CTA: #5ba5af  |  Lime: #88b131
-DARK    = "#f4f8f5"   # near-white with green tint (app background)
-PANEL   = "#e8f0eb"   # light green-gray (sidebar, cards)
-SURFACE = "#ddeae1"   # slightly deeper green-gray (hover/alternates)
-BORDER  = "#b8d0be"   # soft green border
-TEXT    = "#1e2e22"   # near-black with green tint (body text)
-MUTED   = "#4a6a54"   # medium green-gray (muted text)
-ACCENT  = "#3d8f99"   # JPSI teal (slightly deepened for light bg readability)
-ACCENT2 = "#6a9a20"   # JPSI lime green (deepened for light bg contrast)
-LAND    = "#c8dccb"   # light sage green land mass (maps)
+# ── JSA sage palette — matches the CFTC COT dashboard and Livestock Portal ────────
+DARK    = "#f6f8f7"   # app background
+PANEL   = "#ffffff"   # cards, tables, inputs
+SURFACE = "#eef3f0"   # hover / selected / alternate rows
+BORDER  = "#d7e2dc"   # hairlines
+TEXT    = "#32373c"   # body text
+MUTED   = "#5f7267"   # secondary text
+ACCENT  = "#5e7164"   # JSA green
+ACCENT2 = "#3f6b4f"   # darker green for active states
+LAND    = "#e1e9e4"   # land mass on maps
 
 
 # ── RMA Data ──────────────────────────────────────────────────────────────────
@@ -942,7 +965,7 @@ def load_nass_stat(crop: str, year: int, stat_type: str,
     df["Value"] = pd.to_numeric(
         df["Value"].str.replace(",", "", regex=False).str.strip(),
         errors="coerce",
-    ).fillna(0)
+    ).fillna(0) * _lb_to_bu_scale(crop, stat_type)
     df["fips"]   = df["state_fips_code"].str.zfill(2) + df["county_ansi"].str.zfill(3)
     df["State"]  = df["state_alpha"].str.strip()
     df["County"] = df["county_name"].str.strip().str.title()
@@ -1016,7 +1039,7 @@ def load_nass_state(crop: str, year: int, stat_type: str,
     df["Value"] = pd.to_numeric(
         df["Value"].str.replace(",", "", regex=False).str.strip(),
         errors="coerce",
-    ).fillna(0)
+    ).fillna(0) * _lb_to_bu_scale(crop, stat_type)
     df["State"] = df["state_alpha"].str.strip()
 
     # Keep only known 50-state abbreviations — explicitly excludes "US" (national
@@ -1188,7 +1211,7 @@ def _load_nass_county_cached(crop: str, year: int = 2025,
     df["Production"] = pd.to_numeric(
         df["Value"].str.replace(",", "", regex=False).str.strip(),
         errors="coerce",
-    ).fillna(0)
+    ).fillna(0) * _lb_to_bu_scale(crop, "production")
     df["fips"]   = df["state_fips_code"].str.zfill(2) + df["county_ansi"].str.zfill(3)
     df["State"]  = df["state_alpha"].str.strip()
     df["County"] = df["county_name"].str.strip().str.title()
@@ -1249,7 +1272,7 @@ def _load_county_raw_for_est(crop: str, state: str, year: int,
     df = df[[c for c in needed if c in df.columns]].copy()
     df["Value_num"] = pd.to_numeric(
         df["Value"].str.replace(",", "", regex=False).str.strip(), errors="coerce"
-    ).fillna(0)
+    ).fillna(0) * _lb_to_bu_scale(crop, stat_type)
     df["fips"]    = df["state_fips_code"].str.zfill(2) + df["county_ansi"].str.zfill(3)
     df["State"]   = df["state_alpha"].str.strip()
     df["County"]  = df["county_name"].str.strip().str.title()
@@ -1967,20 +1990,20 @@ def _nass_view_cfg(metric: str, change_view: str) -> dict:
     """Return render-config dict given a metric and change_view."""
     if change_view != "Current Year":
         return {
-            "cscale": "RdYlGn", "diverging": True, "clabel": "Change (%)",
+            "cscale": SAGE_DIV, "diverging": True, "clabel": "Change (%)",
             "hover_fmt": ":+.1f", "hover_sfx": "%", "label_unit": "% chg",
             "label_fn": format_nass_chg_label,
             "rank_unit": "%", "rank_div": 1, "rank_fmt": "+.1f",
         }
     _abs_cfgs = {
         "Production (bu)": {
-            "cscale": "YlOrBr", "diverging": False, "clabel": "Production<br>(bu)",
+            "cscale": SAGE_SEQ, "diverging": False, "clabel": "Production<br>(bu)",
             "hover_fmt": ":,.0f", "hover_sfx": " bu", "label_unit": "M bu",
             "label_fn": format_nass_label,
             "rank_unit": "M bu", "rank_div": 1_000_000, "rank_fmt": ",.2f",
         },
         "Planted Acres": {
-            "cscale": "YlGn", "diverging": False, "clabel": "Planted<br>Acres",
+            "cscale": SAGE_SEQ, "diverging": False, "clabel": "Planted<br>Acres",
             "hover_fmt": ":,.0f", "hover_sfx": " ac", "label_unit": "K ac",
             "label_fn": format_nass_acres_label,
             "rank_unit": "K ac", "rank_div": 1_000, "rank_fmt": ",.1f",
@@ -1992,19 +2015,19 @@ def _nass_view_cfg(metric: str, change_view: str) -> dict:
             "rank_unit": "K ac", "rank_div": 1_000, "rank_fmt": ",.1f",
         },
         "Yield (bu/ac)": {
-            "cscale": "RdYlGn", "diverging": False, "clabel": "Yield<br>(bu/ac)",
+            "cscale": SAGE_DIV, "diverging": False, "clabel": "Yield<br>(bu/ac)",
             "hover_fmt": ":.1f", "hover_sfx": " bu/ac", "label_unit": "bu/ac",
             "label_fn": format_nass_yield_label,
             "rank_unit": "bu/ac", "rank_div": 1, "rank_fmt": ".1f",
         },
         "% Harvested": {
-            "cscale": "RdYlGn", "diverging": False, "clabel": "% Harvested",
+            "cscale": SAGE_DIV, "diverging": False, "clabel": "% Harvested",
             "hover_fmt": ":.1f", "hover_sfx": "%", "label_unit": "%",
             "label_fn": format_nass_yield_label,
             "rank_unit": "%", "rank_div": 1, "rank_fmt": ".1f",
         },
         "Prevent Plant Acres": {
-            "cscale": "OrRd", "diverging": False, "clabel": "Prevent<br>Plant Acres",
+            "cscale": SAGE_SEQ, "diverging": False, "clabel": "Prevent<br>Plant Acres",
             "hover_fmt": ":,.0f", "hover_sfx": " ac", "label_unit": "K ac",
             "label_fn": format_nass_acres_label,
             "rank_unit": "K ac", "rank_div": 1_000, "rank_fmt": ",.1f",
@@ -3722,110 +3745,91 @@ def main():
     st.markdown(
         f"""
         <style>
-        /* ── JPSI brand theme — jpsi.com palette ─────────────────── */
+        @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap');
         .stApp {{ background-color: {DARK}; color: {TEXT}; }}
-        [data-testid="stSidebar"] {{
-            background-color: {PANEL};
-            border-right: 1px solid {BORDER};
-        }}
-        .block-container {{ padding-top: 1rem; max-width: 1400px; }}
-        /* headings — teal accent */
-        h1, h2, h3 {{ color: {ACCENT} !important; letter-spacing: 0.02em; }}
+        .stApp, .stApp p, .stApp label, .stApp button, .stApp li, .stApp td, .stApp th,
+        .stApp input, .stApp textarea {{ font-family: 'Source Sans 3','Source Sans Pro',sans-serif; }}
+        .block-container {{ padding-top: 2.2rem; max-width: 1400px; }}
+        h1, h2, h3 {{ font-family: 'EB Garamond',Georgia,serif !important; color: {TEXT} !important;
+                      font-weight: 600 !important; letter-spacing: 0 !important; }}
         h4, h5, h6 {{ color: {TEXT} !important; }}
         p, label, .stCaption, [data-testid="stCaptionContainer"] {{ color: {MUTED} !important; }}
-        /* dropdowns / selects */
-        [data-testid="stSelectbox"] label {{ color: {MUTED} !important; font-size: 0.8rem; }}
+        [data-testid="stSidebar"] {{ background-color: {PANEL}; border-right: 1px solid {BORDER}; }}
+        /* header */
+        .dash-header {{ display:flex; align-items:center; gap:18px; padding-bottom:10px;
+            border-bottom:1px solid {BORDER}; margin-bottom:10px; }}
+        .dash-header img {{ height:40px; }}
+        .dash-header .t b {{ font-family:'EB Garamond',Georgia,serif; font-size:1.7rem; color:{TEXT}; font-weight:600; }}
+        .dash-header .t div {{ font-size:.85rem; color:{MUTED}; }}
+        @media (max-width: 640px) {{ .dash-header img {{ display:none; }} }}
+        .asof {{ background:{PANEL}; border:1px solid {BORDER}; border-radius:8px; padding:9px 16px;
+            color:{MUTED}; font-size:.8rem; margin-bottom:12px; line-height:1.55; }}
+        .asof b {{ color:{TEXT}; }}
+        /* inputs */
+        [data-testid="stSelectbox"] label, [data-testid="stRadio"] label {{ color: {MUTED} !important; font-size: 0.8rem; }}
         div[data-baseweb="select"] > div {{
-            background-color: {PANEL} !important;
-            border-color: {BORDER} !important;
-            color: {TEXT} !important;
+            background-color: {PANEL} !important; border-color: {BORDER} !important;
+            color: {TEXT} !important; border-radius: 6px !important;
         }}
         div[data-baseweb="popover"] * {{ background-color: {PANEL} !important; color: {TEXT} !important; }}
-        /* multiselect tags */
-        [data-baseweb="tag"] {{
-            background-color: {SURFACE} !important;
-            border: 1px solid {BORDER} !important;
+        [data-baseweb="tag"] {{ background-color: {SURFACE} !important; border: 1px solid {BORDER} !important; }}
+        .stButton > button {{ background: {PANEL}; border: 1px solid {BORDER}; color: {TEXT};
+            border-radius: 6px; font-weight: 600; }}
+        .stButton > button:hover {{ border-color: {ACCENT}; color: {ACCENT}; background: {PANEL}; }}
+        /* tiles (st.metric) */
+        [data-testid="stMetric"], [data-testid="metric-container"] {{
+            background-color: {PANEL}; border: 1px solid {BORDER}; border-top: 3px solid {ACCENT};
+            border-radius: 10px; padding: 14px 18px; text-align: center;
         }}
-        /* metric cards */
-        [data-testid="metric-container"] {{
-            background-color: {PANEL};
-            border: 1px solid {BORDER};
-            border-left: 3px solid {ACCENT};
-            border-radius: 8px;
-            padding: 12px 16px;
-        }}
-        [data-testid="stMetricValue"] {{ color: {ACCENT} !important; font-size: 1.35rem; font-weight: 700; }}
-        [data-testid="stMetricLabel"] {{
-            color: {MUTED} !important; font-size: 0.78rem;
-            text-transform: uppercase; letter-spacing: 0.06em;
-        }}
-        [data-testid="stMetricDelta"] svg {{ fill: {ACCENT2} !important; }}
-        /* expanders & tables */
-        [data-testid="stExpander"] {{ background-color: {PANEL}; border: 1px solid {BORDER}; border-radius: 6px; }}
-        [data-testid="stDataFrame"] {{
-            background-color: {PANEL};
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='130'%3E%3Ctext transform='rotate(-30 130 65)' x='55' y='88' font-family='Arial Black%2CArial' font-size='44' font-weight='900' fill='rgba(66%2C82%2C72%2C0.04)'%3EJSA%3C/text%3E%3C/svg%3E");
-            background-repeat: repeat;
-        }}
+        [data-testid="stMetricValue"] {{ color: {TEXT} !important; font-size: 1.55rem; font-weight: 700;
+            line-height: 1.1; justify-content: center; }}
+        [data-testid="stMetricLabel"] {{ color: {MUTED} !important; font-size: 0.68rem;
+            text-transform: uppercase; letter-spacing: 0.09em; justify-content: center; }}
+        [data-testid="stMetricDelta"] {{ justify-content: center; }}
+        [data-testid="stMetricLabel"] {{ display: flex !important; width: 100% !important;
+            justify-content: center !important; text-align: center !important; }}
+        [data-testid="stMetricLabel"] > div, [data-testid="stMetricLabel"] p,
+        [data-testid="stMetricValue"] > div {{ text-align: center !important; justify-content: center !important; }}
+        [data-testid="stMetricValue"] {{ width: 100% !important; }}
+        [data-testid="stMetric"], [data-testid="metric-container"] {{ min-height: 104px; align-items: center; }}
+        [data-testid="stMetric"] > div, [data-testid="metric-container"] > div {{ align-items: center; width: 100%; }}
+        /* expanders, tables, alerts */
+        [data-testid="stExpander"] {{ background-color: {PANEL}; border: 1px solid {BORDER}; border-radius: 8px; }}
+        [data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 8px; background-color: {PANEL}; }}
+        [data-testid="stAlert"] {{ background-color: {PANEL}; border: 1px solid {BORDER}; border-radius: 8px; }}
         hr {{ border-color: {BORDER}; }}
         [data-testid="stSpinner"] p {{ color: {MUTED} !important; }}
-        /* tabs — active tab gets lime underline, text switches to teal */
-        .stTabs [data-baseweb="tab-list"] {{
-            background-color: {PANEL};
-            border-radius: 6px 6px 0 0;
-            gap: 4px;
-            border-bottom: 2px solid {BORDER};
-        }}
-        .stTabs [data-baseweb="tab"] {{ color: {MUTED}; font-size: 0.92rem; padding: 8px 20px; }}
-        .stTabs [aria-selected="true"] {{
-            color: {ACCENT} !important;
-            border-bottom: 3px solid {ACCENT2} !important;
-            font-weight: 600 !important;
-        }}
-        /* radio button-group toggle */
+        /* tabs */
+        .stTabs [data-baseweb="tab-list"] {{ background-color: transparent; gap: 2px;
+            border-bottom: 1px solid {BORDER}; }}
+        .stTabs [data-baseweb="tab"] {{ color: {MUTED}; font-size: 0.92rem; padding: 8px 16px; }}
+        .stTabs [aria-selected="true"] {{ color: {TEXT} !important; font-weight: 600 !important; }}
+        .stTabs [data-baseweb="tab-highlight"] {{ background-color: {ACCENT} !important; height: 3px; }}
+        /* radio pills */
         div[data-testid="stRadio"] > label {{ display: none; }}
         div[data-testid="stRadio"] > div[role="radiogroup"] {{
             display: flex; flex-direction: row; gap: 6px; flex-wrap: wrap;
         }}
         div[data-testid="stRadio"] > div[role="radiogroup"] > label {{
-            background-color: {PANEL} !important;
-            border: 1px solid {BORDER} !important;
-            border-radius: 6px !important;
-            padding: 6px 16px !important;
-            cursor: pointer !important;
-            color: {MUTED} !important;
-            font-size: 0.84rem !important;
-            font-weight: 500 !important;
+            background-color: {PANEL} !important; border: 1px solid {BORDER} !important;
+            border-radius: 6px !important; padding: 6px 16px !important; cursor: pointer !important;
+            color: {MUTED} !important; font-size: 0.84rem !important; font-weight: 500 !important;
             margin: 0 !important;
         }}
         div[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {{
-            border-color: {ACCENT2} !important;
-            color: {ACCENT2} !important;
-            background-color: {SURFACE} !important;
+            border-color: {ACCENT} !important; color: {TEXT} !important;
+            background-color: {SURFACE} !important; font-weight: 600 !important;
         }}
         div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {{
             display: none !important;
         }}
-        /* app title bar */
-        [data-testid="stHeader"] {{ background-color: {DARK} !important; border-bottom: 1px solid {BORDER}; }}
-        /* info/warning boxes */
-        [data-testid="stAlert"] {{ background-color: {PANEL}; border: 1px solid {BORDER}; border-radius: 6px; }}
-        /* scrollbar */
+        [data-testid="stHeader"] {{ background-color: {DARK} !important; }}
         ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
         ::-webkit-scrollbar-track {{ background: {DARK}; }}
         ::-webkit-scrollbar-thumb {{ background: {BORDER}; border-radius: 3px; }}
         ::-webkit-scrollbar-thumb:hover {{ background: {ACCENT}; }}
         </style>
         """,
-        unsafe_allow_html=True,
-    )
-
-    st.title("JSA Agricultural Intelligence Dashboard")
-    st.markdown(
-        f"""<p style='color:{MUTED};font-size:0.80rem;margin-top:-10px;margin-bottom:6px;line-height:1.6;'>
-        ℹ️ <b style='color:{TEXT};'>NASS tab</b>: USDA survey-based final production figures (post-harvest, all acres). &nbsp;|&nbsp;
-        <b style='color:{TEXT};'>RMA tab</b>: Estimated production for federally insured acres (insured acres × projected yield) — figures will differ from NASS.
-        </p>""",
         unsafe_allow_html=True,
     )
 
@@ -3839,26 +3843,37 @@ def main():
         logo_trans = load_logo(LOGO_TRANS)
         logo_full  = load_logo(LOGO_FULL)
 
-    st.markdown(
+    # Header + 50-year watermark over data tables (the grid paints on an opaque canvas, so the
+    # mark is overlaid with pointer-events:none rather than set as a background).
+    _hdr_html = (
         f"""<style>
-        [data-testid="stHeader"] {{
-            background-image: url('{logo_full}');
-            background-repeat: no-repeat;
-            background-position: right 90px center;
-            background-size: auto 68%;
+        [data-testid="stDataFrame"] {{ position: relative; }}
+        [data-testid="stDataFrame"]::after {{
+          content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+          background-image: url('{logo_50yr}'); background-repeat: no-repeat;
+          background-position: center center; background-size: min(34%, 260px); opacity: 0.10;
         }}
-        </style>""",
-        unsafe_allow_html=True,
+        </style>
+        <div class="dash-header">
+          <img src="{logo_full}">
+          <div class="t"><b>JSA Agricultural Intelligence Dashboard</b>
+          <div>Production, supply &amp; demand &middot; John Stewart &amp; Associates</div></div>
+        </div>
+        <div class="asof"><b>NASS tab</b>: USDA survey-based final production figures (post-harvest, all acres).
+        &nbsp;|&nbsp; <b>RMA tab</b>: estimated production for federally insured acres (insured acres &times;
+        projected yield), so figures will differ from NASS.</div>"""
     )
+    # Markdown treats indented lines after a block as code, so flatten the indentation.
+    st.markdown("\n".join(_l.strip() for _l in _hdr_html.splitlines()), unsafe_allow_html=True)
 
     tab_nass, tab_rma, tab_stocks, tab_acreage, tab_livestock, tab_aqua, tab_proc, tab_wcmd, tab_storage_cmp, tab_eia, tab_sd, tab_about = st.tabs([
-        "🌾  NASS Production", "📋  RMA",
-        "📦  Grain Stocks", "🌱  Acreage Summary", "🐄  Livestock",
-        "🐟  Aquaculture", "🏭  Processing",
-        "🏦  Grain Warehouses", "⚖️  Storage vs. Production",
-        "🔋  Biofuels (EIA)",
-        "📊  ASD Supply & Demand",
-        "📖  About the Data",
+        "NASS Production", "RMA",
+        "Grain Stocks", "Acreage Summary", "Livestock",
+        "Aquaculture", "Processing",
+        "Grain Warehouses", "Storage vs. Production",
+        "Biofuels (EIA)",
+        "ASD Supply & Demand",
+        "About the Data",
     ], on_change="rerun")
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -3879,9 +3894,16 @@ def main():
                 nass_year = st.selectbox("Year", NASS_YEARS, index=0, key="nass_year")
             with nc4:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("🔄 Refresh", use_container_width=True, key="nass_refresh"):
+                if st.button("Refresh", use_container_width=True, key="nass_refresh"):
                     st.cache_data.clear()
                     st.rerun()
+
+            if nass_crop == "Canola":
+                st.caption(
+                    "Canola: NASS reports pounds; shown here in 50-lb bushels (yield in bu/ac). Spring and "
+                    "winter canola are combined (NASS publishes one all-classes series). County estimates "
+                    "exist only for ND and, in some years, MT; other states show at state level."
+                )
 
             # Row 2 — Metric selector
             st.markdown(
@@ -5033,7 +5055,7 @@ def main():
                     wheat_type = None
             with c6:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("🔄 Refresh Data", use_container_width=True, key="rma_refresh"):
+                if st.button("Refresh Data", use_container_width=True, key="rma_refresh"):
                     st.cache_data.clear()
                     st.rerun()
 
@@ -5151,7 +5173,7 @@ def main():
                 )
             with sc5:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("🔄 Refresh", use_container_width=True, key="stk_refresh"):
+                if st.button("Refresh", use_container_width=True, key="stk_refresh"):
                     st.cache_data.clear(); st.rerun()
 
             # ── Row 2: comparison view + optional base year ────────────────────────
@@ -5228,13 +5250,13 @@ def main():
                            else f"{sign}{v:,.0f} bu"
 
                 _stk_col_map = {
-                    "Total Stocks": ("Total",      "YlOrBr", "bu"),
-                    "On-Farm":      ("OnFarm",      "YlGn",   "bu"),
-                    "Off-Farm":     ("OffFarm",     "YlOrRd", "bu"),
-                    "% On-Farm":    ("PctOnFarm",   "RdYlGn", "%"),
+                    "Total Stocks": ("Total",      SAGE_SEQ, "bu"),
+                    "On-Farm":      ("OnFarm",      SAGE_SEQ,   "bu"),
+                    "Off-Farm":     ("OffFarm",     SAGE_SEQ, "bu"),
+                    "% On-Farm":    ("PctOnFarm",   SAGE_DIV, "%"),
                     "% Off-Farm":   ("PctOffFarm",  "RdYlBu", "%"),
-                    "Production":   ("Production",  "YlOrBr", "bu"),
-                    "Total Supply": ("TotalSupply", "YlOrBr", "bu"),
+                    "Production":   ("Production",  SAGE_SEQ, "bu"),
+                    "Total Supply": ("TotalSupply", SAGE_SEQ, "bu"),
                 }
                 _col, _abs_cscale, _unit = _stk_col_map[stk_view]
                 _is_ratio = _unit == "%"   # % On-Farm / % Off-Farm
@@ -5299,7 +5321,7 @@ def main():
                         lambda s: _delta(s, _col)
                     )
                     _display_col = "_delta"
-                    _map_cscale  = "RdYlGn"
+                    _map_cscale  = SAGE_DIV
                     _is_change   = True
                     _change_unit = "%" if stk_change_type == "% Change" else \
                                    ("pp" if _is_ratio else "bu")
@@ -6161,7 +6183,7 @@ def main():
                     _lv_st_agg,
                     locations="State", locationmode="USA-states",
                     color="Display", scope="usa",
-                    color_continuous_scale="YlOrRd",
+                    color_continuous_scale=SAGE_SEQ,
                     hover_name="StateName",
                     hover_data={"Display": ":.2f", "State": False},
                     labels={"Display": f"{_lv_species} ({_lv_sunit})"},
@@ -6295,7 +6317,7 @@ def main():
                                 geojson=_lv_st_geo, featureidkey="id",
                                 locations=_lv_co_agg["fips"].tolist(),
                                 z=_lv_cz,
-                                colorscale="YlOrRd",
+                                colorscale=SAGE_SEQ,
                                 zmin=0, zmax=max(_lv_cz) if _lv_cz else 1,
                                 colorbar=dict(
                                     title=dict(text=_lv_cunit,
@@ -6494,7 +6516,7 @@ def main():
                                 geojson=_lv_djson,
                                 featureidkey="properties.District",
                                 locations=_lv_ddists, z=_lv_dz,
-                                colorscale="YlOrRd",
+                                colorscale=SAGE_SEQ,
                                 zmin=0, zmax=max(_lv_dz) if _lv_dz else 1,
                                 colorbar=dict(
                                     title=dict(text=_lv_aunit,
@@ -6524,7 +6546,7 @@ def main():
                             _lv_bar_df, x="Display", y="District",
                             orientation="h",
                             color="Display",
-                            color_continuous_scale="YlOrRd",
+                            color_continuous_scale=SAGE_SEQ,
                             labels={"Display": f"Inventory ({_lv_aunit})",
                                     "District": ""},
                         )
@@ -6727,7 +6749,7 @@ def main():
                     locations=_aq_st["State"],
                     z=_aq_st["Display"],
                     locationmode="USA-states",
-                    colorscale=[[0,"#1a2d1e"],[0.4,"#425248"],[0.7,"#5ba5af"],[1,"#88b131"]],
+                    colorscale=SAGE_SEQ,
                     text=_aq_st["StateName"],
                     hovertemplate=(
                         "<b>%{text}</b><br>Sales: %{z:,.2f} "
@@ -7201,7 +7223,7 @@ def main():
             # ── Controls ─────────────────────────────────────────────────────────
             sd_c1, sd_c2, sd_c5, sd_c3, sd_c4 = st.columns([1, 0.75, 1.3, 1.6, 0.55])
             with sd_c1:
-                sd_crop = st.selectbox("Crop", ["Corn", "Soybeans"], key="sd_crop")
+                sd_crop = st.selectbox("Crop", ["Corn", "Soybeans", "Canola"], key="sd_crop")
             with sd_c2:
                 sd_year = st.selectbox("Year", NASS_YEARS, index=1, key="sd_year")  # default 2025 — county data not published for current year
             _SD_SPECIES = {
@@ -7220,24 +7242,35 @@ def main():
             _sd_species = _SD_SPECIES[sd_species_sel] if sd_crop == "Corn" else None
             with sd_c4:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("🔄 Refresh", use_container_width=True, key="sd_refresh"):
+                if st.button("Refresh", use_container_width=True, key="sd_refresh"):
                     st.cache_data.clear()
                     st.rerun()
 
             # ── Load data ────────────────────────────────────────────────────────
-            with st.spinner(f"Loading {sd_year} {sd_crop} production..."):
-                _sd_county = load_nass_county(sd_crop, sd_year, _CACHE_VERSION)
+            _canola_meta = None
+            _sd_county = pd.DataFrame()
+            if sd_crop == "Canola":
+                _sd_prod, _sd_demand = pd.DataFrame(), pd.DataFrame()
+                try:
+                    with st.spinner(f"Loading {sd_year} canola production and crush..."):
+                        _sd_prod, _sd_demand, _canola_meta = load_canola_asd(sd_year, _CACHE_VERSION)
+                except Exception as _e:
+                    st.error(f"Canola data unavailable ({_e}).")
+            else:
+                with st.spinner(f"Loading {sd_year} {sd_crop} production..."):
+                    _sd_county = load_nass_county(sd_crop, sd_year, _CACHE_VERSION)
 
-            try:
-                with st.spinner("Loading ASD demand estimates..."):
-                    _sd_demand = load_asd_demand(sd_year, _CACHE_VERSION)
-            except Exception as _e:
-                st.error(f"Livestock demand data unavailable from NASS right now ({_e}). Try Refresh in a few minutes.")
-                _sd_demand = pd.DataFrame()
+                try:
+                    with st.spinner("Loading ASD demand estimates..."):
+                        _sd_demand = load_asd_demand(sd_year, _CACHE_VERSION)
+                except Exception as _e:
+                    st.error(f"Livestock demand data unavailable from NASS right now ({_e}). Try Refresh in a few minutes.")
+                    _sd_demand = pd.DataFrame()
 
             # Aggregate county production → ASD
-            _sd_prod = pd.DataFrame()
-            if not _sd_county.empty and "asd_code" in _sd_county.columns:
+            if sd_crop != "Canola":
+                _sd_prod = pd.DataFrame()
+            if sd_crop != "Canola" and not _sd_county.empty and "asd_code" in _sd_county.columns:
                 _sd_prod = (
                     _sd_county
                     .dropna(subset=["asd_code"])
@@ -7247,11 +7280,13 @@ def main():
                     .rename(columns={"State": "state_alpha", "Production": "production_bu"})
                 )
 
-            _sd_demand_col = "corn_demand_total_bu" if sd_crop == "Corn" else "soy_demand_total_bu"
-            _sd_feed_col   = "corn_feed_bu"          if sd_crop == "Corn" else "sbm_feed_lbs"
-            _sd_plant_col  = "corn_ethanol_bu"        if sd_crop == "Corn" else "soy_crush_bu"
-            _sd_plant_lbl  = "Ethanol Corn (bu)"      if sd_crop == "Corn" else "Crush Soy (bu)"
-            _sd_feed_lbl   = "Feed Corn (bu)"         if sd_crop == "Corn" else "Feed SBM (lbs)"
+            _SD_COLS = {
+                "Corn":     ("corn_demand_total_bu",   "corn_feed_bu", "corn_ethanol_bu",  "Ethanol Corn (bu)",   "Feed Corn (bu)"),
+                "Soybeans": ("soy_demand_total_bu",    "sbm_feed_lbs", "soy_crush_bu",     "Crush Soy (bu)",      "Feed SBM (lbs)"),
+                "Canola":   ("canola_demand_total_bu", "canola_feed_bu", "canola_crush_bu", "Crush Canola (bu)",  "Feed Canola (bu)"),
+            }
+            (_sd_demand_col, _sd_feed_col, _sd_plant_col,
+             _sd_plant_lbl, _sd_feed_lbl) = _SD_COLS[sd_crop]
 
             # Merge production + demand
             _sd = pd.DataFrame()
@@ -7291,6 +7326,17 @@ def main():
                 )
             _sd_sel_state = None if sd_state_sel.startswith("—") else sd_state_sel[:2]
 
+            if sd_crop == "Canola" and _canola_meta:
+                _cov = ", ".join(f"{a} {v:.0%}" for a, v in _canola_meta["county_coverage"].items())
+                st.warning(
+                    f"Canola crush capacity is entered for {_canola_meta['plants_with_capacity']} of "
+                    f"{_canola_meta['plants_total']} plants (data/canola_crush_plants.csv), so demand and "
+                    "the surplus are NOT reliable until the rest are filled in. Production is in 50-lb "
+                    "bushels (NASS reports pounds). NASS county estimates cover "
+                    f"{_cov or 'no state'} of that state's crop; the rest is spread pro rata to match the "
+                    "NASS state total. States with no county data appear as one state-level row."
+                )
+
             if _sd.empty:
                 st.warning(
                     f"No ASD S&D data available for {sd_crop} {sd_year}. "
@@ -7324,6 +7370,9 @@ def main():
                 elif sd_crop == "Soybeans" and "soy_crush_bu" in _kpi_df.columns:
                     _sb_crush = _kpi_df["soy_crush_bu"].fillna(0).sum()
                     _k4.metric("Crush Capacity", f"{_sb_crush/1e6:.0f}M bu/yr")
+                elif sd_crop == "Canola" and "canola_crush_bu" in _kpi_df.columns:
+                    _cn_crush = _kpi_df["canola_crush_bu"].fillna(0).sum()
+                    _k4.metric("Crush Capacity (entered)", f"{_cn_crush/1e6:.1f}M bu/yr")
 
                 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -7331,15 +7380,19 @@ def main():
                 if _sd_sel_state:
                     _sfips = STATE_FIPS_ALL.get(_sd_sel_state, "")
                     _fips_map_sd = load_boundary_fips_map(
-                        sd_crop, _sfips, _CACHE_VERSION, geo
+                        "Corn" if sd_crop == "Canola" else sd_crop, _sfips, _CACHE_VERSION, geo
                     )
                     _dist_gdf_sd = build_nass_district_gdf(
                         _sfips, _CACHE_VERSION, _fips_map_sd, geo
                     )
 
                     _st_df = _sd[_sd["state_alpha"] == _sd_sel_state].copy()
+                    _st_df["District"] = _st_df["asd_desc"].fillna("").str.strip().str.title()
 
-                    if not _dist_gdf_sd.empty and not _st_df.empty:
+                    if sd_crop == "Canola" and _st_df["asd_code"].eq("STATE").all():
+                        st.info(f"NASS publishes no county canola data for {ABBR_TO_NAME.get(_sd_sel_state, _sd_sel_state)}, "
+                                "so there is no district map; the state total is shown below.")
+                    elif not _dist_gdf_sd.empty and not _st_df.empty:
                         # Build District-name keyed lookup for the choropleth
                         # asd_desc in production data vs District in GDF — title-cased match
                         _st_df["District"] = _st_df["asd_desc"].str.strip().str.title()
@@ -7467,7 +7520,7 @@ def main():
                                 _tbl[_c] = 0
                             _tbl[_c] = pd.to_numeric(_tbl[_c], errors="coerce").fillna(0)
                         _tbl = _tbl.sort_values("net_bu", ascending=False).reset_index(drop=True)
-                        _tbl_disp = pd.DataFrame({
+                        _tbl_cols = {
                             "District":          _tbl["District"].fillna("—"),
                             "Production (M bu)": (_tbl["production_bu"] / 1e6).round(1),
                             _sd_feed_lbl:        _tbl[_sd_feed_col].round(0).astype(int),
@@ -7475,7 +7528,10 @@ def main():
                             "Total Demand (M bu)": (_tbl[_sd_demand_col] / 1e6).round(1),
                             "Net (M bu)":        (_tbl["net_bu"] / 1e6).round(1),
                             "Net % of Prod":     _tbl["net_pct"].round(1),
-                        })
+                        }
+                        if sd_crop == "Canola":
+                            _tbl_cols.pop(_sd_feed_lbl)
+                        _tbl_disp = pd.DataFrame(_tbl_cols)
                         st.dataframe(
                             _tbl_disp, use_container_width=True, hide_index=True,
                             column_config={
@@ -7559,13 +7615,21 @@ def main():
 
             st.markdown(
                 f"<p style='color:{MUTED};font-size:0.78rem;margin-top:16px;'>"
+                + (
+                    f"Canola production: NASS {sd_year} county estimates (ND, MT) scaled to the NASS state total; "
+                    "other states state-level only. Pounds converted at 50 lb/bu. Crush demand = nameplate annual "
+                    "capacity of the plants in data/canola_crush_plants.csv (mapped to NASS districts); "
+                    "no feed or other use is modelled, and exports and seed use are not deducted. "
+                    "Net is a structural snapshot — actual flows depend on basis, freight, and contract obligations.</p>"
+                    if sd_crop == "Canola" else
                 f"Production: NASS {sd_year} county survey, aggregated to ASD. "
                 "Feed demand: bottom-up from NASS livestock inventory × feed conversion factors "
                 "(corn 50 bu/hd COF, 13 bu/hd hogs, 1.1 bu/layer, 0.12 bu/broiler, 50 bu/dairy cow; "
                 "SBM: 150 lb/hog, 1,450 lb/dairy cow; broilers/turkeys use production not inventory). "
                 "Ethanol & crush demand from JSA plant capacity spreadsheets. "
                 "Livestock distributed to ASD via 2022 Census county shares scaled to current NASS state totals. "
-                "Net is a structural snapshot — actual flows depend on basis, freight, and contract obligations.</p>",
+                "Net is a structural snapshot — actual flows depend on basis, freight, and contract obligations.</p>"
+                ),
                 unsafe_allow_html=True,
             )
 

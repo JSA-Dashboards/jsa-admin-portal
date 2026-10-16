@@ -1,13 +1,14 @@
 {
  "branch": "master",
- "commit": "7b10f1140af4d1f4bfef3f8159871cc3f98f4f40",
+ "commit": "d9caec4ce94ba07d3f23c1de8b94d17dce6d8f5b",
  "files": {
-  "app.py": "6a78582cfda2655864aa2908b7d5446ab06a19d31644d5b731380eb9d888053e",
+  "app.py": "a85831321675a19ca7ec1424de8c93f5aaa5f20b4a61735e92d11a0ce4d12deb",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/Transparent Smal logo.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
   "assets/logo-full.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
   "data/2025 RMA Production Data.xlsx": "ad7326fb787026f8290c667c4646905eff60260703462d03d2757c1d2bd666cd",
   "data/build_facility_asd.py": "7ec8368069f88e1db182f298913a706c751896e95c97bc6413fd78e5f692fdc4",
+  "data/canola_crush_plants.csv": "60177adcfa49379e8d63062d095476d9b50304ee790fa9188f6334153f2aa019",
   "data/census_county_fips.csv": "55768123b440a805c43eabb1da61717dc0086ded5b809af023e0c7c9939ece31",
   "data/crush_plants_asd.csv": "2e89c10623de21787fc207190cbbf5d95e7a148b6567f07b034208d8bfa94901",
   "data/ethanol_plants_asd.csv": "8388afc1e607b9001ce2cdf957f647167fe5047d4846604f52ca98afbfcdbc81",
@@ -17,7 +18,7 @@
   "data/nass_sep1_stocks_state.csv": "c119b9e4a9597f237e4fbd932333f67ccc134b935fa5452f288d5aadc98c7271",
   "data/wcmd_county.csv": "10932081505d520525895c952437eee8cb6ad5b0e3c24798c4993b171fda5732",
   "data/wcmd_warehouses.csv": "56f5dca36df5194d17dc3902d4c1c1915526171d77c6049101821ec18172bad8",
-  "demand_module.py": "55334ce8304bc9aa3c4a53f2ff9a72ee1d1d007b196f66818c51e81188304e6d",
+  "demand_module.py": "74040c6dd67b2375c0715c953ca65b65f26d58abe8a3e20c752e81bd4bde7b53",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
   "wcmd_scraper.py": "f25cc7f0a01f9f703efee8470d56c8d5c0d279c4e4c698d24d5a925efb52a1bb"
  },
