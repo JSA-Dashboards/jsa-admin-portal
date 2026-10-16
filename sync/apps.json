@@ -219,12 +219,49 @@
    "repo": "JSA-Dashboards/cso-risk-analyzer",
    "branch": "main",
    "preauth": true
+  },
+  "weekly_reports": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/weekly_reports"
+  },
+  "market_board": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/market_board",
+   "prefix_modules": "mb_",
+   "replace": {
+    "loaders.py": [
+     [
+      "import corn_cost                     # noqa: E402",
+      "import fcc_corn_cost as corn_cost  # noqa: E402"
+     ]
+    ]
+   }
   }
  },
  "root_files": [
   {
    "repo": "JSA-Dashboards/livestock-portal",
    "path": "wasde.py"
+  },
+  {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "path": "portal_auth.py"
+  },
+  {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "path": "assets/agmarket-net.png"
+  },
+  {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "dir": "letter",
+   "replace": {
+    "letter/sources.py": [
+     [
+      "    sys.path.insert(0, str(APPS / \"livestock_seasonal\"))\n    import massive_api\n    return massive_api",
+      "    sys.path.insert(0, str(APPS / \"livestock_seasonal\"))\n    import ls_massive_api as massive_api\n    return massive_api"
+     ]
+    ]
+   }
   }
  ]
 }

@@ -1,0 +1,10 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "c5eedd1680b67ad26099f0c03eb87cdcf7a690d002e55c1eec3f3204844c05f8"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/weekly_reports"
+}

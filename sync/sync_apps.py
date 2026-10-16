@@ -115,6 +115,20 @@ def patch_sys_path(src: str) -> str:
     return "".join(lines)
 
 
+def patch_replace(where: str, src: str, pairs: list) -> str:
+    """Literal source replacements for code that reaches across apps by NAME (a bare
+    `import corn_cost`) once the sync has renamed the module (`prefix_modules`). Applied to the
+    source text and failing loudly if the text is gone, so an upstream edit can't silently
+    turn a fix into a no-op."""
+    crlf = "\r\n" in src
+    src = src.replace("\r\n", "\n")
+    for old, new in pairs:
+        if old not in src:
+            raise RuntimeError(f"{where}: replace target not found (upstream changed?): {old[:70]!r}")
+        src = src.replace(old, new)
+    return src.replace("\n", "\r\n") if crlf else src
+
+
 def patch_preauth(src: str) -> str:
     """The portal already logged the user in, so mark the app's own password gate
     (`st.session_state["_authed"]`) as passed. Keeps one login instead of two."""
@@ -288,7 +302,10 @@ def desired_tree(name: str, spec: dict) -> tuple[dict[str, bytes], str]:
         if rel.endswith(".py"):
             bom = data.startswith(codecs.BOM_UTF8)
             text = data.decode("utf-8-sig", errors="replace")
-            data = apply_patches(rel, text, entry, spec.get("preauth", False), spec.get("pin_env")).encode("utf-8")
+            text = apply_patches(rel, text, entry, spec.get("preauth", False), spec.get("pin_env"))
+            if rel in spec.get("replace", {}):
+                text = patch_replace(f"{name}/{rel}", text, spec["replace"][rel])
+            data = text.encode("utf-8")
             if bom:
                 data = codecs.BOM_UTF8 + data
         out[rel] = data
@@ -341,26 +358,51 @@ def specs(names: list[str]) -> dict[str, dict]:
 
 
 def root_files() -> list[dict]:
-    """Shared modules that live at a source repo's root (e.g. livestock-portal's wasde.py)
-    and are reached through sys.path[repo root]; in the portal that root is the repo root."""
+    """Shared modules that live at a source repo's root (livestock-portal's wasde.py,
+    portal_auth.py, the letter/ package) and are reached through sys.path[repo root]; in the
+    portal that root is the repo root. An entry is one `path`, or a whole `dir` (copied
+    recursively, __pycache__ skipped); `replace` maps a source-relative file to literal
+    [old, new] pairs (see patch_replace)."""
     return [{"branch": "master", **r} for r in CONFIG.get("root_files", [])]
+
+
+def _root_entry_files(src: Path, r: dict) -> dict[str, bytes]:
+    out: dict[str, bytes] = {}
+    if r.get("dir"):
+        base = src / r["dir"]
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc":
+                out[p.relative_to(src).as_posix()] = p.read_bytes()
+    else:
+        out[r["path"]] = (src / r["path"]).read_bytes()
+    for rel, pairs in r.get("replace", {}).items():
+        text = out[rel].decode("utf-8-sig")
+        out[rel] = patch_replace(f"root file {rel}", text, pairs).encode("utf-8")
+    return out
 
 
 def sync_root_files(write: bool) -> int:
     failed = 0
     for r in root_files():
+        label = r.get("dir") or r["path"]
         try:
             src, commit = fetch(r)
-            data = (src / r["path"]).read_bytes()
+            files = _root_entry_files(src, r)
         except Exception as e:
             failed += 1
-            print(f"FAILED  root file {r['path']}: {str(e)[:120]}")
+            print(f"FAILED  root file {label}: {str(e)[:160]}")
             continue
-        dest = ROOT / r.get("dest", r["path"])
-        same = dest.exists() and norm(dest.read_bytes()) == norm(data)
-        if write and not same:
-            dest.write_bytes(data)
-        print(f"{'synced' if write else ('same  ' if same else 'differs')} root file {r['path']} @ {commit[:8]}")
+        changed = 0
+        for rel, data in files.items():
+            dest = ROOT / (r.get("dest", rel) if not r.get("dir") else rel)
+            same = dest.exists() and norm(dest.read_bytes()) == norm(data)
+            if not same:
+                changed += 1
+                if write:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(data)
+        print(f"{'synced' if write else ('same  ' if not changed else 'differs')} root file {label} "
+              f"({len(files)} file(s), {changed} changed) @ {commit[:8]}")
     return failed
 
 
@@ -466,7 +508,7 @@ def cmd_check(_names):
             bad += 1
             print(f"COLLISION  module '{mod}' differs between: {', '.join(owners)}")
     for r in root_files():
-        mod = Path(r.get("dest", r["path"])).stem
+        mod = r["dir"] if r.get("dir") else Path(r.get("dest", r["path"])).stem
         if mod in seen:
             bad += 1
             print(f"COLLISION  root module '{mod}' also exists inside apps: {list(seen[mod])}")

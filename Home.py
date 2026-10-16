@@ -101,6 +101,10 @@ except Exception:
 
 require_admin_login()
 
+# The livestock portal's staff tools (weekly_reports, market_board) ask portal_auth.is_admin(), which is
+# a passphrase there. This portal's own login is the stronger gate and already passed, so it counts.
+st.session_state["_portal_is_admin"] = True
+
 # ── Landing page ──────────────────────────────────────────────────────────────
 # Order here is display order — dashboards are grouped by "category" on the
 # home page, in the order each category is first seen.
@@ -210,15 +214,14 @@ LIVE_DASHBOARDS = [
      "desc": "Buy calves, sell feeders: value of gain against cost of gain, cash calf market vs the feeder board.",
      "page": "apps/backgrounding_crush/app.py", "url_path": "backgrounding-crush"},
 
-    # The livestock portal's two staff tools. They load code from sibling apps/ folders by file
-    # path and need its letter/ package, so they open in that app (own passphrase gate) rather than
-    # running here. ?tools=1 is what registers them there; they are unlisted for its clients.
+    # The livestock portal's two staff tools: synced mirrors, with its root letter/ package and
+    # portal_auth.py (sync/apps.json root_files). Signing in here is the staff sign-in (see below).
     {"title": "JSA Daily Cattle Reports", "category": "Livestock",
-     "desc": "Build the daily client letter from live data; Friday is the week-in-review format. Opens the Livestock Portal; passphrase required.",
-     "page": "https://jsa-livestock.streamlit.app/weekly-cattle-reports?tools=1", "url_path": "weekly-cattle-reports"},
+     "desc": "Build the daily client letter from live data; Friday is the week-in-review format.",
+     "page": "apps/weekly_reports/app.py", "url_path": "weekly-cattle-reports"},
     {"title": "Cattle Market Board", "category": "Livestock",
-     "desc": "Every dashboard's headline on one page: what is moving the cattle market and how far back the evidence goes. Opens the Livestock Portal; passphrase required.",
-     "page": "https://jsa-livestock.streamlit.app/cattle-market-board?tools=1", "url_path": "cattle-market-board"},
+     "desc": "Every dashboard's headline on one page: what is moving the cattle market and how far back the evidence goes.",
+     "page": "apps/market_board/app.py", "url_path": "cattle-market-board"},
 
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",

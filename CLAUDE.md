@@ -44,10 +44,19 @@ everything else. The 15 livestock dashboards are generated mirrors of `JSA-Dashb
 (`subdir` entries in `sync/apps.json`: cme_feeder_cattle, livestock_seasonal, cot_report, cash_trade,
 beef_cutout, mexican_feeder_imports, canadian_feeder_cattle, beef_trimmings, beef_trade, beef_weight,
 us_cow_herd, cattle_on_feed, livestock_inventory, fed_cattle_crush, backgrounding_crush). The livestock
-portal's own two staff tools (JSA Daily Cattle Reports, Cattle Market Board) are tiles that OPEN THE LIVESTOCK
-PORTAL (`...?tools=1` deep links, passphrase gate there), not mirrors: they load code from sibling `apps/<name>/` folders
-by file path (cof_recap, snowflake_db, massive_api, leverage...) and need its root `letter/` package and `portal_auth.py`,
-which the sync's prefixing and subdir mirrors don't reproduce. Bundling them means refactoring those paths upstream first. `livestock_seasonal`, `fed_cattle_crush` and `backgrounding_crush` carry module prefixes
+portal's two staff tools (JSA Daily Cattle Reports = `weekly_reports`, Cattle Market Board = `market_board`)
+are mirrors too, but they reach into the livestock repo's layout: its root `letter/` package, `portal_auth.py`,
+`assets/agmarket-net.png` and sibling apps by file path. So `sync/apps.json` `root_files` also carries those (a
+whole `dir` entry for `letter/`, copied to the portal's repo root like `wasde.py`), and `replace` pairs patch the
+few spots that import a renamed sibling by bare name (`letter/sources.py` `import massive_api` -> `ls_massive_api`;
+`market_board/loaders.py` `import corn_cost` -> `fcc_corn_cost`). A replace whose target text has gone fails the
+sync loudly. Staff gate: they ask `portal_auth.is_admin()`, which `Home.py` satisfies once the portal login has
+passed (`st.session_state["_portal_is_admin"]`), so there is no second passphrase here. They need `MARS_API_KEY`
+in the portal Secrets (read straight from `st.secrets` by the allowlist at the top of `weekly_reports`), `msal` and
+`python-pptx` in `requirements.txt` (Reboot). The Outlook-digest panel needs a device-code Graph sign-in cached on
+the machine that signed in, so it stays empty on Cloud, as in the standalone app; PDF printing needs Chrome, which
+Cloud lacks too.
+`livestock_seasonal`, `fed_cattle_crush` and `backgrounding_crush` carry module prefixes
 (`ls_`, `fcc_`, `bgc_`) because their `massive_api` / `snowflake_db` siblings differ from other apps'.
 `LIVESTOCK_PORTAL_URL` in `Home.py` is the standalone portal, linked under the tiles.
 
