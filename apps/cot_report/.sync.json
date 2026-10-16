@@ -1,0 +1,11 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "66a86366c3ce3f77a0bace51a6cc47aa1b75d3d3cb0f82eb621dd4443127db9a",
+  "cot_positions.py": "aef8a76f80ad55f4463bb928f8c8355cccb1cf0d5abf68b5949f5d63288c2720"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/cot_report"
+}

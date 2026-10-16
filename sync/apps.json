@@ -45,6 +45,69 @@
   ]
  },
  "apps": {
+  "cme_feeder_cattle": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cme_feeder_cattle"
+  },
+  "livestock_seasonal": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/livestock_seasonal",
+   "prefix_modules": "ls_"
+  },
+  "cot_report": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cot_report"
+  },
+  "cash_trade": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cash_trade"
+  },
+  "beef_cutout": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/beef_cutout"
+  },
+  "mexican_feeder_imports": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/mexican_feeder_imports"
+  },
+  "canadian_feeder_cattle": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/canadian_feeder_cattle"
+  },
+  "beef_trimmings": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/beef_trimmings"
+  },
+  "beef_trade": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/beef_trade"
+  },
+  "beef_weight": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/beef_weight"
+  },
+  "us_cow_herd": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/us_cow_herd"
+  },
+  "cattle_on_feed": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/cattle_on_feed"
+  },
+  "livestock_inventory": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/livestock_inventory"
+  },
+  "fed_cattle_crush": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/fed_cattle_crush",
+   "prefix_modules": "fcc_"
+  },
+  "backgrounding_crush": {
+   "repo": "JSA-Dashboards/livestock-portal",
+   "subdir": "apps/backgrounding_crush",
+   "prefix_modules": "bgc_"
+  },
   "cost_of_carry": {
    "repo": "JSA-Dashboards/cost-of-carry-calculator",
    "branch": "main",

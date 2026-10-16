@@ -1,0 +1,13 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "5fde928c55ee8a6243a228b72a2b32c3251b83ea39204134890e79044a60e65d",
+  "ca_prices.py": "47316536e8ea822aa302101a5f007ae4e95bce9709dd1a6d530c7aee7df75dbf",
+  "ca_trade.py": "8ed14563697b14a18a5b2ce4d6b9e0036f4caa6b5d3ffd4450b2a73c35d500f0",
+  "snowflake_db.py": "5daa187f3147e3f8872beb7dee2094a236403f0d35f5780f1af0684228c9c580"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/canadian_feeder_cattle"
+}

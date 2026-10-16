@@ -1,0 +1,21 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "dbc80d9af81cebf4a7931e31747de292836ffacbf035a0a1d4f48e45cb633547",
+  "dairy_mix.py": "161dec7930f4eb75d662a52e5042c284f16169151f81aaa6141e7cf7575fd4af",
+  "data/southeast_legacy.json": "59b5e2668518e2a91c9328462c0dfe6bfd806f3bd90f484867af32c3db66756a",
+  "data/southeast_retention.json": "ef989dd84a54a421da773fcfd3fe70ff234d05e7dc632ae976370b14586e2126",
+  "expansion.py": "45cd3387d48620f1cc068c898b059f8fac8b5f7a42be3bfe81cd09d6539dd3de",
+  "herd.py": "4c550cf972f8f42639b7674820831dacea772a9bafc3efc4f7eb6d7bcab210d8",
+  "inventory.py": "5f3790b45e770b53f8c3b25201ac352ccf53616b2dd607eb701356829cf87a1c",
+  "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
+  "nass_env.py": "fc66e000a3eb3edd524a3485912fd84191bd7f3890364848b8d24721435996e8",
+  "on_feed.py": "4fedbfa2aecd7c9a159c9214500017037a4088eae605e13b10ec1a7b427cfa90",
+  "snowflake_db.py": "5daa187f3147e3f8872beb7dee2094a236403f0d35f5780f1af0684228c9c580",
+  "southeast.py": "924c60ed4a4eec48753383435cc6ad9637ac2debb52549376b13a5e3103c9da6"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/us_cow_herd"
+}

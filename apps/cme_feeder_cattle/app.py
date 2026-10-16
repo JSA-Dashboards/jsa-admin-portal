@@ -1,0 +1,2747 @@
+import os
+import re
+import sys
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import openpyxl
+from pathlib import Path
+from datetime import datetime, timedelta
+
+# st.Page runs this file via exec(), not as a standalone script, so its own
+# directory is never added to sys.path automatically -- without this, the
+# local snowflake_db import below raises ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).parent))
+
+# On Streamlit Community Cloud, secrets live in st.secrets rather than a
+# local .env file -- forward anything relevant into os.environ so
+# snowflake_db.py (which only reads via os.environ/os.getenv) sees them the
+# same way whether running locally or deployed. Mirrors the pattern already
+# proven for basis-tracker-streamlit/river-fob-portal.
+try:
+    for _secret_key in (
+        "USE_SNOWFLAKE", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD",
+        "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA",
+    ):
+        if _secret_key in st.secrets and not os.environ.get(_secret_key):
+            os.environ[_secret_key] = str(st.secrets[_secret_key])
+except Exception:
+    pass  # st.secrets not available (no secrets.toml locally) -- fine
+
+import snowflake_db as db
+import barn_report
+import mars_census_view
+import cash_calves
+import barn_basis
+from index_dates import headline_index_date
+from bucketing import shifted_bucket_date
+from snapshots import opening_calls
+from composition import (BRACKETS as COMP_BRACKETS, grade_totals as comp_grade_totals,
+                         mix_effect, next_index_date, span_contributions,
+                         window_composition)
+from volumes import (compare as volume_compare, history as volume_history,
+                     ytd as volume_ytd)
+
+FORECAST_HORIZON_DAYS = 10  # business days
+FORECAST_CI = 0.80  # 80% prediction interval
+
+# ── JSA Brand Colors (aligned to the Admin Portal shell's shared palette) ─────
+JPSI_DARK = "#32373c"
+JPSI_BLUE = "#0693e3"
+BG        = "#f6f8f7"
+CARD_BG   = "#ffffff"
+SURFACE2  = "#eef3f0"
+BORDER    = "#d7e2dc"
+MUTED     = "#5f7267"
+TEXT      = "#32373c"
+POS       = "#16a34a"
+NEG       = "#dc2626"
+NEU       = "#5f7267"
+
+JSA_LOGO = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
+DATA_PATH = Path(__file__).parent / "data" / "Feeder Cattle Info Ross.xlsx"
+MARS_DB_PATH = Path(__file__).parent / "data" / "mars_history.db"
+
+VALID_STATES = {"CO", "IA", "KS", "MO", "MT", "NE", "NM", "ND", "OK", "SD", "TX", "WY"}
+# Video-auction rows are tagged with a sale region ("North Central"/"South
+# Central") instead of a real state code -- without these, they're silently
+# excluded from the default Sale Locations/Basis Leaderboard filter even
+# though they correctly contribute to fci_value upstream.
+VALID_STATES |= {"North Central", "South Central"}
+
+# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
+# single set_page_config call allowed per multi-page run.
+
+st.markdown(f"""
+<style>
+  html, body, [data-testid="stAppViewContainer"] {{
+    background-color:{BG}; color:{TEXT};
+  }}
+  [data-testid="stSidebar"] {{
+    background-color:{SURFACE2}; border-right:1px solid {BORDER};
+  }}
+  .tile {{
+    background:{CARD_BG}; border:1px solid {BORDER};
+    border-top:3px solid {JPSI_BLUE}; border-radius:10px;
+    padding:16px 20px; text-align:center; height:100%;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }}
+  .tile-label {{
+    color:{MUTED}; font-size:0.68rem; text-transform:uppercase;
+    letter-spacing:0.09em; margin-bottom:6px;
+  }}
+  .tile-value {{
+    color:{TEXT}; font-size:1.7rem; font-weight:700; line-height:1.1;
+  }}
+  .tile-delta-pos {{ color:{POS}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
+  .tile-delta-neg {{ color:{NEG}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
+  .tile-delta-neu {{ color:{NEU}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
+  .sec-header {{
+    color:{MUTED}; font-size:0.72rem; text-transform:uppercase;
+    letter-spacing:0.1em; padding:8px 0 4px; border-bottom:1px solid {BORDER};
+    margin-bottom:10px;
+  }}
+  hr {{ border-color:{BORDER}; }}
+  #MainMenu, footer {{ visibility:hidden; }}
+  .stDeployButton {{ display:none; }}
+  div[class*="st-key-wm-"] {{ position:relative; }}
+  div[class*="st-key-wm-"]::after {{
+    content:"";
+    position:absolute; inset:0; margin:auto;
+    width:50%; height:110px; max-width:320px;
+    background-image:url('{JSA_LOGO}');
+    background-size:contain; background-repeat:no-repeat; background-position:center;
+    opacity:0.05; pointer-events:none; z-index:3;
+  }}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def delta_html(val, suffix=""):
+    if val is None or pd.isna(val):
+        return '<div class="tile-delta-neu">—</div>'
+    sign = "▲" if val > 0 else ("▼" if val < 0 else "")
+    color = "pos" if val > 0 else ("neg" if val < 0 else "neu")
+    return f'<div class="tile-delta-{color}">{sign} ${abs(val):.2f}{suffix}</div>'
+
+
+def pct_delta_html(val, suffix=""):
+    """delta_html's percentage twin -- that one hard-codes a dollar sign."""
+    if val is None or pd.isna(val):
+        return '<div class="tile-delta-neu">—</div>'
+    sign = "▲" if val > 0 else ("▼" if val < 0 else "")
+    color = "pos" if val > 0 else ("neg" if val < 0 else "neu")
+    return f'<div class="tile-delta-{color}">{sign} {abs(val):.1f}%{suffix}</div>'
+
+
+def tile(label, value, delta=""):
+    return (f'<div class="tile">'
+            f'<div class="tile-label">{label}</div>'
+            f'<div class="tile-value">{value}</div>'
+            f'{delta}</div>')
+
+
+def fmt_price(v):
+    if v is None or pd.isna(v):
+        return "—"
+    return f"-${abs(v):.2f}" if v < 0 else f"${v:.2f}"
+
+
+def value_on_or_before(df, target_date):
+    """Latest fci_value at or before target_date."""
+    sub = df[df["date"] <= target_date]
+    return sub.iloc[-1]["fci_value"] if not sub.empty else None
+
+
+def add_watermark(fig, size=0.32, opacity=0.06):
+    fig.add_layout_image(dict(
+        source=JSA_LOGO,
+        xref="paper", yref="paper", x=0.5, y=0.5,
+        xanchor="center", yanchor="middle",
+        sizex=size, sizey=size,
+        opacity=opacity, layer="below",
+    ))
+    return fig
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_forecast(fci_values, last_date, horizon=FORECAST_HORIZON_DAYS, ci=FORECAST_CI):
+    """
+    Naive (random-walk) trend projection, flat at the current value, with a
+    band built from the historical distribution of actual h-day-ahead price
+    changes -- not a fitted statistical model. Backtested against Holt's
+    exponential smoothing (66 rolling-origin trials, 2023-10 to 2026-08):
+    simple "no change" persistence beat Holt at every forecast horizon
+    (overall MAE $3.71 vs $4.07/cwt) -- this series behaves close to a
+    random walk, where trend-extrapolation added no real edge, so the
+    simpler and more accurate approach is used here instead. This is
+    descriptive of typical historical variability, not a trading signal or
+    market forecast. Returns None if there isn't enough history.
+    """
+    y = pd.Series(fci_values).astype(float).reset_index(drop=True)
+    if len(y) < 60:
+        return None
+    current = y.iloc[-1]
+    lo_q, hi_q = (1 - ci) / 2, 1 - (1 - ci) / 2
+    future_dates = pd.bdate_range(start=pd.Timestamp(last_date) + pd.Timedelta(days=1), periods=horizon)
+    rows = []
+    for h, d in enumerate(future_dates, start=1):
+        changes = (y - y.shift(h)).dropna()
+        if len(changes) < 20:
+            lower = upper = current
+        else:
+            lower = current + changes.quantile(lo_q)
+            upper = current + changes.quantile(hi_q)
+        rows.append({"date": d, "forecast": current, "lower": lower, "upper": upper})
+    return pd.DataFrame(rows)
+
+
+# ── Data Loading ──────────────────────────────────────────────────────────────
+
+def _load_workbook():
+    """
+    Source: 'Sale Location Data 24-25' sheet of the JSA-compiled workbook.
+    Each date has one row per reporting sale location (Daily $ price) plus a
+    synthetic 'FCI' row holding that date's published CME Feeder Cattle Index
+    value. Basis is recomputed here (location price - that day's FCI) so it
+    stays consistent even where the source sheet's own Basis column is stale.
+    Covers 2024-01-01 through 2026-01-23.
+    """
+    raw = pd.read_excel(DATA_PATH, sheet_name="Sale Location Data 24-25", usecols="A:D", header=0)
+    raw.columns = ["date", "location", "state", "price"]
+    raw = raw.dropna(subset=["date", "location", "price"])
+    raw["date"] = pd.to_datetime(raw["date"])
+    raw["location"] = raw["location"].astype(str).str.strip().str.upper()
+    raw["state"] = raw["state"].astype(str).str.strip().str.upper()
+
+    raw_fci = raw[raw["location"] == "FCI"][["date", "price"]].sort_values("date")
+    # The sheet has exactly one duplicate-dated FCI row (2024-07-23: 258.39 vs
+    # a clearly erroneous 326.18, a lone data-entry duplicate, not a pattern)
+    # -- picking blindly via keep="first"/"last" is a coin flip on which one
+    # survives, so instead keep whichever candidate is closest to the median
+    # of the surrounding +/-5 days' (non-duplicate) values.
+    dupe_dates = raw_fci[raw_fci.duplicated(subset="date", keep=False)]["date"].unique()
+    if len(dupe_dates):
+        single = raw_fci[~raw_fci["date"].isin(dupe_dates)].set_index("date")["price"]
+        keep_rows = []
+        for d in dupe_dates:
+            candidates = raw_fci[raw_fci["date"] == d]
+            window = single[(single.index >= d - pd.Timedelta(days=5)) & (single.index <= d + pd.Timedelta(days=5))]
+            ref = window.median() if not window.empty else candidates["price"].median()
+            keep_rows.append((candidates["price"] - ref).abs().idxmin())
+        raw_fci = pd.concat([raw_fci[~raw_fci["date"].isin(dupe_dates)], raw_fci.loc[keep_rows]])
+
+    fci = (
+        raw_fci.rename(columns={"price": "fci_value"})
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+    fci["source"] = "workbook"
+    # same-day (non-rolling) snapshot isn't in this sheet either
+    fci["same_day_price"] = pd.NA
+    fci["same_day_head"] = pd.NA
+    fci["same_day_avg_weight"] = pd.NA
+
+    loc = raw[raw["location"] != "FCI"].copy()
+    loc = loc.merge(fci[["date", "fci_value"]], on="date", how="left")
+    loc["basis"] = loc["price"] - loc["fci_value"]
+    loc = loc.dropna(subset=["fci_value"])
+    loc["source"] = "workbook"
+    # head count / avg weight aren't in this sheet — the location table shows "—" for these dates
+    loc["head"] = pd.NA
+    loc["avg_weight"] = pd.NA
+
+    return fci, loc
+
+
+def _load_mars_reconstruction():
+    """
+    Continues the timeline past the workbook's last date (2026-01-23) using
+    USDA AMS MARS sale-barn data, reconstructed with the same weighted-average
+    methodology as the workbook's own 'FCI Estimation' sheet:
+
+        FCI(date) = sum(head*weight*price) / sum(head*weight)
+
+    across a ~60-location roster in the CME 12-state region (see
+    update_index.py / data/mars_roster.json). This is JSA's own reconstruction,
+    not CME's official feed, and has been spot-checked against CME's published
+    values within roughly $2-9/cwt on any given day (missing Direct/Video/
+    Internet trade volume, which this sale-barn-only roster doesn't capture).
+    Run `python update_index.py` to refresh.
+    """
+    fci_cols = ["date", "fci_value", "source", "same_day_price", "same_day_head", "same_day_avg_weight"]
+    loc_cols = ["date", "location", "state", "price", "head", "avg_weight", "fci_value", "basis", "source"]
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return pd.DataFrame(columns=fci_cols), pd.DataFrame(columns=loc_cols)
+
+    conn = db.get_conn()
+    fci_raw = db.read_sql_lower(
+        "SELECT report_date AS date, fci_value, same_day_price, same_day_head, same_day_avg_weight "
+        "FROM fci_daily", conn,
+    )
+    sales = db.read_sql_lower(
+        "SELECT report_date AS date, location, state, weight_low, head_count, avg_weight, avg_price "
+        "FROM mars_sales", conn,
+    )
+    conn.close()
+
+    fci = fci_raw.copy()
+    fci["date"] = pd.to_datetime(fci["date"])
+    fci["source"] = "usda_mars"
+    fci = fci.sort_values("date").reset_index(drop=True)
+
+    if sales.empty:
+        loc = pd.DataFrame(columns=loc_cols)
+        return fci, loc
+
+    # Bucket exactly as recompute_fci_daily() does. Without this the Sale
+    # Locations table and the 7-day window show Clovis on the Wednesday USDA
+    # reported while the index counts it on CME's Thursday -- a 47-head
+    # disagreement between the rows and the number beside them. raw_date is
+    # untouched, so USDA's true date is still recorded.
+    sales["date"] = [shifted_bucket_date(l, d)
+                     for l, d in zip(sales["location"], sales["date"])]
+    sales["date"] = pd.to_datetime(sales["date"])
+    sales["w"] = sales["head_count"] * sales["avg_weight"]
+    sales["wp"] = sales["w"] * sales["avg_price"]
+    daily_loc = (
+        sales.groupby(["date", "location", "state"])
+        .agg(w=("w", "sum"), wp=("wp", "sum"), head=("head_count", "sum"))
+        .reset_index()
+    )
+    daily_loc["price"] = daily_loc["wp"] / daily_loc["w"]
+    # weighted-average weight across whatever brackets/grades a location reported that day
+    daily_loc["avg_weight"] = daily_loc["w"] / daily_loc["head"]
+    loc = daily_loc.merge(fci[["date", "fci_value"]], on="date", how="left")
+    loc["basis"] = loc["price"] - loc["fci_value"]
+    loc["source"] = "usda_mars"
+    loc = loc.dropna(subset=["fci_value"])[loc_cols]
+
+    return fci, loc
+
+
+def _load_cme_official():
+    """
+    CME's own literal daily settlement-calculation files (see cme_ftp.py /
+    backfill_ftp.py), pulled from a public FTP archive -- not a
+    reconstruction or approximation of any kind, just the exact numbers CME
+    itself published. Wherever this covers a date, it should win over every
+    other source (workbook, precursor, MARS reconstruction) for that date.
+
+    CME publishes with a lag of roughly 1-3 business days, so this table
+    will always be missing the most recent day or two -- that gap is exactly
+    where the MARS/Direct/Video reconstruction in _load_mars_reconstruction()
+    still earns its keep: estimating what CME will say before it says it,
+    not re-deriving history CME has already told us.
+    """
+    fci_cols = ["date", "fci_value", "source", "same_day_price", "same_day_head", "same_day_avg_weight"]
+    loc_cols = ["date", "location", "state", "price", "head", "avg_weight", "fci_value", "basis", "source"]
+    empty = (pd.DataFrame(columns=fci_cols), pd.DataFrame(columns=loc_cols))
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return empty
+
+    conn = db.get_conn()
+    try:
+        fci_raw = db.read_sql_lower(
+            "SELECT report_date AS date, fci_value, same_day_price, same_day_head, same_day_avg_weight "
+            "FROM cme_ftp_daily", conn,
+        )
+        loc_raw = db.read_sql_lower(
+            "SELECT report_date AS date, location, state, head_count, avg_weight, avg_price "
+            "FROM cme_ftp_locations", conn,
+        )
+    except pd.errors.DatabaseError:
+        return empty  # table doesn't exist yet -- backfill_ftp.py hasn't run
+    finally:
+        conn.close()
+
+    if fci_raw.empty:
+        return empty
+
+    fci = fci_raw.copy()
+    fci["date"] = pd.to_datetime(fci["date"])
+    fci["source"] = "cme_official"
+    fci = fci.sort_values("date").reset_index(drop=True)
+
+    loc = loc_raw.copy()
+    loc["date"] = pd.to_datetime(loc["date"])
+    loc = loc.rename(columns={"avg_price": "price", "head_count": "head"})
+    loc = loc.merge(fci[["date", "fci_value"]], on="date", how="left")
+    loc["basis"] = loc["price"] - loc["fci_value"]
+    loc["source"] = "cme_official"
+    loc = loc.dropna(subset=["fci_value"])[loc_cols]
+
+    return fci, loc
+
+
+WB_PRECURSOR_SHEET = "CME Feeder Cattle Index Values"
+BRACKET_SPECS = [
+    (700, "1"), (750, "1"), (800, "1"), (850, "1"),
+    (700, "1-2"), (750, "1-2"), (800, "1-2"), (850, "1-2"),
+]
+
+
+def _parse_bracket_cell(cell):
+    """
+    Cells hold 'head weight price' as three whitespace-separated numbers, but
+    weight and price are sometimes concatenated with no separator when weight
+    has decimals (e.g. '172  812.90257.25') -- always exactly two 6-char
+    'DDD.DD' halves in that case (weight ~700-899 lbs, price ~$150-450/cwt,
+    both always 3 integer digits + 2 decimals in this sheet). Cells with no
+    sale in that bracket are '0   0   0.00' or a literal '//////' placeholder.
+    """
+    if cell is None:
+        return None
+    parts = str(cell).strip().split()
+    try:
+        if len(parts) == 3:
+            head, weight, price = int(float(parts[0])), float(parts[1]), float(parts[2])
+        elif len(parts) == 2:
+            head = int(float(parts[0]))
+            if head == 0:
+                return None
+            merged = parts[1]
+            if len(merged) != 12:
+                return None
+            weight, price = float(merged[:6]), float(merged[6:])
+        else:
+            return None
+    except ValueError:
+        return None
+    if head <= 0 or weight <= 0 or price <= 0:
+        return None
+    return head, weight, price
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_workbook_precursor(before_date):
+    """
+    'CME Feeder Cattle Index Values' is Ross's raw per-location, per-weight-
+    bracket sale data (2023-01-24 - 2026-01-23) -- the actual source data
+    behind the workbook's published FCI column, not a separate estimate.
+    Recomputing CME's 7-day rolling weighted-average methodology from these
+    raw rows reproduces the published index almost exactly (median abs error
+    ~$0.003/cwt across the full 2024-2026 overlap, spot-checked 2026-08-26)
+    -- far more accurate than the USDA MARS reconstruction for the same kind
+    of gap, since this is the real underlying data rather than an
+    approximation from a different source. Used only for dates before
+    `before_date` (the main workbook sheet's own start), extending the
+    ground-truth-quality range back to 2023-01-24.
+    """
+    fci_cols = ["date", "fci_value", "source", "same_day_price", "same_day_head", "same_day_avg_weight"]
+    loc_cols = ["date", "location", "state", "price", "head", "avg_weight", "fci_value", "basis", "source"]
+    try:
+        wb = openpyxl.load_workbook(DATA_PATH, read_only=True, data_only=True)
+        ws = wb[WB_PRECURSOR_SHEET]
+    except Exception:
+        return pd.DataFrame(columns=fci_cols), pd.DataFrame(columns=loc_cols)
+
+    by_day = {}
+    by_day_loc = {}
+    for r in ws.iter_rows(values_only=True):
+        if not isinstance(r[0], datetime):
+            continue
+        d, loc, state = r[0].date(), r[1], r[2]
+        if not loc or not state:
+            continue
+        for bi in range(8):
+            parsed = _parse_bracket_cell(r[3 + bi])
+            if parsed is None:
+                continue
+            head, weight, price = parsed
+            w = head * weight
+            wp = w * price
+            by_day.setdefault(d, []).append((w, wp, head))
+            by_day_loc.setdefault((d, loc, state), []).append((w, wp, head))
+    wb.close()
+
+    if not by_day:
+        return pd.DataFrame(columns=fci_cols), pd.DataFrame(columns=loc_cols)
+
+    # Drop leading report dates isolated by a large gap from the next one --
+    # a single stray early report (e.g. one location, months before dense
+    # coverage resumes) isn't a real sample of the 12-state index, and
+    # leaving it in would make the chart draw a straight line across the gap
+    # to the next real point, fabricating a multi-month "trend" that never
+    # happened. Found via real data: one 2023-01-24 report, then a 251-day
+    # gap before continuous coverage starts 2023-10-02.
+    STALE_GAP_DAYS = 30
+    report_dates = sorted(by_day)
+    while len(report_dates) >= 2 and (report_dates[1] - report_dates[0]).days > STALE_GAP_DAYS:
+        stale = report_dates.pop(0)
+        del by_day[stale]
+    if not by_day:
+        return pd.DataFrame(columns=fci_cols), pd.DataFrame(columns=loc_cols)
+
+    before = pd.Timestamp(before_date).date()
+    first_date, last_date = min(by_day), max(by_day)
+    fci_rows = []
+    d = first_date
+    while d <= last_date:
+        if d >= before:
+            d += timedelta(days=1)
+            continue
+        window = [d - timedelta(days=i) for i in range(7)]
+        num = den = 0.0
+        for wd in window:
+            for w, wp, head in by_day.get(wd, []):
+                den += w
+                num += wp
+        if den <= 0:
+            d += timedelta(days=1)
+            continue
+        sd = by_day.get(d, [])
+        sd_den = sum(w for w, wp, head in sd)
+        sd_num = sum(wp for w, wp, head in sd)
+        sd_head = sum(head for w, wp, head in sd)
+        fci_rows.append({
+            "date": pd.Timestamp(d), "fci_value": num / den, "source": "workbook_precursor",
+            "same_day_price": (sd_num / sd_den) if sd_den > 0 else pd.NA,
+            "same_day_head": sd_head if sd_head > 0 else pd.NA,
+            "same_day_avg_weight": (sd_den / sd_head) if sd_head > 0 else pd.NA,
+        })
+        d += timedelta(days=1)
+    fci = pd.DataFrame(fci_rows, columns=fci_cols)
+    if fci.empty:
+        return fci, pd.DataFrame(columns=loc_cols)
+    fci_by_date = dict(zip(fci["date"], fci["fci_value"]))
+
+    loc_rows = []
+    for (d, loc, state), rows in by_day_loc.items():
+        if d >= before:
+            continue
+        ts = pd.Timestamp(d)
+        if ts not in fci_by_date:
+            continue
+        den = sum(w for w, wp, head in rows)
+        num = sum(wp for w, wp, head in rows)
+        head_total = sum(head for w, wp, head in rows)
+        if den <= 0 or head_total <= 0:
+            continue
+        price = num / den
+        loc_rows.append({
+            "date": ts, "location": str(loc).strip().upper(), "state": str(state).strip().upper(),
+            "price": price, "head": head_total, "avg_weight": den / head_total,
+            "fci_value": fci_by_date[ts], "basis": price - fci_by_date[ts], "source": "workbook_precursor",
+        })
+    loc = pd.DataFrame(loc_rows, columns=loc_cols)
+    return fci, loc
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_recon_index():
+    """
+    JSA's own reconstruction for EVERY date, including dates CME has since
+    published. load_data() deliberately drops those (CME's own value wins for
+    display, and rightly so), but scoring the forecast needs BOTH numbers for
+    the same date -- otherwise there is no way to see whether the estimates
+    were any good.
+    """
+    empty = pd.DataFrame(columns=["date", "recon", "total_head"])
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return empty
+    conn = db.get_conn()
+    try:
+        df = db.read_sql_lower(
+            "SELECT report_date AS date, fci_value, total_head FROM fci_daily", conn
+        )
+    except Exception:
+        return empty
+    finally:
+        conn.close()
+    if df.empty:
+        return empty
+    df["date"] = pd.to_datetime(df["date"])
+    return (df.rename(columns={"fci_value": "recon"})
+              .sort_values("date").reset_index(drop=True))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_last_refresh():
+    """
+    When the pipeline last wrote to the backend THIS PAGE READS, as a naive
+    America/Chicago timestamp, or None if unknown.
+
+    Deliberately read from the live backend rather than the local SQLite file:
+    the failure this exists to catch is the one daily_update.ps1 gives its own
+    exit code -- the USDA refresh and recompute succeed, the Snowflake push
+    fails, and so the local file is perfectly current while the dashboard
+    quietly serves yesterday's numbers. A check against the local file would
+    report "healthy" in exactly that case.
+
+    READS pipeline_stamp, NOT fci_snapshots.captured_at. Those answer different
+    questions and only coincide on an ordinary day. fci_snapshots is
+    INSERT-OR-IGNORE on (index_date, run_date, run_slot), so captured_at records
+    the FIRST run of a slot and never moves again -- that immutability is the
+    point of snapshots, because it is what keeps the head-to-head against CME
+    honest. Reading it here meant a repeat run inside a slot did not advance the
+    stamp: on 2026-10-07 a mid-day correction took 10-06 from 337.9470 to
+    337.8693 and this line went on reporting "Last refreshed 8:05 AM (1.6h
+    ago)". Understating freshness is the safe direction -- the 20h/30h
+    thresholds can only fire early -- but it is blind in the one situation where
+    somebody is looking at it to check whether their fix landed.
+
+    pipeline_stamp is one row, upserted on every run, and pushed LAST in
+    CRITICAL_TABLES, so a current stamp means every table before it landed too.
+
+    FALLS BACK to fci_snapshots when pipeline_stamp is absent or empty, which is
+    the state of any backend that has not taken a push since this was added. The
+    fallback is strictly older, never newer, so it cannot manufacture freshness.
+
+    Both are written by the job as a naive local timestamp on the Central-time
+    machine that runs it, so they are compared against Central time below, NOT
+    against the server clock -- Streamlit Cloud runs in UTC and would otherwise
+    read every run as five hours fresher than it is.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return None
+    conn = db.get_conn()
+    try:
+        row = None
+        try:
+            row = conn.cursor().execute(
+                "SELECT MAX(written_at) FROM pipeline_stamp").fetchone()
+        except Exception:
+            row = None          # table not pushed to this backend yet
+        if not row or not row[0]:
+            row = conn.cursor().execute(
+                "SELECT MAX(captured_at) FROM fci_snapshots").fetchone()
+    except Exception:
+        return None          # table absent on this backend yet
+    finally:
+        conn.close()
+    if not row or not row[0]:
+        return None
+    try:
+        return datetime.fromisoformat(str(db.iso(row[0])))
+    except ValueError:
+        return None
+
+
+# The pipeline runs at 07:45 and 13:00 Central, so the longest HEALTHY gap is
+# the overnight one: 13:00 to 07:45 is 18.75 hours. Past 20 means a scheduled
+# run did not land; past 30 means more than one did not. The morning run moved
+# from 07:30 to 08:00 on 2026-09-29 and from 08:00 to 07:45 on 2026-10-01, so
+# the warn threshold now sits 20 - 18.75 = 1.25 hours above the healthy gap,
+# where it was 1.0 at 08:00 and 1.5 at 07:30. In slip terms: 13:00 + 20h is
+# 09:00, so the morning run has to land after 09:00 -- more than an hour and a
+# quarter late -- before this warns. The threshold is anchored to the 13:00
+# run, which did not move, so only the margin changed.
+_STALE_WARN_HOURS = 20
+_STALE_ALERT_HOURS = 30
+
+
+def _central_now():
+    """Now, in Central, as a naive datetime -- or None if the zone is unavailable."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Chicago")).replace(tzinfo=None)
+    except Exception:
+        # No IANA database (bare Windows without tzdata). Rather than silently
+        # compare against a server clock in the wrong zone -- which is how a
+        # staleness check ends up lying -- decline to judge.
+        return None
+
+
+def _render_freshness():
+    last = _load_last_refresh()
+    now = _central_now()
+    if last is None:
+        st.caption("Data freshness unknown — no pipeline run has been recorded yet.")
+        return
+    # " 0" -> " " strips the leading zero from both the day and the hour;
+    # %-I is not portable to Windows, where this job actually runs.
+    stamp = last.strftime("%b %d at %I:%M %p").replace(" 0", " ")
+    if now is None:
+        st.caption(f"Last refreshed {stamp} Central.")
+        return
+    hours = (now - last).total_seconds() / 3600.0
+    if hours < -0.5:
+        # A run stamped in the future. Means the pipeline machine's clock is
+        # ahead of Central, or a row was written by hand. Say so rather than
+        # letting it read as healthy -- a future timestamp would otherwise
+        # suppress this warning permanently, which is the exact silent failure
+        # this check exists to prevent.
+        st.warning(
+            f"**The last recorded run is dated in the future** ({stamp} Central, "
+            f"{abs(hours):.1f}h ahead). Freshness cannot be judged until that is "
+            f"corrected — check the pipeline machine's clock."
+        )
+        return
+    if hours >= _STALE_ALERT_HOURS:
+        st.error(
+            f"**This page is {hours:.0f} hours out of date.** The last pipeline run "
+            f"recorded was {stamp} Central; at least two scheduled runs (07:45 and "
+            f"13:00) have not reached the database behind this page. Treat every "
+            f"figure below as historical until this clears."
+        )
+    elif hours >= _STALE_WARN_HOURS:
+        st.warning(
+            f"**A scheduled run appears to have been missed.** Last refresh was "
+            f"{stamp} Central, {hours:.0f} hours ago — longer than the "
+            f"18.75-hour overnight gap between the 13:00 and 07:45 runs."
+        )
+    else:
+        st.caption(f"Last refreshed {stamp} Central ({hours:.1f}h ago).")
+
+
+# ── Is the headline day COMPLETE? ─────────────────────────────────────────────
+# Freshness above says when the pipeline last ran. This says whether the day it
+# ran on is whole, which is a different failure and the one that costs money.
+# The estimate is computed on whatever has been fetched by then, so a barn that
+# has not published yet is simply not in it -- and the number looks exactly as
+# confident as a complete one. On 2026-09-22 the 07:42 estimate went out 40
+# cents light because Oklahoma City and Tulsa had not published, and nothing on
+# this page said so. This is that missing sentence.
+
+# The lines are MARKDOWN once st.caption/st.warning render them, and the
+# report's own "~640,487 lb  (~36% of a typical Monday)" carries tildes, which
+# GFM reads as strikethrough. Escaped rather than trusted: the barn names come
+# out of the database, so they are not ours to vouch for either.
+_BARN_MD_ESCAPE = str.maketrans({c: "\\" + c for c in "\\`*_[]~<>"})
+
+
+def _barn_header_is_healthy(header):
+    """
+    Does this header describe a real roster, or a failure wearing its clothes?
+
+    report_lines() never raises; on an internal error it returns the single line
+    "Barn report skipped: <Type>: <msg>". Branching on line count alone rendered
+    that in the same quiet caption as "6 of 6 expected barns reported", so a
+    broken check looked exactly like a clean morning -- which is the one thing
+    this line exists to prevent. A zero DENOMINATOR fails too: "0 of 0" means no
+    roster could be built, which is a fault, not a whole day. A holiday reads
+    "0 of 8" and takes the loud path because all eight are listed as missing.
+    """
+    m = re.search(r"-- index date \d{4}-\d{2}-\d{2} \([A-Za-z]{3}\): "
+                  r"(\d+) barns in the index", header)
+    return bool(m) and int(m.group(1)) > 0
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_barn_report():
+    """
+    barn_report.py's own lines, verbatim -- the same ones the pipeline log
+    prints. Deliberately NOT rebuilt here: the page and the log cannot then
+    disagree about which barns are out, and the roster logic stays in the one
+    module that has a mutation-tested suite on it.
+
+    ttl=300 rather than the hour every other loader on this page uses, matching
+    _load_last_refresh() for the same reason it does. barn_days() is a GROUP BY
+    over every row of mars_sales with NO WHERE CLAUSE -- 32,946 rows today --
+    so it must not run on every page load against Snowflake. But what this line
+    answers is "is the number I am about to send complete RIGHT NOW", and what
+    makes the answer change is a late barn landing in the 13:00 run. An hour of
+    cache would keep naming Oklahoma City missing for up to an hour after it
+    arrived, which is a worse lie than the silence this replaces. Five minutes
+    bounds it at five minutes and still collapses a refresh loop into one
+    query. The sidebar's Refresh Data button clears it outright.
+
+    Returns [] when the backend cannot be opened at all. The load_data() error
+    above and the freshness banner already own that story, and a diagnostic
+    must never be the thing that breaks the page it is diagnosing.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return []
+    try:
+        conn = db.get_conn()
+    except Exception:
+        return []
+    try:
+        # list(), so what lands in the cache is concrete, and the whole
+        # consumption sits inside the guard rather than just the call --
+        # update_index.py learned that one the expensive way (see
+        # tests/test_barn_report.py::..consumes_the_report_inside_a_guard).
+        return list(barn_report.report_lines(conn))
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def _render_barn_report():
+    """
+    Quiet when the day is whole, loud when it is not.
+
+    A complete day still says so. "6 of 6 expected barns reported" on every
+    ordinary morning is what makes one morning's "4 of 6" mean anything, and a
+    line that appears only when something is wrong is a line nobody learns to
+    read. But it says so in a caption -- the register _render_freshness() uses
+    for a healthy pipeline -- so the eye stops only on the mornings that earn
+    it.
+    """
+    lines = _load_barn_report()
+    if not lines:
+        st.caption("Barn report unavailable -- whether this estimate is "
+                   "complete could not be determined.")
+        return
+    header = lines[0].translate(_BARN_MD_ESCAPE)
+    missing = [ln.strip().translate(_BARN_MD_ESCAPE) for ln in lines[1:]]
+    if not missing and _barn_header_is_healthy(header):
+        st.caption(header)
+        return
+    st.warning("**" + header + "**\n\n"
+               + "\n".join("- " + ln for ln in missing))
+
+
+# ── Does what we hold still match what USDA publishes? ───────────────────────
+# A third, different question from the two above. Freshness says when the
+# pipeline last ran; the barn report says whether today's sample is whole; this
+# says whether the sample we have ALREADY STORED still matches what AMS serves.
+#
+# It is a real failure and it has happened twice. mars_sales is written
+# insert-if-absent and never updated, so when AMS withdraws or revises a lot our
+# copy keeps the old version forever, and recompute_fci_daily() reads that table
+# with no WHERE clause -- a withdrawn lot stays in the published index until a
+# human notices. Mitchell SD cost 2 cents on two index dates and sat there for
+# five days; McAlester OK moved three index dates and was found by accident.
+#
+# The check itself needs the network, so it cannot run on this page. The
+# pipeline does the comparison once, on rows it already has in hand, and leaves
+# the answer in two small tables. See mars_census.py and mars_census_view.py.
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_census():
+    """
+    (state, summary, rows) from the last pipeline census.
+
+    Returns the UNAVAILABLE state rather than an empty clean one whenever the
+    backend cannot be opened. "The check found nothing" and "the check did not
+    report" are different sentences, and a diagnostic must never be the thing
+    that breaks the page it is diagnosing.
+
+    ttl=300 to match the barn report and the freshness stamp: the 13:00 run is
+    what changes this answer, and an hour of cache could keep showing a
+    resolved finding for an hour after it was resolved.
+
+    Returned as plain records, not a DataFrame -- st.cache_data hands every
+    caller the same object back, and a frame is mutable in ways a list of dicts
+    rebuilt per render is not.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return mars_census_view.UNAVAILABLE, None, []
+    try:
+        conn = db.get_conn()
+    except Exception:
+        return mars_census_view.UNAVAILABLE, None, []
+    try:
+        state, summary, rows = mars_census_view.census_state(conn)
+        # The whole consumption inside the guard, not just the call --
+        # update_index.py learned that one the expensive way.
+        return state, summary, rows.to_dict("records")
+    except Exception:
+        return mars_census_view.UNAVAILABLE, None, []
+    finally:
+        conn.close()
+
+
+def _render_census():
+    """
+    One caption always, the detail only when there is detail.
+
+    CLIENTS READ THIS PAGE. The wording is "AMS reconciliation ... no
+    discrepancies" -- quality assurance, not an alarm -- and the per-row detail,
+    which carries barn names and prices, stays behind the expander.
+    """
+    state, summary, rows = _load_census()
+    line = mars_census_view.headline(state, summary, _central_now())
+    if state == mars_census_view.FINDINGS:
+        st.warning("**" + line + "**")
+    else:
+        st.caption(line)
+    if rows:
+        with st.expander("AMS reconciliation detail (JSA internal)"):
+            st.dataframe(pd.DataFrame(rows), use_container_width=True,
+                         hide_index=True)
+
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_composition(index_date_iso):
+    """
+    The window broken out by weight bracket and muscle grade, plus what the
+    grade mix is doing to the price. Built from our own mars_sales so it
+    covers the LIVE estimate -- CME's published brackets only exist for dates
+    CME has already printed. See composition.py.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return None, None
+    conn = db.get_conn()
+    try:
+        return (window_composition(conn, index_date_iso),
+                mix_effect(conn, index_date_iso))
+    except Exception:
+        return None, None
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_span(index_date_iso, as_of_iso):
+    """
+    What each calendar day merged into this index date contributed, zeros
+    included. See composition.py -- an absent weekend and a weekend whose
+    reports have not landed look identical on this page otherwise.
+
+    as_of_iso is an argument rather than read inside so it lands in the cache
+    key: the "not yet published" wording depends on today's date, and a cached
+    copy carried across midnight would keep calling a settled day pending.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return None
+    conn = db.get_conn()
+    try:
+        return span_contributions(conn, index_date_iso, as_of=as_of_iso)
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_volumes(index_date_iso=None):
+    """
+    Index volume: the window comparison, the cumulative comparison, and the
+    chart series. All from CME's own published numbers -- see volumes.py for
+    why our reconstruction cannot carry the history.
+
+    Takes the index date explicitly so this section reports the same date as the
+    headline. Left to its own default it picked the newest row it could find,
+    which on 2026-09-14 put "the 7-day window for Sep 14" -- and an ISO week 38
+    seasonal norm -- directly under a headline reading Sep 11, comparing a
+    Monday window against Friday's number.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return None, None, None, None, None
+    conn = db.get_conn()
+    try:
+        _byyear, _norm, _span = volume_history(conn, years=(2026, 2025))
+        return (volume_compare(conn, index_date_iso), _byyear, _norm, _span,
+                volume_ytd(conn, index_date_iso))
+    except Exception:
+        return None, None, None, None, None
+    finally:
+        conn.close()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_opening_calls():
+    """
+    Our own estimate frozen at the first morning run after each sale day.
+
+    The Versus panel needs this rather than the live value: fci_daily is
+    rewritten every run, so our number keeps improving as late auctions publish
+    while CIH's and Compass's stay fixed at what they printed that morning.
+    Scoring our hindsight against their same-morning call would flatter us by
+    roughly the size of one late auction -- +0.33 on 09/08. See snapshots.py.
+    """
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return {}
+    conn = db.get_conn()
+    try:
+        return opening_calls(conn)
+    except Exception:
+        return {}          # table absent on this backend yet
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_peer_estimates():
+    """
+    Competitors' published FCI estimates, hand-entered via
+    add_peer_estimate.py. index_date is CME's index date, so these line up
+    directly with fci_daily and cme_ftp_daily.
+    """
+    empty = pd.DataFrame(columns=["date", "source", "value"])
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return empty
+    conn = db.get_conn()
+    try:
+        df = db.read_sql_lower(
+            "SELECT index_date AS date, source, fci_value FROM peer_estimates", conn)
+    except Exception:
+        return empty          # table absent on this backend yet
+    finally:
+        conn.close()
+    if df.empty:
+        return empty
+    df["date"] = pd.to_datetime(df["date"])
+    return df.rename(columns={"fci_value": "value"})
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_cme_index_dates():
+    """
+    Every date CME has actually filed an index for, straight from its own
+    file archive (3,000+ files back to 2015).
+
+    This replaces a USFederalHolidayCalendar, which was simply wrong about
+    this series. Measured over 2024-01-01..2026-09-04, CME published on 22 of
+    28 weekday federal holidays -- MLK, Presidents Day, Juneteenth, Columbus
+    Day, Veterans Day, New Year's Day, July 4 2025, and Labor Day in both
+    2024 and 2025. It skipped only 11 weekdays in that span, several of which
+    are not federal holidays at all (Dec 24, Dec 26, Dec 31, Jul 3 2025). The
+    real skip set is roughly Memorial Day, Independence Day, Thanksgiving and
+    the Christmas-New Year stretch, and it is not even consistent year to
+    year: Memorial Day 2024 was skipped, 2025 and 2026 were not.
+
+    No fixed rule reproduces that. CME's own history does, by construction.
+    """
+    empty = pd.DatetimeIndex([])
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return empty
+    conn = db.get_conn()
+    try:
+        df = db.read_sql_lower("SELECT report_date AS date FROM cme_ftp_daily", conn)
+    except Exception:
+        return empty
+    finally:
+        conn.close()
+    if df.empty:
+        return empty
+    return pd.DatetimeIndex(pd.to_datetime(df["date"])).sort_values()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_data():
+    """
+    Priority order, earliest ground-truth-quality data wins for each date:
+      1. cme_official: CME's own exact daily settlement files (cme_ftp.py) --
+         wins over every other source for any date it covers. Published
+         with a ~1-3 business day lag, so this always trails off a bit short
+         of today.
+      2. wb_fci (2024-01-01 - 2026-01-23): the workbook's published CME
+         values -- ground truth, kept as a fallback for any date the FTP
+         archive itself doesn't cover.
+      3. precursor (2023-01-24 - 2023-12-31): recomputed from Ross's raw
+         per-location sale data using CME's own methodology -- validated to
+         within about $0.20/cwt (median $0.003) of the published column
+         where the two overlap, so treated as ground-truth-equivalent.
+      4. mars_before / mars_after: JSA's own USDA MARS reconstruction --
+         this is the ONLY genuine estimate left in this chain, now that
+         cme_official covers almost all already-published history. Its real
+         job is the trailing day or two CME hasn't published yet -- an
+         actual prediction, not a stand-in for data CME has already
+         released.
+    """
+    wb_fci, wb_loc = _load_workbook()
+    wb_start, wb_end = wb_fci["date"].min(), wb_fci["date"].max()
+
+    precursor_fci, precursor_loc = _load_workbook_precursor(wb_start)
+    precursor_start = precursor_fci["date"].min() if not precursor_fci.empty else wb_start
+
+    mars_fci, mars_loc = _load_mars_reconstruction()
+    mars_before_fci = mars_fci[mars_fci["date"] < precursor_start]
+    mars_before_loc = mars_loc[mars_loc["date"] < precursor_start]
+    mars_after_fci = mars_fci[mars_fci["date"] > wb_end]
+    mars_after_loc = mars_loc[mars_loc["date"] > wb_end]
+
+    fallback_fci = pd.concat(
+        [mars_before_fci, precursor_fci, wb_fci, mars_after_fci], ignore_index=True
+    )
+    fallback_loc = pd.concat(
+        [mars_before_loc, precursor_loc, wb_loc, mars_after_loc], ignore_index=True
+    )
+
+    official_fci, official_loc = _load_cme_official()
+    if not official_fci.empty:
+        fallback_fci = fallback_fci[~fallback_fci["date"].isin(official_fci["date"])]
+        fallback_loc = fallback_loc[~fallback_loc["date"].isin(official_fci["date"])]
+
+    fci = pd.concat([fallback_fci, official_fci], ignore_index=True).sort_values("date").reset_index(drop=True)
+    loc = pd.concat([fallback_loc, official_loc], ignore_index=True).sort_values("date").reset_index(drop=True)
+
+    return fci, loc
+
+
+with st.spinner("Loading feeder cattle sale data…"):
+    try:
+        fci_df, loc_df = load_data()
+        load_ok = True
+        err_msg = ""
+    except Exception as e:
+        load_ok = False
+        err_msg = str(e)
+        fci_df, loc_df = pd.DataFrame(), pd.DataFrame()
+
+if not load_ok:
+    # Clients read this page. The old version put str(e) straight on screen, so
+    # a Snowflake outage showed them the account host, the account id and a
+    # query id -- internals that mean nothing to a reader and invite questions
+    # nobody here wants to field. On 2026-09-22 that was literally
+    # "390144 (28000): Failed to connect to DB: GNC89034.us-east-1..." on the
+    # public page. Say what is wrong, say what it does NOT mean, and keep the
+    # exception one deliberate click away for whoever is on the hook for it.
+    st.error(
+        "**The index data backend is unavailable, so this page cannot show "
+        "current figures.**\n\nThis is an infrastructure problem, not a problem "
+        "with the index itself: the reconstruction runs on its own schedule and "
+        "nothing has been lost. Figures will reappear as published once the "
+        "connection is restored."
+    )
+    with st.expander("Technical details (JSA internal)"):
+        st.code(err_msg)
+    st.stop()
+
+if fci_df.empty:
+    st.warning("No FCI values found in the source data.")
+    st.stop()
+
+last_date = fci_df["date"].max()
+first_date = fci_df["date"].min()
+
+# ── Which index date the headline is FOR ────────────────────────────────────
+# NOT the newest row. The newest row is always the least complete one, and on a
+# Monday it is barely formed: a Monday index date normally carries about 3,300
+# head of its own Monday sales, and none of it has been reported yet when this
+# page is read on Monday morning, because Monday's auctions publish Tuesday. On
+# 2026-09-14 the newest row held 480 head -- one Saturday auction -- against a
+# 9/11 row built on four complete sale days, and the page headlined the 480.
+#
+# Over a weekend it is worse still: CME publishes NO index for a Saturday or
+# Sunday (their FTP has no such files), but fci_daily carries Friday's value
+# onto those dates so the series has no holes. Headlining the newest row means
+# headlining a date CME will never print.
+#
+# The honest headline is the index date CME will print NEXT: the first business
+# day after its last published file. That is the number a hedger is waiting on,
+# it is how CIH dates its own daily sheet, and because it is driven by CME's
+# publication clock rather than by the calendar, a holiday or a late file moves
+# it automatically instead of needing a rule of its own.
+#
+# The forward estimates past that date are not hidden -- they are the whole
+# point of the Pending CME Prints section below, which lists every date CME
+# still owes with our estimate for each.
+# The rule itself lives in index_dates.py with tests against it. It is kept out
+# of this file because the forecast scorecard cannot catch a mistake in it --
+# the scorecard compares our estimate for a date against CME's print for that
+# same date, so every date scores identically well no matter which one is
+# headlined. It measures the number, never the choice of number.
+_published = fci_df[fci_df["source"].isin(("workbook", "cme_official"))]
+_last_pub = _published.iloc[-1]["date"].date() if len(_published) else None
+_head = headline_index_date(_last_pub, {t.date() for t in fci_df["date"]})
+_hit = fci_df.index[fci_df["date"] == pd.Timestamp(_head)] if _head else []
+head_pos = fci_df.index.get_loc(_hit[0]) if len(_hit) else len(fci_df) - 1
+head_row = fci_df.iloc[head_pos]
+head_date = head_row["date"]
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.image(JSA_LOGO, use_container_width=True)
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    st.markdown('<div class="sec-header">Detail Date</div>', unsafe_allow_html=True)
+    detail_date = st.date_input(
+        "Location detail for",
+        value=last_date.date(),
+        min_value=first_date.date(),
+        max_value=last_date.date(),
+        label_visibility="collapsed",
+    )
+    detail_date = pd.Timestamp(detail_date)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">State Filter</div>', unsafe_allow_html=True)
+    all_states = sorted(loc_df["state"].unique().tolist())
+    default_states = [s for s in all_states if s in VALID_STATES] or all_states
+    state_filter = st.multiselect("States", all_states, default=default_states, label_visibility="collapsed")
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    if st.button("↺  Refresh Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    _SOURCE_LABELS = {
+        "cme_official": "CME's own published daily settlement file — exact, not a reconstruction.",
+        "workbook": "JSA-compiled workbook, CME's published index value.",
+        "workbook_precursor": "JSA reconstruction from Ross's raw per-location sale data (the same source behind the published column) — validated within about $0.20/cwt of published values where they overlap.",
+        "usda_mars": "JSA's own USDA MARS/Direct/Video estimate — CME hasn't published this date yet (usually a 1-3 business day lag), so this is a genuine forecast, not a stand-in for released data.",
+    }
+    # Weekday-only for this range display: CME never publishes a file for
+    # Sat/Sun, so every weekend date falls back to the MARS estimate even in
+    # an otherwise fully-official stretch, scattering "usda_mars" rows across
+    # nearly two years and making a naive min/max span look like a much
+    # wider estimate window than the real one (which is just the trailing
+    # 1-3 unpublished business days). The underlying fci_df/chart still
+    # correctly includes those weekend estimate rows -- only this summary
+    # range ignores them.
+    _segments = sorted(
+        (wd["date"].min(), wd["date"].max(), src)
+        for src, grp in fci_df.groupby("source")
+        for wd in [grp[grp["date"].dt.weekday < 5]]
+        if not wd.empty
+    )
+    _seg_html = "".join(
+        f'<b>{start.strftime("%b %d, %Y")} – {end.strftime("%b %d, %Y")}:</b><br>'
+        f'{_SOURCE_LABELS.get(src, src)}<br><br>'
+        for start, end, src in _segments
+    )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="color:{MUTED};font-size:0.72rem;line-height:1.6;">'
+        f'Sample: 12-state feeder steer region<br>'
+        f'(CO, IA, KS, MO, MT, NE, NM, ND, OK, SD, TX, WY)<br><br>'
+        f'Grade/weight: #1 &amp; #1-2 Steers, Medium &amp; Large,<br>'
+        f'700–899 lbs, FOB 3% standing shrink<br><br>'
+        f'Coverage: {first_date.strftime("%b %d, %Y")} – {last_date.strftime("%b %d, %Y")}<br><br>'
+        + _seg_html
+        + f'All segments are drawn as one solid line — not<br>'
+        f'visually distinguished, see this panel for which<br>'
+        f'dates are which. Run <code>update_index.py</code><br>'
+        f'to refresh.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+loc_filtered = loc_df[loc_df["state"].isin(state_filter)] if state_filter else loc_df
+# Guards against a stale cached load_data() result from before these columns
+# existed surviving a Streamlit Cloud soft-redeploy (in-memory cache, ttl=1hr).
+for _col in ("head", "avg_weight"):
+    if _col not in loc_filtered.columns:
+        loc_filtered[_col] = pd.NA
+
+
+# ── Header ────────────────────────────────────────────────────────────────────
+
+c1, c2 = st.columns([7, 3])
+with c1:
+    st.markdown(
+        f"<h1 style='color:{TEXT};margin:0;padding:0;font-size:1.9rem;'>"
+        "JSA - CME Feeder Cattle Index</h1>"
+        f"<div style='color:{MUTED};font-size:0.8rem;margin-top:2px;'>"
+        "12-State Feeder Steer Sample · #1 &amp; #1-2 Medium &amp; Large, 700–899 lbs</div>",
+        unsafe_allow_html=True,
+    )
+with c2:
+    st.markdown(
+        f"<div style='text-align:right;color:{MUTED};font-size:0.75rem;padding-top:6px;'>"
+        f"Most recent index date<br>"
+        f"<span style='color:{JPSI_BLUE};font-size:1rem;font-weight:700;'>"
+        f"{head_date.strftime('%b %d, %Y')}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+st.markdown("<hr style='margin:10px 0 18px;'>", unsafe_allow_html=True)
+
+# Freshness first, above the numbers. Every figure on this page renders
+# identically whether the pipeline ran twenty minutes ago or failed days ago,
+# and the numbers are traded on -- so say how old they are before showing them.
+_render_freshness()
+
+# Directly beneath it, and ABOVE the tabs on purpose. Ross reads this page each
+# morning and snips the top of it to clients by hand, so the one thing that has
+# to be in the snip is whether the number in it is complete. Inside a tab it
+# would be one click away from the person it is for; below the KPI tiles it
+# would split them from the "Daily:" caption that the block further down says
+# must stay directly under them.
+_render_barn_report()
+_render_census()
+
+
+# Three tabs. The index is the published number; the cash lookup is what the
+# cattle behind it actually brought, by weight and state; the basis lookup asks
+# what one barn's cattle bring against the index at a weight the index does not
+# itself cover. Same data source -- the AMS barn reports -- read for different
+# questions, and the cash lookup is shared with the Backgrounding Crush rather
+# than copied (see cash_calves.py).
+#
+# Both lookups own every one of their own queries, in their own modules. This
+# file issues none, which is not tidiness: the cash series CANNOT reach the
+# index. calf_sales spans 400-900 lb where the index is 700-899,
+# recompute_fci_daily() reads mars_sales only, and
+# tests/test_index_isolation.py in the cme-feeder-cattle-index repo enforces
+# all of that structurally rather than by convention.
+tab_index, tab_cash, tab_basis = st.tabs(
+    ["Index", "Cash Feeder Prices", "Sale Barn Basis"], on_change="rerun")
+
+with tab_index:
+    # ── KPI Tiles ─────────────────────────────────────────────────────────────────
+
+    if tab_index.open:
+        def _round2(v):
+            return None if v is None or pd.isna(v) else round(v, 2)
+
+
+        def _mdy(d):
+            """M/D/YY, matching the tile style CIH and CME's own sheets use."""
+            return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
+
+
+        # CME FILES an index under the date its sales run through, then RELEASES it the
+        # following business day. Those two differ by more than a day whenever a holiday
+        # intervenes: the 9/4/2026 file was released 9/8, because 9/5-9/6 were the
+        # weekend and 9/7 was Labor Day.
+        #
+        # Everything user-facing on this page is labelled by CME's own INDEX date -- the
+        # last sale day in the window, which is how CME names its files -- with the
+        # release date shown alongside as context.
+        #
+        # Release-date labelling was tried on 2026-09-09 and reverted the same day. It
+        # reads more naturally in isolation, being the print people wait for, but CIH's
+        # daily sheet -- which this desk checks against every morning -- is dated by
+        # INDEX date. Release labelling put every number here one business day ahead of
+        # that benchmark, turning each comparison into a mental subtraction, and it also
+        # disagreed with CME's filenames and the raw data table.
+        #
+        # No single label satisfies every consumer: QST charts the same index against
+        # what looks like the date it received each value, so CME's 9/3 index appears
+        # there on a 9/8 bar. That is why both dates are shown rather than one.
+        _CME_INDEX_DATES = _load_cme_index_dates()
+
+        # Raw internal source strings are meaningless on screen, and without them there
+        # is no way to tell a published CME value from a JSA estimate in the raw table.
+        _SOURCE_LABELS = {
+            "cme_official": "CME published",
+            "workbook": "CME published (workbook)",
+            "usda_mars": "JSA estimate",
+        }
+
+
+        def _release_date(d):
+            """
+        When CME releases the index it filed under `d`: the next date CME files
+        an index for, read off its own history rather than guessed from a holiday
+        calendar.
+
+        Past the end of that history there is nothing to read, so this falls back
+        to the next weekday. That is a guess, and it is the one place this column
+        can be wrong -- but it is the right guess for Labor Day, which CME filed
+        through in both 2024 and 2025.
+        """
+            if d is None or pd.isna(d):
+                return None
+            ts = pd.Timestamp(d)
+            i = _CME_INDEX_DATES.searchsorted(ts, side="right")
+            if i < len(_CME_INDEX_DATES):
+                return _CME_INDEX_DATES[i]
+            return ts + pd.offsets.BDay(1)
+
+
+
+        # Round each individual value to display precision BEFORE differencing, not
+        # after -- otherwise a change tile can show e.g. -$0.10 while the two values
+        # it's derived from display as $329.20 and $329.31 (an $0.11 difference by
+        # eye), since -0.1003 and -0.11 round to different cents even though they're
+        # both "correct" in isolation. Rounding first keeps every number on screen
+        # self-consistent with the others.
+        current = _round2(fci_df.iloc[head_pos]["fci_value"])
+        # Adjacent-row change, kept separate from the "Last CME Print" tile below so
+        # the " DoD" caption stays a genuine day-over-day rather than spanning the
+        # gap back to CME's last publication.
+        _adjacent = _round2(fci_df.iloc[head_pos - 1]["fci_value"]) if head_pos > 0 else None
+        day_chg = _round2(current - _adjacent) if _adjacent is not None else None
+
+        # "Current Index" is only accurate when the latest date is a real published
+        # value (source == "workbook" or "cme_official"). Any other date is JSA's
+        # own reconstruction -- label it as an estimate so it's never mistaken for
+        # the real published figure.
+        #
+        # Labelled with the DATE OF THE DATA, not the calendar. This used to date the
+        # estimate to TODAY, on the reasoning that a carry-forward figure is our best
+        # guess "for today". That convention breaks as soon as publication lags more
+        # than a day: over the 2026 Labor Day weekend it captioned a window ending
+        # 9/4 as "FCI Estimate 9/8/26", three days off, and nothing on screen said
+        # which date the number was actually for. CME labels each index by the date
+        # its sales run THROUGH and releases it the following afternoon, so the data
+        # date is both the honest label and the one that lines up with CME's own
+        # print and with CIH's daily sheet.
+        _cur_row = head_row
+        current_label = (
+            f"Current Index ({_mdy(_cur_row['date'])})"
+            if _cur_row["source"] in ("workbook", "cme_official")
+            else f"JSA FCI Estimate {_mdy(_cur_row['date'])}"
+        )
+
+        week_ago = _round2(value_on_or_before(fci_df.iloc[:head_pos], head_date - timedelta(days=7)))
+        week_chg = _round2(current - week_ago) if week_ago is not None else None
+
+        month_ago = _round2(value_on_or_before(fci_df.iloc[:head_pos], head_date - timedelta(days=30)))
+        month_chg = _round2(current - month_ago) if month_ago is not None else None
+
+        year_ago = _round2(value_on_or_before(fci_df.iloc[:head_pos], head_date - timedelta(days=365)))
+        year_chg = _round2(current - year_ago) if year_ago is not None else None
+
+        # Labeled as TODAY minus one calendar day, not the date of whichever row
+        # prev_point actually comes from -- same carry-forward convention as
+        # current_label above. Once CME actually publishes that date, the label and
+        # the underlying data date will naturally line up; until then this reads
+        # "yesterday" even if the value shown is itself carried forward further back.
+        # This tile is CME's last ACTUAL print, so its value, its label and its delta
+        # all come from one place: the most recent cme_official row. It previously
+        # showed fci_df.iloc[-2] -- whatever row happened to be second-to-last --
+        # while captioning the delta "CME DoD". That is fine while the
+        # reconstruction sits one day ahead of CME, but the moment it runs several
+        # days past CME's last publication (which is exactly what a holiday does to
+        # the lag) the tile shows an ESTIMATE under a CME label. Sourcing all three
+        # from official_rows means the label and the number cannot diverge.
+        official_rows = fci_df[fci_df["source"] == "cme_official"]
+        cme_actual_chg = None
+        if len(official_rows) > 1:
+            cme_actual_chg = _round2(official_rows.iloc[-1]["fci_value"] - official_rows.iloc[-2]["fci_value"])
+
+        if len(official_rows):
+            prev_point = _round2(official_rows.iloc[-1]["fci_value"])
+            prev_label = f"Last CME Print ({_mdy(official_rows.iloc[-1]['date'])})"
+        else:
+            prev_point = None
+            prev_label = "Last CME Print"
+
+        cols = st.columns(4)
+        with cols[0]:
+            st.markdown(tile(current_label, fmt_price(current), delta_html(day_chg, " DoD")), unsafe_allow_html=True)
+        with cols[1]:
+            st.markdown(tile(prev_label, fmt_price(prev_point), delta_html(cme_actual_chg, " CME DoD")), unsafe_allow_html=True)
+        with cols[2]:
+            st.markdown(tile("Week Change", fmt_price(week_chg), delta_html(week_chg)), unsafe_allow_html=True)
+        with cols[3]:
+            st.markdown(tile("Month Change", fmt_price(month_chg), delta_html(month_chg)), unsafe_allow_html=True)
+
+        # ── Daily (same-day, non-rolling) snapshot ─────────────────────────────────────
+        # MUST STAY DIRECTLY UNDER THE KPI TILES. This is a caption on the headline
+        # number, not a section of its own: it gives the latest date's OWN weighted
+        # average against the 7-day rolling Current Index in the tiles above. Moving the
+        # Index Volume boxes up on 2026-09-10 pushed this line below them, which
+        # separated it from the number it describes and read as though it had been
+        # removed. Anything inserted between the tiles and here will do that again.
+        # Mirrors the "Daily: $X on Y head and Z lbs average" line under CME subscriber
+        # reports — the single date's own weighted average, distinct from the 7-day
+        # rolling Current Index above it.
+        last_row = head_row
+        sd_price = last_row.get("same_day_price")
+        sd_head = last_row.get("same_day_head")
+        sd_weight = last_row.get("same_day_avg_weight")
+        if pd.notna(sd_price) and pd.notna(sd_head):
+            weight_part = f" and <b style='color:{TEXT}'>{sd_weight:.0f} lbs</b> average" if pd.notna(sd_weight) else ""
+            st.markdown(
+                f"<div style='color:{MUTED};font-size:0.82rem;margin-top:10px;'>"
+                f"Daily: <b style='color:{TEXT}'>${sd_price:.2f}</b> on "
+                f"<b style='color:{TEXT}'>{int(sd_head):,}</b> head{weight_part}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+
+        # ── Index Volume ───────────────────────────────────────────────────────────────────────────
+        # How much cattle is behind the index, which the price alone does not say: a
+        # two-cent move on 9,000 head is a different fact from the same move on 25,000.
+        # Two views, because they routinely disagree and each answers a real question.
+        # The WINDOW row is a point-in-time reading, dominated by the last few weeks.
+        # The CUMULATIVE row is the year to date. On 2026-09-09 the window sat 57%
+        # under the year-ago date while the year to date ran 1.4% AHEAD of 2025.
+
+        _vol, _vol_years, _vol_norm, _vol_span, _vol_ytd = _load_volumes(
+            pd.Timestamp(head_date).strftime("%Y-%m-%d"))
+        if _vol and _vol.get("head"):
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">Index Volume</div>', unsafe_allow_html=True)
+
+            _est = " (our estimate — CME has not printed this date)" if _vol["is_estimate"] else ""
+            st.caption(
+                f"Head in the 7-day window for **{pd.Timestamp(_vol['date']).strftime('%b %d, %Y')}**"
+                f"{_est}. Year-ago steps back 52 weeks rather than 365 days so the weekday "
+                f"lines up — Monday windows run much heavier than Friday ones."
+            )
+
+            _n5, _n10 = _vol["norms"].get("5yr", {}), _vol["norms"].get("10yr", {})
+            _w = st.columns(5)
+            with _w[0]:
+                st.markdown(tile("Window Head", f"{_vol['head']:,}"), unsafe_allow_html=True)
+            with _w[1]:
+                st.markdown(tile("vs Last Week", f"{_vol['week_ago']:,}" if _vol["week_ago"] else "—",
+                                 pct_delta_html(_vol["week_pct"])), unsafe_allow_html=True)
+            with _w[2]:
+                st.markdown(tile("vs Last Year", f"{_vol['year_ago']:,}" if _vol["year_ago"] else "—",
+                                 pct_delta_html(_vol["year_pct"])), unsafe_allow_html=True)
+            for _col, _nm in ((_w[3], _n5), (_w[4], _n10)):
+                with _col:
+                    st.markdown(tile(f"vs {_nm.get('label', '—')} Norm",
+                                     f"{_nm['norm']:,.0f}" if _nm.get("norm") else "—",
+                                     pct_delta_html(_nm.get("pct"))), unsafe_allow_html=True)
+
+            _bits = []
+            for _nm in (_n5, _n10):
+                if _nm.get("norm"):
+                    _bits.append(f"{_nm['label']} ({_nm['years'][0]}–{_nm['years'][1]}): median "
+                                 f"{_nm['norm']:,.0f}, middle half {_nm['p25']:,.0f}–"
+                                 f"{_nm['p75']:,.0f}, n={_nm['n']}")
+            if _bits:
+                st.caption(f"Norms are the median for ISO week {_vol['iso_week']} — "
+                           + " · ".join(_bits) + ".")
+            for _nm in (_n5, _n10):
+                if _nm.get("norm") and not _nm.get("reliable"):
+                    # ISO weeks 1 and 52 straddle the New Year shutdown, pooling closed
+                    # days with normal ones. Say so rather than implying precision.
+                    st.warning(
+                        f"**Treat the {_nm['label']} norm with caution this week.** Those "
+                        f"years spread {_nm['spread_pct']:.0f}% of their own median for ISO "
+                        f"week {_vol['iso_week']} — the week straddles a holiday shutdown, so "
+                        f"the baseline mixes closed days with normal ones. Last week and last "
+                        f"year are unaffected."
+                    )
+
+            # Cumulative. Sums CME's DAILY TOTALS, not the rolling window -- adding the
+            # window across a year would count every animal about five times.
+            if _vol_ytd and _vol_ytd.get("head"):
+                _y = _vol_ytd
+                _p5, _p10 = _y["periods"].get("5yr", {}), _y["periods"].get("10yr", {})
+                st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                _d = st.columns(4)
+                with _d[0]:
+                    st.markdown(tile(f"{_y['year']} YTD Head", f"{_y['head']:,}"),
+                                unsafe_allow_html=True)
+                with _d[1]:
+                    st.markdown(tile(f"vs {_y['prev_year']} YTD",
+                                     f"{_y['prev_head']:,}" if _y["prev_head"] else "—",
+                                     pct_delta_html(_y["prev_pct"])), unsafe_allow_html=True)
+                for _col, _pr in ((_d[2], _p5), (_d[3], _p10)):
+                    with _col:
+                        st.markdown(tile(f"vs {_pr.get('label', '—')} Avg YTD",
+                                         f"{_pr['avg']:,.0f}" if _pr.get("avg") else "—",
+                                         pct_delta_html(_pr.get("pct"))), unsafe_allow_html=True)
+
+                if _y.get("dates_comparable") is False:
+                    st.warning(
+                        f"**The two years published different numbers of dates** "
+                        f"({_y['dates']} vs {_y['prev_dates']}, a {_y['date_gap_pct']:.0f}% "
+                        f"gap), so part of this difference is calendar coverage rather than "
+                        f"cattle. Treat the percentage as indicative."
+                    )
+                st.caption(
+                    f"Cumulative head sold, every year cut at the same point in the week "
+                    f"(ISO week {_y['iso_week']}, day {_y['iso_weekday']}) so a partial "
+                    f"current week is not measured against complete ones. Summed from CME's "
+                    f"DAILY TOTALS — the window head above is a 7-day *rolling* figure, and "
+                    f"adding it across a year would count every animal about five times. "
+                    f"{_y['year']}: {_y['dates']} published dates · {_y['prev_year']}: "
+                    f"{_y['prev_dates']}."
+                )
+
+        # ── 7-Day Window (rolling index composition) ──────────────────────────────────
+        # Mirrors the top "Daily Totals" box in Compass's own report -- shows the
+        # individual days feeding the rolling Current Index above, so it's clear
+        # how that single number was built. Always unfiltered by state, same as
+        # the KPI tiles it explains.
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">7-Day Window (Rolling Index Composition)</div>', unsafe_allow_html=True)
+
+        window_start = head_date - timedelta(days=6)
+        window_fci = fci_df[(fci_df["date"] >= window_start) & (fci_df["date"] <= head_date)][
+            ["date", "same_day_price", "same_day_head", "same_day_avg_weight"]
+        ].copy().sort_values("date").reset_index(drop=True)
+
+        # Saturday/Sunday sales are already folded into the following Monday's own
+        # same_day_* figures (see update_index.py's recompute_fci_daily -- confirmed
+        # against CME's own official files, a Monday's DAILY TOTALS literally equals
+        # Monday's own rows plus the preceding Saturday's). Sat/Sun therefore never
+        # carry their own same-day total; showing them as separate blank rows here
+        # just looks like missing data. Drop them and relabel Monday's row to show
+        # the span it actually represents, matching how CME's own report has no
+        # standalone Sat/Sun line at all.
+        drop_idx = []
+        for i, row in window_fci.iterrows():
+            if row["date"].weekday() == 5:  # Saturday
+                span_start = row["date"]
+                j = i
+                while j + 1 < len(window_fci) and window_fci.loc[j + 1, "date"].weekday() in (5, 6):
+                    j += 1
+                if j + 1 < len(window_fci):
+                    drop_idx.extend(range(i, j + 1))
+                    window_fci.loc[j + 1, "_span_start"] = span_start
+        window_fci = window_fci.drop(index=drop_idx).reset_index(drop=True)
+        window_fci["Day"] = window_fci.apply(
+            lambda r: f'{r["_span_start"].strftime("%a %m/%d")}–{r["date"].strftime("%a %m/%d")}'
+            if "_span_start" in window_fci.columns and pd.notna(r.get("_span_start"))
+            else r["date"].strftime("%a %m/%d"),
+            axis=1,
+        )
+
+        window_loc = loc_df[(loc_df["date"] >= window_start) & (loc_df["date"] <= head_date)]
+        window_w = window_loc["head"] * window_loc["avg_weight"]
+        window_total_head = window_loc["head"].sum()
+        window_total_weight = (window_w.sum() / window_total_head) if window_total_head else None
+
+        window_totals_row = pd.DataFrame([{
+            "Day": "7-DAY TOTAL",
+            "same_day_head": window_total_head if window_total_head else pd.NA,
+            "same_day_avg_weight": window_total_weight,
+            "same_day_price": current,
+        }])
+        window_disp = pd.concat(
+            [window_fci[["Day", "same_day_head", "same_day_avg_weight", "same_day_price"]], window_totals_row],
+            ignore_index=True,
+        ).rename(columns={"same_day_head": "Head", "same_day_avg_weight": "Weight", "same_day_price": "Price"})
+
+        with st.container(key="wm-window"):
+            st.dataframe(
+                window_disp.style.format({
+                    "Head": "{:,.0f}", "Weight": "{:,.0f} lb", "Price": "${:.2f}",
+                }, na_rep="—").apply(
+                    lambda row: ["font-weight:700;border-top:2px solid " + BORDER] * len(row)
+                    if row["Day"] == "7-DAY TOTAL" else [""] * len(row),
+                    axis=1,
+                ),
+                use_container_width=True, hide_index=True, height=320,
+            )
+        st.caption(
+            "Each row is that day's own weighted average (not rolling) — together they're the raw material "
+            "behind the rolling Current Index above. Saturday/Sunday sales are combined into the following "
+            "Monday's row (CME's own convention, confirmed against their published files) rather than shown "
+            "separately. A blank row means that location's next scheduled sale hasn't landed yet."
+        )
+
+        # ── What the merged day is made of ────────────────────────────────────────
+        # The table above relabels Monday's row to the span it covers, which is
+        # right, but it still cannot show a weekend that contributed NOTHING --
+        # nothing is exactly what a not-yet-fetched weekend looks like too. On
+        # Monday 2026-09-21 the newest date here was Friday 09-18, the 07:43 run
+        # had exited 0 on 475 rows across 84 locations, and AMS had simply
+        # published nothing for the weekend yet. The page could not tell the reader
+        # which of those it was looking at. So say each day out loud, zeros
+        # included, and keep "none reported" apart from "not yet published".
+        _today_iso = datetime.now().strftime("%Y-%m-%d")
+
+        # Anchor on the newest index date we hold SALES for, not on head_date.
+        # head_date is the headline date and runs on CME's publication clock
+        # (headline_index_date), so our own estimates routinely sit past it -- that
+        # is exactly what the Pending CME Prints section below lists. Measuring
+        # "due but unprinted" from head_date would report every one of those
+        # forward estimates as missing, most days of the week. same_day_head rather
+        # than the row's existence, because fci_daily carries Friday's value across
+        # the weekend so the series has no holes. to_numeric because the column is
+        # assigned pd.NA in two of the three loaders and so arrives as object
+        # dtype, where a bare comparison is not dependable.
+        _have = fci_df.loc[
+            pd.to_numeric(fci_df["same_day_head"], errors="coerce").fillna(0) > 0,
+            "date"]
+        _have_iso = (_have.max().strftime("%Y-%m-%d") if len(_have)
+                     else pd.Timestamp(head_date).strftime("%Y-%m-%d"))
+
+        # EVERY index date that is due but has nothing, oldest first. The first cut
+        # of this described only next_index_date(head_date), so a three-day stall
+        # said nothing whatever about the second and third missing days.
+        _due, _cur_iso = [], next_index_date(_have_iso)
+        while _cur_iso <= _today_iso and len(_due) < 15:
+            _due.append(_cur_iso)
+            _cur_iso = next_index_date(_cur_iso)
+
+        # Describe the OLDEST unprinted date, not the newest. The newest may
+        # legitimately still be filling, so describing it reports "not yet
+        # published" -- reassuring, and wrong, when the index has been stuck for
+        # days. The oldest is already settled, so its emptiness is a fact rather
+        # than a timing artefact, and that is the part worth putting on the page.
+        _desc_iso = _due[0] if _due else _have_iso
+        _span_info = _load_span(_desc_iso, _today_iso)
+
+        _sdays = _span_info["days"] if _span_info else []
+        _outside = _span_info["outside_span"] if _span_info else []
+        _unsettled = [d for d in _sdays if d["status"] in ("pending", "partial")]
+        # Head on record for the whole bucket -- the span days AND anything
+        # bucketed in from outside them. The lead is chosen off THIS, not off
+        # settled-ness: a date holding nothing at all used to read "complete as far
+        # as AMS has reported", which is the reassuring answer during an outage.
+        _span_head = _span_info["total_head"] if _span_info else 0
+        # Business days elapsed since the date being described. An empty span on
+        # the day itself is merely early; an empty span two business days on is a
+        # gap in the data.
+        _age = len(pd.bdate_range(pd.Timestamp(_desc_iso) + pd.Timedelta(days=1),
+                                  pd.Timestamp(_today_iso)))
+        _words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+                  7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+
+        # Render whenever the described date is UNPRINTED or holds nothing, not
+        # only when it merges a weekend or has a day still filling. The first guard
+        # was merged-or-unsettled, so the moment a stalled date slipped into the
+        # past and was not a Monday the whole note vanished -- the original defect,
+        # an absence and a pending fetch looking identical, recreated inside its
+        # own fix.
+        if _span_info and (_due or _span_info["merged"] or _unsettled
+                           or _span_head == 0):
+            _lbl = _sdays[-1]["label"]
+            _bits, _tail = [], ""
+
+            if _span_head == 0:
+                # Nothing on record anywhere in the bucket. A day list here would
+                # print "none reported" three times over; name the days in the lead
+                # instead and spend the room on how old the hole is.
+                _named = (_lbl if len(_sdays) == 1 else
+                          " or ".join([", ".join(d["label"] for d in _sdays[:-1]),
+                                       _lbl]))
+                _lead = (f'<b>{_lbl} has no sales on record at all.</b> AMS has '
+                         f'published nothing dated {_named}.')
+                if _age >= 2:
+                    _lead += (f' Nothing has reached the index for '
+                              f'{_words.get(_age, _age)} business days — treat that '
+                              f'as a gap in the data rather than a quiet week, and '
+                              f'check that the 07:45 and 13:00 runs are landing.')
+                elif _age == 1:
+                    _lead += (' A full reporting day has passed with nothing, which '
+                              'is worth a look: 85% of a sale day\'s head is normally '
+                              'fetchable by 07:30 the next morning.')
+                else:
+                    _lead += (' Today\'s own sales have not had time to reach AMS '
+                              'yet, so this is expected to fill during the day.')
+                # No base-rate reassurance in this state. "An empty Saturday is the
+                # usual case" is true, and irrelevant, when the Sunday and Monday
+                # are empty too -- it would soften the one state that needs
+                # escalating.
+            else:
+                for _d in _sdays:
+                    if _d["status"] == "pending":
+                        _bits.append(f'<b>{_d["label"]}</b> not yet published')
+                    elif _d["status"] == "partial":
+                        _bits.append(f'<b>{_d["label"]}</b> {_d["head"]:,} head so far')
+                    elif _d["status"] == "none":
+                        _bits.append(f'<b>{_d["label"]}</b> none reported')
+                    else:
+                        _bits.append(f'<b>{_d["label"]}</b> {_d["head"]:,} head from '
+                                     f'{_d["barns"]} barn{"" if _d["barns"] == 1 else "s"}')
+
+                if _due and _age >= 1:
+                    _lead = (f'<b>{_lbl} has not printed an index yet</b>, '
+                             f'{_words.get(_age, _age)} business day'
+                             f'{"" if _age == 1 else "s"} on. ')
+                elif _unsettled:
+                    _lead = f'<b>{_lbl} is still filling.</b> '
+                else:
+                    # Defensive, not live. Every path that reaches here today is
+                    # either unprinted (above) or still unsettled (the date being
+                    # described is never older than _have_iso, and _have_iso is
+                    # settled only across a weekend, where nothing renders). It is
+                    # kept because it is the correct sentence for a settled date
+                    # that does have head, and an unforeseen calendar -- a holiday,
+                    # a clock, a hand-edited fci_daily -- must not land on an
+                    # unbound name. It must never be the ABSENCE wording: that is
+                    # chosen above, off head, which is the whole of defect 1.
+                    _lead = f'<b>{_lbl} is complete as far as AMS has reported.</b> '
+                # The count states the length of the CALENDAR SPAN, so only span
+                # days may appear in the list beside it -- see _extra below.
+                _lead += (f'Saturday and Sunday count as Monday (CME Rule 10203.A.1), '
+                          f'so it merges {len(_sdays)} calendar days: '
+                          if _span_info["merged"] else 'It covers one calendar day: ')
+
+                # A zero only means something next to how often zero happens.
+                # Without this the normal empty Saturday reads as an outage every
+                # week, and a weekly false alarm is a warning nobody reads.
+                _sat = next((d for d in _sdays if d["weekday"] == "Saturday"), None)
+                _br = _span_info["saturday_base_rate"]
+                if _sat and _sat["status"] == "none" and _br:
+                    _rng = (f'{pd.Timestamp(_br["earliest"]).strftime("%m/%d")}–'
+                            f'{pd.Timestamp(_br["latest"]).strftime("%m/%d")}')
+                    _each = ('a single barn each' if _br["max_barns"] <= 1
+                             else f'at most {_br["max_barns"]} barns')
+                    _ever = ('one barn' if _br["max_barns"] <= 1
+                             else f'{_br["max_barns"]} barns')
+                    if _br["with_sales"] == 0:
+                        _tail = (f' No Saturday in the previous {_br["sampled"]} '
+                                 f'({_rng}) reported a sale either, so an empty one '
+                                 f'is routine.')
+                    elif _br["empty"] * 2 >= _br["sampled"]:
+                        _tail = (f' An empty Saturday is the usual case rather than '
+                                 f'a gap: {_br["empty"]} of the previous '
+                                 f'{_br["sampled"]} Saturdays ({_rng}) reported '
+                                 f'nothing either, and the {_br["with_sales"]} that '
+                                 f'sold came from {_each}.')
+                    else:
+                        # There was a third branch here that fired whenever
+                        # Saturdays had sold more often than half the time, and it
+                        # cried wolf. Replayed over all of mars_sales it fired on 20
+                        # of the 60 empty Saturdays, 7.7 a year; in 2026 on 6 of 18
+                        # -- 02/09, 03/23, 04/06, 04/20, 04/27, 05/11 -- every one an
+                        # ordinary week in which Ericson, the only barn that ever
+                        # holds a Saturday sale, simply did not hold one. Both
+                        # suggested replacements were measured too: "the last four+
+                        # Saturdays all sold and this one did not" still fires on
+                        # 02/09, off a five-Saturday streak, and "the empty run is
+                        # longer than anything in the window" fires 3.4 times a year
+                        # clustered in the May-August trough it exists to tolerate.
+                        # One barn's sale calendar carries no data-integrity signal,
+                        # so state the rate and stop. The outage case -- nothing on
+                        # record at all -- is caught above, where it belongs.
+                        _tail = (f' Saturdays are irregular, and never more than '
+                                 f'{_ever} when they do sell: {_br["with_sales"]} of '
+                                 f'the previous {_br["sampled"]} ({_rng}) reported a '
+                                 f'sale.')
+
+                if _unsettled:
+                    _tail += (' A sale reaches AMS the following day at the earliest '
+                              '(85% of a day\'s head by 07:30 the next morning, 95.8% '
+                              'by noon), so the current day\'s own sales have not had '
+                              'time to appear.')
+                if any(d["status"] == "none" for d in _sdays):
+                    _tail += (' “None reported” means nothing has reached AMS — not '
+                              'that no sale took place; late reports are added by '
+                              'revision.')
+
+            # Rows bucketed into this date from OUTSIDE its calendar span get a
+            # clause of their own rather than a place in the day list. They are not
+            # part of the Rule 10203.A.1 weekend merge -- they are Clovis and El
+            # Reno, whose sales CME books a day later -- and putting them in the
+            # list left the count contradicting the items printed beside it ("It
+            # covers one calendar day:" followed by two dated contributions) on 29
+            # of the weekday index dates between 2026-06-01 and 09-18.
+            _extra = ""
+            if _outside:
+                _ex = [f'<b>{pd.Timestamp(_o["date"]).strftime("%a %m/%d")}</b>’s '
+                       f'{_o["head"]:,} head' for _o in _outside]
+                _extra = (' Plus ' + (_ex[0] if len(_ex) == 1 else
+                                      ' and '.join([', '.join(_ex[:-1]), _ex[-1]]))
+                          + ', which CME buckets into this date.')
+
+            # A stall is more than one missing day, and naming only the oldest
+            # would understate it.
+            if len(_due) > 1:
+                _rest = [pd.Timestamp(x).strftime("%a %m/%d") for x in _due[1:]]
+                _tail += (' Also due and unprinted: '
+                          + (', '.join(_rest) if len(_rest) <= 4 else
+                             ', '.join(_rest[:4]) + f' and {len(_rest) - 4} more')
+                          + '.')
+
+            _list = (' · '.join(_bits) + '.') if _bits else ''
+            st.markdown(
+                f'<div style="border-left:3px solid {BORDER};padding:4px 0 4px 12px;'
+                f'margin:-6px 0 4px 2px;color:{MUTED};font-size:0.78rem;'
+                f'line-height:1.7;">{_lead}{_list}{_extra}{_tail}</div>',
+                unsafe_allow_html=True,
+            )
+
+
+        # ── Index Composition ───────────────────────────────────────────────────────────────────────
+        # A deeper cut of the same window shown above: which weight brackets and
+        # muscle grades the index is actually built from. Worth its place because the
+        # grade mix moves the printed level in a way the headline price cannot show --
+        # the #1-2 share of pounds has drifted up for four and a half years and now
+        # costs the index real money. Decomposes to the index exactly: the blended
+        # price and head count below equal the figures in the tiles.
+
+        _comp, _mix = _load_composition(pd.Timestamp(head_date).strftime("%Y-%m-%d"))
+        if _comp:
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">Index Composition by Weight &amp; Grade</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                f"The 7-day window ending **{pd.Timestamp(head_date).strftime('%b %d, %Y')}**, "
+                f"split by CME's own weight brackets and muscle grades. Prices are "
+                f"pound-weighted, the same basis as the index."
+            )
+
+            _grand = sum(c["head"] for c in _comp.values())
+            _rows = []
+            for _wl in COMP_BRACKETS:
+                _a = _comp.get((_wl, "1"), {})
+                _b = _comp.get((_wl, "1-2"), {})
+                _tot = _a.get("head", 0) + _b.get("head", 0)
+                _rows.append({
+                    "Bracket": f"{_wl}–{_wl + 49} lb",
+                    "#1 Head": f"{_a.get('head', 0):,}" if _a.get("head") else "—",
+                    "#1 Price": f"${_a['price']:.2f}" if _a.get("price") else "—",
+                    "#1-2 Head": f"{_b.get('head', 0):,}" if _b.get("head") else "—",
+                    "#1-2 Price": f"${_b['price']:.2f}" if _b.get("price") else "—",
+                    "Total Head": f"{_tot:,}",
+                    "Share": f"{100 * _tot / _grand:.1f}%" if _grand else "—",
+                })
+            # Totals row, so the columns visibly add up and the blended price can be
+            # checked against the tiles without arithmetic. Blank Share cell rather
+            # than "100.0%" -- the column is bracket share, and a total of itself is
+            # noise.
+            _gt = comp_grade_totals(_comp)
+            _rows.append({
+                "Bracket": "TOTAL",
+                "#1 Head": f"{_gt['1']['head']:,}",
+                "#1 Price": f"${_gt['1']['price']:.2f}" if _gt["1"]["price"] else "—",
+                "#1-2 Head": f"{_gt['1-2']['head']:,}",
+                "#1-2 Price": f"${_gt['1-2']['price']:.2f}" if _gt["1-2"]["price"] else "—",
+                "Total Head": f"{_grand:,}",
+                "Share": "",
+            })
+            with st.container(key="wm-composition"):
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True,
+                             hide_index=True, height=215)
+
+            # Grade split on one scannable line. The discount is given in dollars AND
+            # as a share of the #1 price because the two tell different stories: the
+            # dollar spread has roughly tripled since 2019 purely because the price
+            # level tripled, while the proportional discount has sat in a 4-6% band
+            # with no trend. Dollars alone invite reading a rising market as a
+            # widening quality gap.
+            _lb_total = _gt["1"]["lbs"] + _gt["1-2"]["lbs"]
+            if _lb_total and _gt["1"]["price"] and _gt["1-2"]["price"]:
+                _disc = _gt["1"]["price"] - _gt["1-2"]["price"]
+                st.caption(
+                    f"**#1** {100 * _gt['1']['head'] / _grand:.1f}% of head "
+                    f"({100 * _gt['1']['lbs'] / _lb_total:.1f}% of pounds) at "
+                    f"\\${_gt['1']['price']:.2f}  ·  "
+                    f"**#1-2** {100 * _gt['1-2']['head'] / _grand:.1f}% of head "
+                    f"({100 * _gt['1-2']['lbs'] / _lb_total:.1f}% of pounds) at "
+                    f"\\${_gt['1-2']['price']:.2f}  ·  "
+                    f"**discount \\${abs(_disc):.2f}**, or "
+                    f"{100 * abs(_disc) / _gt['1']['price']:.1f}% of the #1 price"
+                )
+
+            if _mix:
+                # Sign convention: a NEGATIVE effect means the current mix is holding
+                # the index below where the baseline composition would put it.
+                _dirn = "below" if _mix["effect"] < 0 else "above"
+                st.caption(
+                    f"**Grade mix** — #1-2 steers are **{100 * _mix['share_now']:.1f}%** of "
+                    f"window pounds against a {100 * _mix['share_base']:.1f}% baseline for this "
+                    f"ISO week ({_mix['baseline_years']} years of CME's published brackets). "
+                    f"#1 averages \\${_mix['price_1']:.2f} and #1-2 \\${_mix['price_1_2']:.2f}, "
+                    f"a \\${abs(_mix['spread']):.2f} discount — so the current mix holds the "
+                    f"index about **\\${abs(_mix['effect']):.2f}/cwt {_dirn}** where the baseline "
+                    f"composition would put it (\\${_mix['actual']:.2f} against "
+                    f"\\${_mix['counterfactual']:.2f})."
+                )
+
+                # The numbers above are the daily read; this is what they mean. In an
+                # expander so the page stays scannable for someone checking the level
+                # at 07:45, with the reasoning one click away when a figure surprises
+                # them. Every number below is interpolated from the same _mix dict as
+                # the caption, so the worked example cannot drift from what is shown.
+                with st.expander("ℹ️  How to read the mix effect"):
+                    _pts = 100 * (_mix["share_now"] - _mix["share_base"])
+                    _dir_word = "lower" if _mix["effect"] < 0 else "higher"
+                    st.markdown(f"""
+    **It is a counterfactual: today's cattle, today's prices, the old quality mix.**
+
+    The index counts two muscle grades — #1 and #1-2 Medium & Large steers — and
+    #1-2 sells at a discount. So the printed level depends not only on what cattle
+    are worth but on *how many of each grade happen to be in the sample*.
+
+    The arithmetic is one line:
+
+    ```
+    {_pts:+.1f} percentage points of pounds  x  ${abs(_mix["spread"]):.2f} discount  =  {"-" if _mix["effect"] < 0 else "+"}${abs(_mix["effect"]):.2f}/cwt
+    ```
+
+    This week **{100 * _mix["share_now"]:.1f}%** of the window's pounds are #1-2,
+    against **{100 * _mix["share_base"]:.1f}%** normal for this week of September
+    ({_mix["baseline_years"]} prior years). Those extra pounds sell about
+    **\\${abs(_mix["spread"]):.2f}** back, so the index prints roughly
+    **\\${abs(_mix["effect"]):.2f} {_dir_word}** than the usual mix would give.
+
+    **It is not saying cattle got cheaper.** Both grades could be up on the week and
+    this would read the same. It separates *what is in the sample* from *what the
+    sample is worth*.
+
+    **Why "this week of September" and not "this date".** Barns sell on fixed
+    weekdays — Carthage Mondays, Beaver and El Reno Tuesdays — so comparing calendar
+    dates across years lands on different weekdays and therefore different barns.
+    Comparing the same numbered week keeps the position in the marketing year fixed
+    and pools about five trading days per year, so one odd day cannot swing the
+    baseline.
+
+    **Expect it to move**, and to go positive in weeks when the mix is cleaner than
+    normal. Direct trade is lumpy — a few large Texas lots can shift the share
+    several points in a week — so this typically wanders between about +\\$1 and
+    −\\$2 rather than sitting still.
+
+    **What it is for.** When the index lands somewhere you did not expect, this says
+    which of two different things happened:
+
+    - *Cattle traded lower* — the grade prices themselves fell, mix effect roughly unchanged
+    - *The sample got worse* — grade prices held, mix effect widened
+
+    Those carry opposite implications. A composition move tends to snap back when a
+    cleaner week of #1 cattle comes through; a price move does not.
+    """)
+
+        # ── FCI Trend Chart ───────────────────────────────────────────────────────────
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">Index Trend</div>', unsafe_allow_html=True)
+
+        AXIS = dict(
+            gridcolor=BORDER, linecolor=BORDER, showgrid=True,
+            tickfont=dict(color=MUTED, size=11),
+            title_font=dict(color=MUTED, size=11),
+            zeroline=False,
+        )
+
+        # Published and reconstructed are drawn as SEPARATE traces. One solid line
+        # covering both, named "CME Feeder Cattle Index", asserted that CME had
+        # printed every value on it -- but the reconstruction fills the front of the
+        # series and the pending days at the head, which CME has not printed at all.
+        # Same error the forecast scorecard was making against fci_daily: our number
+        # and CME's number sharing one label.
+        #
+        # cme_official was missing from this map, so every point sourced from CME's
+        # own FTP file hovered blank.
+        hover_source = fci_df["source"].map({
+            "workbook": "Published",
+            "cme_official": "Published",
+            "workbook_precursor": "JSA reconstruction (Ross data)",
+            "usda_mars": "JSA reconstruction (USDA MARS)",
+        })
+
+        forecast_df = compute_forecast(fci_df["fci_value"].iloc[:head_pos + 1], head_date)
+
+        _is_pub = fci_df["source"].isin(("workbook", "cme_official"))
+        # Estimate means OUTSIDE CME's published span -- the reconstruction at the
+        # front of the series, and the pending days at the head. NOT simply "no print
+        # on this date": fci_daily carries a row for every CALENDAR day while CME
+        # prints only on business days, so keying off _is_pub row-by-row dashed every
+        # weekend and holiday inside the published range and left the history looking
+        # mostly estimated. Within the span the line is anchored to CME's prints and a
+        # weekend is a carry-forward, not a forecast of ours.
+        _pub_dates = fci_df.loc[_is_pub, "date"]
+        if len(_pub_dates):
+            _est = (fci_df["date"] < _pub_dates.min()) | (fci_df["date"] > _pub_dates.max())
+        else:
+            _est = pd.Series(True, index=fci_df.index)
+        _solid = ~_est
+        # The estimate trace also carries the boundary point on either side, so the
+        # dashes meet the solid line instead of floating clear of it at the join.
+        _est = _est | _est.shift(1, fill_value=False) | _est.shift(-1, fill_value=False)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=fci_df["date"], y=fci_df["fci_value"].where(_solid),
+            customdata=hover_source,
+            name="CME Feeder Cattle Index (published)", mode="lines",
+            line=dict(color=JPSI_BLUE, width=2), connectgaps=False,
+            hovertemplate="<b>%{customdata}</b>: $%{y:.2f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=fci_df["date"], y=fci_df["fci_value"].where(_est),
+            customdata=hover_source,
+            name="JSA estimate", mode="lines",
+            line=dict(color=JPSI_BLUE, width=2, dash="dash"), connectgaps=False,
+            hovertemplate="<b>%{customdata}</b>: $%{y:.2f}<extra></extra>",
+        ))
+        if forecast_df is not None:
+            connector = pd.concat([
+                pd.DataFrame({"date": [head_date], "forecast": [current], "lower": [current], "upper": [current]}),
+                forecast_df,
+            ], ignore_index=True)
+            fig.add_trace(go.Scatter(
+                x=pd.concat([connector["date"], connector["date"][::-1]]),
+                y=pd.concat([connector["upper"], connector["lower"][::-1]]),
+                fill="toself", fillcolor="rgba(230,126,34,0.15)",
+                line=dict(color="rgba(0,0,0,0)"),
+                hoverinfo="skip", showlegend=False, name="Forecast band",
+            ))
+            fig.add_trace(go.Scatter(
+                x=connector["date"], y=connector["forecast"],
+                name="Naive forecast (no-change)", mode="lines",
+                line=dict(color="#e67e22", width=2, dash="dash"),
+                hovertemplate="<b>Forecast</b>: $%{y:.2f}<extra></extra>",
+            ))
+        fig.update_layout(
+            paper_bgcolor=BG, plot_bgcolor=BG,
+            font=dict(color=TEXT, size=11),
+            hovermode="x unified",
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                        font=dict(color=MUTED, size=10), bgcolor="rgba(0,0,0,0)"),
+            margin=dict(l=55, r=20, t=15, b=40),
+            xaxis=dict(
+                **AXIS, title="",
+                rangeselector=dict(
+                    buttons=[
+                        dict(count=1, label="1M", step="month", stepmode="backward"),
+                        dict(count=3, label="3M", step="month", stepmode="backward"),
+                        dict(count=6, label="6M", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1Y", step="year", stepmode="backward"),
+                        dict(step="all", label="All"),
+                    ],
+                    bgcolor="#f6f8fa", activecolor=JPSI_BLUE,
+                    font=dict(color=TEXT, size=10), bordercolor=BORDER,
+                ),
+                rangeslider=dict(visible=False),
+                type="date",
+            ),
+            yaxis=dict(**AXIS, title="$/cwt", tickprefix="$"),
+            height=380,
+        )
+        add_watermark(fig, size=0.34, opacity=0.055)
+        st.plotly_chart(fig, use_container_width=True)
+        caption_bits = [
+            "Solid line is the index as CME published it — CME's own file reaches back to "
+            "2015, so nearly all of this is their figure rather than our reconstruction of "
+            "it. Dashed blue is JSA's estimate, covering only the days CME has not printed "
+            "yet. See the sidebar for methodology and accuracy notes."
+        ]
+        if forecast_df is not None:
+            caption_bits.append(
+                f"Dashed orange segment is a {FORECAST_HORIZON_DAYS}-business-day naive (no-change) "
+                f"projection with a {FORECAST_CI:.0%} band from historical day-ahead variability — backtested "
+                "against a trend-following model and this simpler approach was actually more accurate (this "
+                "series moves close to a random walk), but it's still not a trading signal or market forecast."
+            )
+        st.caption(" ".join(caption_bits))
+
+
+        # ── Seasonal Pattern ──────────────────────────────────────────────────────────
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">Seasonal Pattern by Year</div>', unsafe_allow_html=True)
+
+        seas = fci_df[["date", "fci_value"]].copy()
+        seas["year"] = seas["date"].dt.year
+        seas["doy"] = seas["date"].dt.dayofyear
+        current_year = seas["year"].max()
+
+        fig_seas = go.Figure()
+        for yr, grp in seas.groupby("year"):
+            is_current = yr == current_year
+            fig_seas.add_trace(go.Scatter(
+                x=grp["doy"], y=grp["fci_value"],
+                name=str(yr), mode="lines",
+                line=dict(color=JPSI_BLUE if is_current else None, width=3 if is_current else 1.5),
+                opacity=1.0 if is_current else 0.55,
+                hovertemplate=f"<b>{yr}</b>: $%{{y:.2f}}<extra></extra>",
+            ))
+        fig_seas.update_layout(
+            paper_bgcolor=BG, plot_bgcolor=BG,
+            font=dict(color=TEXT, size=11),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                        font=dict(color=MUTED, size=10), bgcolor="rgba(0,0,0,0)"),
+            margin=dict(l=55, r=20, t=15, b=40),
+            xaxis=dict(**AXIS, title="Day of Year"),
+            yaxis=dict(**AXIS, title="$/cwt", tickprefix="$"),
+            height=380,
+        )
+        add_watermark(fig_seas, size=0.3, opacity=0.06)
+        st.plotly_chart(fig_seas, use_container_width=True)
+        st.caption(
+            f"Each line is one calendar year plotted by day-of-year ({current_year} bolded) — shows where "
+            "this year sits against the same point in prior years. Not detrended: absolute levels differ "
+            "year to year with broader market conditions, not just seasonality."
+        )
+
+
+        # ── Volume vs Seasonal Norm ─────────────────────────────────────────────────────────────────
+        # The chart half of the volume panel, left down here with the other charts
+        # rather than beside its own tiles. The tiles are the daily read and belong
+        # next to the price they contextualise; this is reference, and sits better
+        # alongside Seasonal Pattern than pushing the 7-day window 300px down.
+
+        if _vol and _vol_years and _vol_norm:
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">Volume vs Seasonal Norm</div>',
+                        unsafe_allow_html=True)
+            # Seasonal volume chart: this year and last against the longest norm period.
+            if _vol_years and _vol_norm:
+                _fig_vol = go.Figure()
+                _wks = sorted(_vol_norm)
+                _band_lbl = f"{_vol_span[0]}–{_vol_span[1]} middle half" if _vol_span else "middle half"
+                _fig_vol.add_trace(go.Scatter(
+                    x=_wks + _wks[::-1],
+                    y=[_vol_norm[w][2] for w in _wks] + [_vol_norm[w][1] for w in _wks[::-1]],
+                    fill="toself", fillcolor="rgba(107,114,128,0.14)",
+                    line=dict(width=0), hoverinfo="skip", name=_band_lbl))
+                _fig_vol.add_trace(go.Scatter(
+                    x=_wks, y=[_vol_norm[w][0] for w in _wks], mode="lines",
+                    line=dict(color=MUTED, width=1.5, dash="dot"), name="median"))
+                for _yr, _colour, _width in ((2025, "#9ca3af", 1.6), (2026, JPSI_BLUE, 2.6)):
+                    _pts = _vol_years.get(_yr) or []
+                    if not _pts:
+                        continue
+                    _agg = {}
+                    for _w2, _h in _pts:
+                        _agg.setdefault(_w2, []).append(_h)
+                    _xs = sorted(_agg)
+                    _fig_vol.add_trace(go.Scatter(
+                        x=_xs, y=[sum(_agg[w]) / len(_agg[w]) for w in _xs], mode="lines",
+                        line=dict(color=_colour, width=_width), name=str(_yr)))
+                _fig_vol.update_layout(
+                    height=300, margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis_title="ISO week", yaxis_title="head in the 7-day window",
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+                    hovermode="x unified")
+                _fig_vol.update_xaxes(showgrid=True, gridcolor="#f1f5f9")
+                _fig_vol.update_yaxes(showgrid=True, gridcolor="#f1f5f9", tickformat=",")
+                st.plotly_chart(_fig_vol, use_container_width=True)
+                st.caption(
+                    "Weekly average of the 7-day window head, by ISO week. Published CME data "
+                    "only — our estimate is excluded so the chart never mixes measured history "
+                    "with a forecast. ISO week rather than calendar date so the fall run aligns "
+                    "year to year; holiday placement still drifts, which is why the year-ago and "
+                    "norm tiles can disagree."
+                )
+
+
+
+        # ── Weekly Rundown ────────────────────────────────────────────────────────────
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">Weekly Rundown</div>', unsafe_allow_html=True)
+
+        wk = fci_df.copy()
+        wk["week_end"] = wk["date"] - pd.to_timedelta(wk["date"].dt.weekday.map(lambda d: (d - 6) % 7), unit="D")
+        wk_summary = (
+            wk.groupby("week_end")
+            .agg(week_avg=("fci_value", "mean"), week_last=("fci_value", "last"),
+                 week_high=("fci_value", "max"), week_low=("fci_value", "min"))
+            .reset_index()
+            .sort_values("week_end")
+        )
+        wk_summary["prior_last"] = wk_summary["week_last"].shift(1)
+        wk_summary["week_chg"] = wk_summary["week_last"] - wk_summary["prior_last"]
+
+        display_wk = wk_summary.tail(10).sort_values("week_end", ascending=False).copy()
+        display_wk["Week Ending"] = display_wk["week_end"].dt.strftime("%m/%d/%Y")
+        display_wk = display_wk.rename(columns={
+            "week_avg": "Week Avg", "week_last": "Week Last",
+            "week_high": "Week High", "week_low": "Week Low", "week_chg": "Week Chg",
+        })[["Week Ending", "Week Avg", "Week Last", "Week High", "Week Low", "Week Chg"]]
+
+        with st.container(key="wm-weekly"):
+            st.dataframe(
+                display_wk.style.format({
+                    "Week Avg": "${:.2f}", "Week Last": "${:.2f}",
+                    "Week High": "${:.2f}", "Week Low": "${:.2f}", "Week Chg": "{:+.2f}",
+                }, na_rep="—").map(
+                    lambda v: f"color: {POS}" if isinstance(v, (int, float)) and v > 0
+                    else (f"color: {NEG}" if isinstance(v, (int, float)) and v < 0 else ""),
+                    subset=["Week Chg"],
+                ),
+                use_container_width=True, hide_index=True, height=340,
+            )
+
+
+        # ── Location Detail ───────────────────────────────────────────────────────────
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="sec-header">Sale Locations — {detail_date.strftime("%A, %B %d, %Y")}</div>',
+            unsafe_allow_html=True,
+        )
+
+        day_fci = value_on_or_before(fci_df, detail_date)
+
+        # Strictly same-day: only locations with an actual report dated detail_date.
+        # (A carry-forward version of this table was tried -- showing each location's
+        # most recent report within the trailing 7-day window -- to mirror how a
+        # Wednesday-only auction like Clovis NM still appears on Compass's later
+        # reports. It was reverted: summed across the full roster the carry-forward
+        # total ballooned into a "total receipts"-looking number (e.g. 11,589 head)
+        # that didn't correspond to any real day's volume and didn't reconcile with
+        # Compass either. This table should show what actually reported today.)
+        day_rows = loc_filtered[loc_filtered["date"] == detail_date].copy()
+        if not day_rows.empty and day_fci is not None:
+            day_rows["basis"] = day_rows["price"] - day_fci
+        day_rows = day_rows.sort_values("basis", ascending=False)
+
+        if day_rows.empty:
+            st.info("No reporting sale locations on this date. Pick another date in the sidebar.")
+        else:
+            left, right = st.columns([3, 2])
+            with left:
+                # Weighted totals row (matches how Compass's own report closes each
+                # day's location table) -- weighted by head*weight, same formula as
+                # the FCI itself, not a plain average of the Price column.
+                total_head = day_rows["head"].sum()
+                w = day_rows["head"] * day_rows["avg_weight"]
+                total_weight = (w.sum() / total_head) if total_head else None
+                total_price = ((w * day_rows["price"]).sum() / w.sum()) if w.sum() else None
+                totals_row = pd.DataFrame([{
+                    "location": "TOTAL", "state": "", "date": pd.NaT,
+                    "head": total_head if total_head else pd.NA,
+                    "avg_weight": total_weight, "price": total_price,
+                    "basis": (total_price - day_fci) if (total_price is not None and day_fci is not None) else None,
+                }])
+                day_rows_with_total = pd.concat([day_rows, totals_row], ignore_index=True)
+
+                disp = day_rows_with_total[["location", "state", "head", "avg_weight", "price", "basis"]].rename(columns={
+                    "location": "Location", "state": "State", "head": "Head", "avg_weight": "Weight",
+                    "price": "Price", "basis": "Basis vs FCI",
+                })
+                # TWO RENDERS, NOT ONE TUNED HEIGHT. st.dataframe is a fixed-height
+                # pane that scrolls internally, and Streamlit's own Fullscreen
+                # button inherits that height -- so a single number cannot serve
+                # both readings. At 380 the busiest day hides half its rows even
+                # when expanded (2026-09-24 had 19 locations); at the full 738 the
+                # table dominates the page every day. So the inline table stays
+                # compact and scrolls, and the whole list lives in an expander below
+                # the two columns, sized from the row count.
+                LOC_ROW_PX, LOC_HEADER_PX, LOC_INLINE_H = 35, 38, 380
+                loc_table_h = LOC_HEADER_PX + LOC_ROW_PX * len(day_rows_with_total)
+                with st.container(key="wm-locations"):
+                    st.dataframe(
+                        disp.style.format({
+                            "Head": "{:,.0f}", "Weight": "{:,.0f} lb", "Price": "${:.2f}", "Basis vs FCI": "{:+.2f}",
+                        }, na_rep="—").map(
+                            lambda v: f"color: {POS}" if isinstance(v, (int, float)) and v > 0
+                            else (f"color: {NEG}" if isinstance(v, (int, float)) and v < 0 else ""),
+                            subset=["Basis vs FCI"],
+                        ).apply(
+                            lambda row: ["font-weight:700;border-top:2px solid " + BORDER] * len(row)
+                            if row["Location"] == "TOTAL" else [""] * len(row),
+                            axis=1,
+                        ),
+                        use_container_width=True, hide_index=True, height=LOC_INLINE_H,
+                    )
+            with right:
+                fig_b = go.Figure()
+                bar_colors = [POS if v >= 0 else NEG for v in day_rows["basis"]]
+                fig_b.add_trace(go.Bar(
+                    x=day_rows["basis"], y=day_rows["location"],
+                    orientation="h", marker_color=bar_colors,
+                    hovertemplate="<b>%{y}</b>: %{x:+.2f}<extra></extra>",
+                ))
+                fig_b.update_layout(
+                    paper_bgcolor=BG, plot_bgcolor=BG,
+                    font=dict(color=TEXT, size=10),
+                    margin=dict(l=10, r=10, t=10, b=30),
+                    xaxis=dict(**AXIS, title="Basis vs FCI ($/cwt)"),
+                    yaxis=dict(**AXIS, autorange="reversed"),
+                    # Matches the inline table beside it so the columns end level.
+                    height=LOC_INLINE_H, showlegend=False,
+                )
+                add_watermark(fig_b, size=0.4, opacity=0.06)
+                st.plotly_chart(fig_b, use_container_width=True)
+
+            # The whole list, on one screen, full width. The inline table above
+            # is deliberately short so it does not dominate the page; this is
+            # where you read every barn without a scrollbar. Sized from the row
+            # count and uncapped, because a cap would put the scrollbar back on
+            # the busiest day, which is the entire point of this block.
+            with st.expander(f"All {len(day_rows)} sale locations on this date"):
+                st.dataframe(
+                    disp.style.format({
+                        "Head": "{:,.0f}", "Weight": "{:,.0f} lb", "Price": "${:.2f}",
+                        "Basis vs FCI": "{:+.2f}",
+                    }, na_rep="—").map(
+                        lambda v: f"color: {POS}" if isinstance(v, (int, float)) and v > 0
+                        else (f"color: {NEG}" if isinstance(v, (int, float)) and v < 0 else ""),
+                        subset=["Basis vs FCI"],
+                    ).apply(
+                        lambda row: ["font-weight:700;border-top:2px solid " + BORDER] * len(row)
+                        if row["Location"] == "TOTAL" else [""] * len(row),
+                        axis=1,
+                    ),
+                    use_container_width=True, hide_index=True, height=loc_table_h,
+                )
+
+            # Two distinct numbers, same distinction as the KPI section above but for
+            # whichever date is being browsed here: the true same-day figure (this
+            # date's own fresh sales only) and the rolling FCI (7-day window) used
+            # for the Basis column -- labeled "Published Index" instead of "FCI
+            # Estimate" on dates where that rolling value is CME's real published
+            # number, not JSA's reconstruction.
+            detail_rows = fci_df[fci_df["date"] == detail_date]
+            detail_is_published = not detail_rows.empty and detail_rows.iloc[0]["source"] in ("workbook", "cme_official")
+            fci_label = "Published Index" if detail_is_published else "JSA FCI Estimate"
+            sd_price_d = detail_rows.iloc[0]["same_day_price"] if not detail_rows.empty else None
+            sd_head_d = detail_rows.iloc[0]["same_day_head"] if not detail_rows.empty else None
+            sd_weight_d = detail_rows.iloc[0]["same_day_avg_weight"] if not detail_rows.empty else None
+
+            caption_parts = []
+            if pd.notna(sd_price_d) and pd.notna(sd_head_d):
+                weight_part_d = f" and <b style='color:{TEXT}'>{sd_weight_d:.0f} lbs</b> average" if pd.notna(sd_weight_d) else ""
+                caption_parts.append(
+                    f"Daily: <b style='color:{TEXT}'>${sd_price_d:.2f}</b> on "
+                    f"<b style='color:{TEXT}'>{int(sd_head_d):,}</b> head{weight_part_d}"
+                )
+            if day_fci is not None:
+                caption_parts.append(f"{fci_label}: <b style='color:{TEXT}'>${day_fci:.2f}</b>")
+            if caption_parts:
+                st.markdown(
+                    f"<div style='color:{MUTED};font-size:0.82rem;margin-top:8px;'>"
+                    + " &nbsp;·&nbsp; ".join(caption_parts) + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+
+        # ── Basis Leaderboard ─────────────────────────────────────────────────────────
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">Average Basis by Location (Trailing 90 Days)</div>', unsafe_allow_html=True)
+
+        window_start = last_date - timedelta(days=90)
+        recent = loc_filtered[loc_filtered["date"] >= window_start]
+        leaderboard = (
+            recent.groupby("location")
+            .agg(avg_basis=("basis", "mean"), sales=("basis", "size"))
+            .query("sales >= 3")
+            .sort_values("avg_basis", ascending=False)
+            .reset_index()
+        )
+
+        if leaderboard.empty:
+            st.info("Not enough recent sales to build a basis leaderboard.")
+        else:
+            top_bottom = pd.concat([leaderboard.head(10), leaderboard.tail(10)]).drop_duplicates(subset="location")
+            top_bottom = top_bottom.sort_values("avg_basis", ascending=True)
+            fig_lb = go.Figure()
+            lb_colors = [POS if v >= 0 else NEG for v in top_bottom["avg_basis"]]
+            fig_lb.add_trace(go.Bar(
+                x=top_bottom["avg_basis"], y=top_bottom["location"],
+                orientation="h", marker_color=lb_colors,
+                hovertemplate="<b>%{y}</b>: %{x:+.2f} avg basis<extra></extra>",
+            ))
+            fig_lb.update_layout(
+                paper_bgcolor=BG, plot_bgcolor=BG,
+                font=dict(color=TEXT, size=11),
+                margin=dict(l=10, r=10, t=10, b=30),
+                xaxis=dict(**AXIS, title="Avg Basis vs FCI ($/cwt)"),
+                yaxis=dict(**AXIS),
+                height=440, showlegend=False,
+            )
+            add_watermark(fig_lb, size=0.3, opacity=0.06)
+            st.plotly_chart(fig_lb, use_container_width=True)
+            st.caption("Locations with at least 3 reported sales in the trailing 90 days, strongest and weakest basis shown.")
+
+
+        # ── Data Table ────────────────────────────────────────────────────────────────
+
+        # ── Pending CME Prints / Forecast Scorecard ───────────────────────────────────
+        # The headline tile shows the date CME will print NEXT (see index_dates.py).
+        # It used to show the LATEST date, which on a Monday is barely formed -- that
+        # is what this section was originally written to compensate for. It still
+        # earns its place: the headline is deliberately ONE date, and what matters
+        # besides it is (a) every date CME still owes a print for, with our estimate
+        # for each, and (b) how close the last several estimates actually landed. Without this, both required either
+        # hovering the trend chart or reading the raw table and knowing from memory
+        # where CME's published history stops.
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">Pending CME Prints &amp; Forecast Accuracy</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "Dated by CME **index** date — the last sale day in the 7-day window, which is "
+            "how CME names its files and how CIH dates its daily sheet. *Prints* is when "
+            "CME releases it: the next business day, which a holiday can push days out."
+        )
+
+        _recon = _load_recon_index()
+        # Frozen morning calls. Loaded here rather than down in the peer table because
+        # BOTH sections now score against the number we actually published, not the
+        # one fci_daily happens to hold today.
+        _openings = _load_opening_calls()
+        _official = (
+            fci_df[fci_df["source"] == "cme_official"][["date", "fci_value"]]
+            .rename(columns={"fci_value": "actual"})
+        )
+
+        if _recon.empty:
+            st.info("No reconstruction available on this backend, so there is nothing to compare.")
+        else:
+            _sc = _recon.merge(_official, on="date", how="left")
+            _last_official = _official["date"].max() if not _official.empty else None
+
+            # Only dates AFTER CME's last print are genuinely pending. An unmatched
+            # date before that is a day CME simply does not publish (weekend/holiday),
+            # not a forecast awaiting a result.
+            _pending = _sc[_sc["actual"].isna()]
+            if _last_official is not None:
+                _pending = _pending[_pending["date"] > _last_official]
+            # Weekdays only. This reconstruction computes a value for every CALENDAR
+            # day, and CME never files one for a Saturday or Sunday, so the weekend
+            # carry-forwards are not prints anyone is waiting for.
+            #
+            # This deliberately does NOT exclude holidays. An earlier version filtered
+            # on a federal-holiday business-day calendar, which hid the 9/7/2026
+            # estimate as a Labor Day -- but CME filed an index on Labor Day in both
+            # 2024 and 2025 (see _load_cme_index_dates), so 9/7 is a print that is
+            # genuinely outstanding, not one CME declined to make. Showing a date CME
+            # later turns out to skip is the cheaper error: it drops out of this table
+            # on its own once CME's frontier moves past it.
+            _pending = _pending[_pending["date"].map(
+                lambda d: pd.Timestamp(d).weekday() < 5)]
+
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                st.caption("**Awaiting CME** — our forecast for each unpublished index date")
+                if _pending.empty:
+                    st.caption("CME has published every date we hold an estimate for.")
+                else:
+                    _p = _pending.sort_values("date", ascending=False).copy()
+                    _p["Index date"] = _p["date"].dt.strftime("%a %m/%d")
+                    _p["Prints"] = _p["date"].map(lambda d: _release_date(d).strftime("%m/%d"))
+                    _p["JSA FCI EST"] = _p["recon"].map(lambda v: f"${v:.2f}")
+                    _p["Head"] = _p["total_head"].map(
+                        lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+                    with st.container(key="wm-pending"):
+                        st.dataframe(_p[["Index date", "Prints", "JSA FCI EST", "Head"]],
+                                     use_container_width=True, hide_index=True, height=210)
+                    if _last_official is not None:
+                        st.caption(
+                            f"CME's last index date is {_last_official.strftime('%b %d')} "
+                            f"(printed {_release_date(_last_official).strftime('%b %d')}). A low "
+                            "*window head* means few sale days are in the 7-day window yet, so "
+                            "that estimate will move as reports land."
+                        )
+            with _c2:
+                st.caption("**Scorecard** — how the last ten estimates turned out")
+                _s = _sc.dropna(subset=["actual"]).sort_values("date", ascending=False).head(10).copy()
+                if _s.empty:
+                    st.caption("No dates where both a reconstruction and a CME print exist.")
+                else:
+                    # Score the call we PUBLISHED, not the one held now. fci_daily is
+                    # recomputed from mars_sales every run, so a date's row goes on
+                    # absorbing auction reports that arrive after CME's own cutoff:
+                    # 2026-09-14 read 341.61 at 07:44 when it went out and 341.5794 by
+                    # 13:06 that same day, once Tulsa's 51 head landed. Grading the
+                    # revised figure made this panel structurally incapable of showing
+                    # a bad forecast -- it reported $0.00 while the peer table below,
+                    # which has always used the frozen call, showed that same date
+                    # missing by three cents.
+                    #
+                    # The settled-vs-CME agreement is still worth having and moves to
+                    # the caption. It answers a DIFFERENT question -- does the method
+                    # reproduce CME given the same complete data -- and it is what
+                    # would scream if someone reinstated the fancy/thin/fleshy
+                    # exclusion or broke the Saturday/Sunday-as-Monday merge.
+                    _s["opening"] = _s["date"].map(
+                        lambda d: _openings.get(d.strftime("%Y-%m-%d")))
+                    _n_live = int(_s["opening"].isna().sum())
+                    _s["opening"] = _s["opening"].fillna(_s["recon"])
+                    _s["err"] = _s["opening"] - _s["actual"]
+                    _s["Index date"] = _s["date"].dt.strftime("%m/%d")
+                    _s["JSA FCI EST"] = _s["opening"].map(lambda v: f"${v:.2f}")
+                    _s["CME"] = _s["actual"].map(lambda v: f"${v:.2f}")
+                    _s["Miss"] = _s["err"].map(lambda v: f"{v:+.2f}")
+                    with st.container(key="wm-scored"):
+                        st.dataframe(_s[["Index date", "JSA FCI EST", "CME", "Miss"]],
+                                     use_container_width=True, hide_index=True, height=210)
+                    # Dollar signs escaped: st.caption renders markdown, and a $...$
+                    # pair is LaTeX math there -- unescaped, "$0.38" and "$2" render as
+                    # mangled math rather than money.
+                    _recon_err = (_s["recon"] - _s["actual"]).abs().mean()
+                    st.caption(
+                        f"Mean absolute miss over these {len(_s)} dates: "
+                        f"**\\${_s['err'].abs().mean():.2f}** — the frozen morning "
+                        f"call as published, against CME's print"
+                        + (f" (no frozen call exists for {_n_live} of them, so the current "
+                           f"value stands in there)" if _n_live else "")
+                        + f". Our *settled* reconstruction, which goes on absorbing reports "
+                        f"that land after CME's cutoff, agrees to **\\${_recon_err:.2f}** — "
+                        f"that one measures whether the method reproduces CME, not whether "
+                        f"the morning call was right. Dates before the direct-trade "
+                        f"component began (2026-08-28) ran about \\$2 high because that "
+                        f"input was missing entirely -- they are not representative of "
+                        f"current accuracy."
+                    )
+
+
+        # ── Versus the competition ────────────────────────────────────────────────────
+        # The scorecard above answers "are we close to CME". This answers "are we
+        # closer than the desks we compete with", which is a different question and the
+        # one that actually matters commercially. Their figures are hand-entered from
+        # their daily sheets, so this table is only as complete as what has been typed
+        # in -- dates with no peer figure are simply absent rather than shown as zero.
+
+        _peers = _load_peer_estimates()
+        if not _peers.empty:
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">Versus CIH &amp; Compass</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                "Their published estimate against ours for the same CME index date. "
+                "*Miss* columns appear once CME prints that date; before then all three "
+                "are open forecasts."
+            )
+
+            _piv = _peers.pivot_table(index="date", columns="source", values="value",
+                                      aggfunc="last")
+            _srcs = [c for c in sorted(_piv.columns)]
+            # Our column is the FROZEN opening call wherever we have one (loaded above,
+            # shared with the scorecard), so this table compares same-morning against
+            # same-morning. Dates predating fci_snapshots fall back to the live value
+            # and are marked in the caption, because a silent mix of frozen and revised
+            # numbers would be worse than either.
+            _live_s = (_recon.set_index("date")["recon"] if not _recon.empty
+                       else pd.Series(dtype=float))
+            _ours_s = _live_s.copy()
+            _frozen_dates = set()
+            for _d in list(_ours_s.index):
+                _k = _d.strftime("%Y-%m-%d")
+                if _k in _openings:
+                    _ours_s.loc[_d] = _openings[_k]
+                    _frozen_dates.add(_d)
+            for _k, _v in _openings.items():          # frozen dates absent from _recon
+                _ts = pd.Timestamp(_k)
+                if _ts not in _ours_s.index:
+                    _ours_s.loc[_ts] = _v
+                    _frozen_dates.add(_ts)
+            _cme_s = (official_rows.set_index("date")["fci_value"] if len(official_rows)
+                      else pd.Series(dtype=float))
+
+            _t = _piv.copy()
+            _t["__ours"] = _ours_s
+            _t["__cme"] = _cme_s
+            _t = _t.sort_index(ascending=False)
+
+            # Three labels per source, because the value column, the miss column and
+            # the summary caption each want a different length -- and because "CIH"
+            # must never go through .title(), which renders it "Cih".
+            _SRC_LABELS = {
+                "CIH":     ("CIH FCI EST",     "CIH FCI EST Miss",     "CIH"),
+                "COMPASS": ("Compass FCI EST", "Compass FCI EST Miss", "Compass"),
+            }
+            _labels = lambda src: _SRC_LABELS.get(
+                src, (f"{src.title()} FCI EST", f"{src.title()} FCI EST Miss", src.title()))
+            _lbl = lambda src: _labels(src)[0]        # value column
+            _miss_lbl = lambda src: _labels(src)[1]   # miss column
+            _short = lambda src: _labels(src)[2]      # caption, where a full header is noise
+            _money = lambda v: f"${v:.2f}" if pd.notna(v) else "—"
+            _delta = lambda v: f"{v:+.2f}" if pd.notna(v) else "—"
+            # Everyone in this table publishes to the cent, CME included. The unrounded
+            # values are ours and -- since the 2026-09-14 layout dropped the printed
+            # REPORTED INDEX label -- CME's derived seven-day average, which cme_ftp.py
+            # computes as 342.7373 where CME printed 342.74. Differencing unrounded
+            # values charged CIH and Compass up to half a cent of pure rounding on every
+            # post-09-14 date while scoring our own column full-precision against
+            # full-precision, which quietly flattered us. Compare what each desk
+            # actually published, at the precision it published it.
+            _cents = lambda s: s.round(2)
+
+            _disp = pd.DataFrame(index=_t.index)
+            _disp["Index date"] = _t.index.strftime("%a %m/%d")
+            _disp["JSA FCI EST"] = _t["__ours"].map(_money)
+            for _s in _srcs:
+                _disp[_lbl(_s)] = _t[_s].map(_money)
+            _disp["CME"] = _t["__cme"].map(_money)
+            _disp["JSA FCI EST Miss"] = (_cents(_t["__ours"]) - _cents(_t["__cme"])).map(_delta)
+            for _s in _srcs:
+                _disp[_miss_lbl(_s)] = (_cents(_t[_s]) - _cents(_t["__cme"])).map(_delta)
+
+            with st.container(key="wm-peers"):
+                st.dataframe(_disp, use_container_width=True, hide_index=True,
+                             height=min(320, 60 + 35 * len(_disp)))
+
+            # Running accuracy, over scored dates only. Each source is averaged over
+            # the dates IT has a figure for, so the counts can differ -- shown, because
+            # "0.01 over 7 dates" and "0.01 over 1 date" are not the same claim.
+            _scored = _t[_t["__cme"].notna()]
+            if len(_scored):
+                _bits = []
+                _o = (_cents(_scored["__ours"]) - _cents(_scored["__cme"])).abs().dropna()
+                if len(_o):
+                    _bits.append(f"JSA {_o.mean():.3f} ({len(_o)})")
+                for _s in _srcs:
+                    _e = (_cents(_scored[_s]) - _cents(_scored["__cme"])).abs().dropna()
+                    if len(_e):
+                        _bits.append(f"{_short(_s)} {_e.mean():.3f} ({len(_e)})")
+                _n_frozen = len([d for d in _scored.index if d in _frozen_dates])
+                _prov = (f" Our figure is the frozen morning call on {_n_frozen} of "
+                         f"{len(_scored)} scored date(s)"
+                         + (", and the current revised value on the rest — those flatter us, "
+                            "since they have seen data the competitors' morning sheets had not."
+                            if _n_frozen < len(_scored) else ", so this is like-for-like."))
+                st.caption("Mean absolute miss, dates scored in brackets: "
+                           + " · ".join(_bits) + "." + _prov)
+            else:
+                st.caption("No date here has been printed by CME yet, so nobody is scored.")
+
+
+        with st.expander("📋  Raw Data Table"):
+            tab_fci, tab_loc = st.tabs(["Index Values", "Location Sales"], on_change="rerun")
+            with tab_fci:
+                # Plain string formatting instead of pandas Styler -- with 10+ years
+                # of history now in scope, these tables can exceed Styler's
+                # styler.render.max_elements cell cap (hit at ~280k cells testing
+                # the location table below), and no conditional coloring is applied
+                # here anyway, just number formatting.
+                #
+                # "Date" is CME's index date, matching the tiles and both panel tables.
+                # "Prints" is when CME releases it. "Source" used to render as a raw
+                # internal string (usda_mars / cme_official), which gave no way to tell an
+                # estimate from a published value -- the single most important thing to
+                # know when reading this tab, and the reason it was easy to mistake a
+                # forecast for a settled number.
+                d = fci_df.copy()
+                d["Prints"] = d["date"].map(
+                    lambda x: _release_date(x).strftime("%Y-%m-%d") if pd.notna(x) else "—")
+                d["Source"] = d["source"].map(_SOURCE_LABELS).fillna(d["source"])
+                d["date"] = d["date"].dt.strftime("%Y-%m-%d")
+                d = d.rename(columns={
+                    "date": "Date", "fci_value": "FCI", "same_day_price": "Daily $",
+                    "same_day_head": "Daily head", "same_day_avg_weight": "Daily wt",
+                }).sort_values("Date", ascending=False)
+                d["FCI"] = d["FCI"].map(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+                d["Daily $"] = d["Daily $"].map(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+                d["Daily head"] = d["Daily head"].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+                d["Daily wt"] = d["Daily wt"].map(lambda v: f"{v:,.0f} lb" if pd.notna(v) else "—")
+                with st.container(key="wm-raw-fci"):
+                    st.dataframe(
+                        d[["Date", "Prints", "Source", "FCI", "Daily $", "Daily head", "Daily wt"]],
+                        use_container_width=True, hide_index=True, height=320)
+                st.caption(
+                    "**Date** is CME's index date — the last sale day in that 7-day window. "
+                    "**Prints** is when CME releases it, the next business day. **Source** "
+                    "separates CME's published values from JSA's own estimates; only the "
+                    "estimates are forecasts."
+                )
+            with tab_loc:
+                d = loc_filtered[["date", "location", "state", "head", "avg_weight", "price", "fci_value", "basis"]].copy()
+                d["date"] = d["date"].dt.strftime("%Y-%m-%d")
+                d = d.rename(columns={
+                    "date": "Date", "location": "Location", "state": "State", "head": "Head",
+                    "avg_weight": "Weight", "price": "Price", "fci_value": "FCI", "basis": "Basis",
+                }).sort_values("Date", ascending=False)
+                d["Head"] = d["Head"].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+                d["Weight"] = d["Weight"].map(lambda v: f"{v:,.0f} lb" if pd.notna(v) else "—")
+                d["Price"] = d["Price"].map(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+                d["FCI"] = d["FCI"].map(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+                d["Basis"] = d["Basis"].map(lambda v: f"{v:+.2f}" if pd.notna(v) else "—")
+                with st.container(key="wm-raw-loc"):
+                    st.dataframe(d, use_container_width=True, hide_index=True, height=320)
+
+
+    # ── Footer ────────────────────────────────────────────────────────────────────
+
+
+with tab_cash:
+    if tab_cash.open:
+        st.markdown('<div class="sec-header">Cash Feeder Prices</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "What the cattle behind the index actually brought, straight from the "
+            "USDA AMS barn reports. Wider than the index itself on purpose: 400 to "
+            "900 lb against the index's 700-899, because the question here is what "
+            "cattle are worth rather than what the published number is."
+        )
+        cash_calves.render(tile, MUTED, key_prefix="idx")
+
+
+with tab_basis:
+    if tab_basis.open:
+        st.markdown('<div class="sec-header">Sale Barn Basis by Weight Bracket</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "Basis one barn at a time, at a weight you choose. Average Basis by "
+            "Location on the Index tab answers this for the index's own 700-899 lb "
+            "cattle and only those; this asks it of any bracket from 400 lb up, and "
+            "lets you take the weight ramp back out so the barns are comparable."
+        )
+        # key_prefix is distinct from the cash tab's "idx" -- both tabs carry a
+        # weight and a window box, and Streamlit keys them by string, so a shared
+        # prefix would make the two tabs move together with nothing raised.
+        #
+        # The palette goes in as an argument rather than being read from this file:
+        # barn_basis.py is byte-identical across both dashboards under
+        # tests/test_no_drift.py, and this page's colours are not the standalone's.
+        barn_basis.render(
+            tile, MUTED,
+            colors={"bg": BG, "border": BORDER, "muted": MUTED,
+                    "text": TEXT, "pos": POS, "neg": NEG},
+            watermark=add_watermark, key_prefix="idxbasis")
+
+
+_year = datetime.now().year
+st.markdown(f"<hr style='border-color:{BORDER};margin-top:32px;margin-bottom:16px'>", unsafe_allow_html=True)
+st.markdown(
+    f'<div style="font-family:inherit;color:{MUTED};font-size:inherit;line-height:1.6;text-align:center;padding:0 24px 24px;">'
+    f'Historical index and basis figures are derived from JSA-compiled 12-state feeder steer sale data '
+    f'(coverage: {first_date.strftime("%b %d, %Y")}–{last_date.strftime("%b %d, %Y")}) and are provided for informational purposes only. '
+    f'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative products involves substantial risk of loss and may not be suitable for all investors. '
+    f'This communication does not constitute investment advice, a recommendation, or an offer or solicitation to buy or sell any futures, options, cash commodities, or derivative products. '
+    f'John Stewart &amp; Associates, Inc. does not accept orders to buy or sell any financial instruments via email. '
+    f'The information contained herein has been obtained from sources believed to be reliable; however, its accuracy and completeness are not guaranteed. '
+    f'&copy; John Stewart &amp; Associates, Inc. {_year}'
+    f'</div>',
+    unsafe_allow_html=True,
+)

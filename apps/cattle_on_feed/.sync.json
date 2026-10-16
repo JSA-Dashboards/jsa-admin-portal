@@ -1,0 +1,13 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "dacaceceb84d5d9eacc9d52ffedd6ccbad33f9b93ebf477e604da1eb1aa5c3fb",
+  "cof_recap.py": "da2795d59b5db1313f35b5ae62ba20d1778db1de9a23ead04b3686928d5fa9b1",
+  "cold_storage.py": "7b78f63289ab3450ecc382fb1d9e512c0c22188bae38c30c32f5ece747b0bff8",
+  "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/cattle_on_feed"
+}

@@ -1,0 +1,169 @@
+{
+ "panel": [
+  "Calhoun, GA",
+  "Carrollton, GA",
+  "Jackson, GA",
+  "Saluda, SC",
+  "Williamston, SC",
+  "Norwood, NC",
+  "Turnersburg, NC"
+ ],
+ "series": [
+  {
+   "year": 2008,
+   "ratio": 0.998,
+   "n": 273,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2009,
+   "ratio": 1.0604,
+   "n": 288,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2010,
+   "ratio": 1.0235,
+   "n": 268,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2011,
+   "ratio": 0.9615,
+   "n": 284,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2012,
+   "ratio": 1.0076,
+   "n": 302,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2013,
+   "ratio": 1.0675,
+   "n": 281,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2014,
+   "ratio": 1.0676,
+   "n": 299,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2015,
+   "ratio": 1.2144,
+   "n": 292,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2016,
+   "ratio": 1.1995,
+   "n": 323,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2017,
+   "ratio": 1.1245,
+   "n": 292,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2018,
+   "ratio": 1.1623,
+   "n": 294,
+   "months": 12,
+   "barns": 7,
+   "source": "legacy"
+  },
+  {
+   "year": 2019,
+   "ratio": 1.0791,
+   "n": 292,
+   "months": 12,
+   "barns": 7,
+   "source": "both"
+  },
+  {
+   "year": 2020,
+   "ratio": 1.0414,
+   "n": 304,
+   "months": 12,
+   "barns": 7,
+   "source": "mars"
+  },
+  {
+   "year": 2021,
+   "ratio": 1.0091,
+   "n": 314,
+   "months": 12,
+   "barns": 7,
+   "source": "mars"
+  },
+  {
+   "year": 2022,
+   "ratio": 0.9357,
+   "n": 290,
+   "months": 12,
+   "barns": 7,
+   "source": "mars"
+  },
+  {
+   "year": 2023,
+   "ratio": 0.9135,
+   "n": 303,
+   "months": 12,
+   "barns": 7,
+   "source": "mars"
+  },
+  {
+   "year": 2024,
+   "ratio": 0.971,
+   "n": 297,
+   "months": 12,
+   "barns": 7,
+   "source": "mars"
+  },
+  {
+   "year": 2025,
+   "ratio": 1.0594,
+   "n": 296,
+   "months": 12,
+   "barns": 7,
+   "source": "mars"
+  },
+  {
+   "year": 2026,
+   "ratio": 1.1434,
+   "n": 234,
+   "months": 10,
+   "barns": 7,
+   "source": "mars",
+   "span": [
+    "Jan",
+    "Oct"
+   ]
+  }
+ ]
+}

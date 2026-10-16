@@ -1,0 +1,12 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "f57bfb32c9ec8b7706802eb3eab85605455947bfc96feb56dd094f79aa1a34f1",
+  "quota_tracker.py": "1867ff056912cb5794e801eb01c68a7831a445ca757650fa85e24ed78cb70768",
+  "trimmings_qc.py": "69d019a7210cb29322e711c7a5c8048826baaeecc65e5054df587fe624210612"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/beef_trimmings"
+}

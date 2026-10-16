@@ -164,6 +164,52 @@ LIVE_DASHBOARDS = [
      "desc": "Export vessel lineup by region — USG, PNW, TXG — and commodity.",
      "page": "apps/vessel_lineup/app.py", "url_path": "vessel-lineup"},
 
+    {"title": "CME Feeder Cattle Index", "category": "Livestock",
+     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location.",
+     "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index"},
+    {"title": "Seasonal Futures & Spreads", "category": "Livestock",
+     "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix.",
+     "page": "apps/livestock_seasonal/app.py", "url_path": "livestock-seasonal-spreads"},
+    {"title": "Commitment of Traders", "category": "Livestock",
+     "desc": "Managed money net futures position in Live Cattle and Feeder Cattle, from the CFTC weekly Disaggregated report.",
+     "page": "apps/cot_report/app.py", "url_path": "livestock-cot"},
+    {"title": "Cash Cattle Trade", "category": "Livestock",
+     "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume.",
+     "page": "apps/cash_trade/app.py", "url_path": "cash-trade"},
+    {"title": "Beef Cutout", "category": "Livestock",
+     "desc": "Daily USDA boxed beef cutout: Choice & Select composites, spread, volume.",
+     "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout"},
+    {"title": "Mexican Feeder Imports", "category": "Livestock",
+     "desc": "Border status, crossing activity by port, and Mexican feeder head counts from Census trade data.",
+     "page": "apps/mexican_feeder_imports/app.py", "url_path": "mexican-feeder-imports"},
+    {"title": "Canadian Feeder Cattle", "category": "Livestock",
+     "desc": "Alberta, Saskatchewan and Ontario feeder prices by weight, in US$/cwt, and Canadian federally-inspected slaughter.",
+     "page": "apps/canadian_feeder_cattle/app.py", "url_path": "canadian-feeder-cattle"},
+    {"title": "Beef Trimmings", "category": "Livestock",
+     "desc": "US Fresh 90s vs. South America & Australia/NZ Frozen 90s (Cow Meat) import prices.",
+     "page": "apps/beef_trimmings/app.py", "url_path": "beef-trimmings"},
+    {"title": "US Beef Trade", "category": "Livestock",
+     "desc": "Monthly beef exports and imports on the carcass-weight basis, each against the USDA WASDE forecast.",
+     "page": "apps/beef_trade/app.py", "url_path": "beef-trade"},
+    {"title": "Cattle Weights", "category": "Livestock",
+     "desc": "USDA NASS weekly cattle slaughter weights by class, dressed & live.",
+     "page": "apps/beef_weight/app.py", "url_path": "beef-weight"},
+    {"title": "US Cow Herd", "category": "Livestock",
+     "desc": "Herd expansion vs liquidation: bred female values, the retention incentive, and replacement receipts.",
+     "page": "apps/us_cow_herd/app.py", "url_path": "us-cow-herd"},
+    {"title": "Cattle on Feed", "category": "Livestock",
+     "desc": "USDA on-feed inventory, placements, marketings, the heifers-on-feed share, and Cold Storage stocks back to 1917.",
+     "page": "apps/cattle_on_feed/app.py", "url_path": "cattle-on-feed"},
+    {"title": "Livestock Inventory", "category": "Livestock",
+     "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production.",
+     "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory"},
+    {"title": "Fed Cattle Crush", "category": "Livestock",
+     "desc": "Feeding margin calculator: prices your cattle off the futures curve, then every number is yours to change.",
+     "page": "apps/fed_cattle_crush/app.py", "url_path": "fed-cattle-crush"},
+    {"title": "Backgrounding Crush", "category": "Livestock",
+     "desc": "Buy calves, sell feeders: value of gain against cost of gain, cash calf market vs the feeder board.",
+     "page": "apps/backgrounding_crush/app.py", "url_path": "backgrounding-crush"},
+
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
      "page": "apps/teams_broadcast/app.py", "url_path": "teams-broadcast"},
@@ -315,9 +361,10 @@ def render_home():
             _render_livestock()
 
 
-def _render_grain_tiles():
+def _render_tiles(include):
+    dashboards = [d for d in LIVE_DASHBOARDS if include(d["category"])]
     categories = []
-    for d in LIVE_DASHBOARDS:
+    for d in dashboards:
         if d["category"] not in categories:
             categories.append(d["category"])
 
@@ -328,7 +375,7 @@ def _render_grain_tiles():
     tile_i = 0
     for cat in categories:
         st.markdown(f"<div class='jsa-cat-hdr'>{html.escape(cat)}</div>", unsafe_allow_html=True)
-        cat_dashboards = [d for d in LIVE_DASHBOARDS if d["category"] == cat]
+        cat_dashboards = [d for d in dashboards if d["category"] == cat]
         for start in range(0, len(cat_dashboards), TILES_PER_ROW):
             cols = st.columns(TILES_PER_ROW)
             for offset, d in enumerate(cat_dashboards[start:start + TILES_PER_ROW]):
@@ -341,7 +388,11 @@ def _render_grain_tiles():
                         )
                 tile_i += 1
 
+
+def _render_grain_tiles():
+    _render_tiles(lambda cat: cat != "Livestock")
     st.caption("Pilot migrated the first three dashboards into this shell — the rest follow the same pattern.")
+    TILES_PER_ROW = 4
     soon_cols = st.columns(TILES_PER_ROW)
     for i, title in enumerate(COMING_SOON):
         with soon_cols[i % TILES_PER_ROW]:
@@ -353,11 +404,8 @@ def _render_grain_tiles():
 
 
 def _render_livestock():
-    st.markdown(
-        f"The full JSA Livestock Portal, embedded as its own app. "
-        f"[Open it in its own tab]({LIVESTOCK_PORTAL_URL})."
-    )
-    st.iframe(LIVESTOCK_PORTAL_URL + "?embed=true", height=1100)
+    _render_tiles(lambda cat: cat == "Livestock")
+    st.caption(f"These also run as the standalone [Livestock Portal]({LIVESTOCK_PORTAL_URL}).")
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)

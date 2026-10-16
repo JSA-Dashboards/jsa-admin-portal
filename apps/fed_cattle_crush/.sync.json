@@ -1,0 +1,13 @@
+{
+ "branch": "master",
+ "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "files": {
+  "app.py": "e93a03da12a2f4bd9df7c0d6eff4b4858a594edd9749f15b59a32f7237f9886a",
+  "fcc_corn_cost.py": "16e697a1b7eaf16bd693e6b674260e20b10d6f9b4b455c2fedc466baa309c191",
+  "fcc_massive_api.py": "0a8a953d5a945f7f10b56f32c4190d0d929513f88bf92afcbf06c1c5b0f87337",
+  "fcc_snowflake_db.py": "5daa187f3147e3f8872beb7dee2094a236403f0d35f5780f1af0684228c9c580"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/livestock-portal",
+ "subdir": "apps/fed_cattle_crush"
+}
