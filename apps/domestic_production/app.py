@@ -1029,6 +1029,20 @@ def load_total_supply_snapshot(commodity: str, year: int) -> pd.DataFrame:
     return merged[["state_name", "state_abbr", "value"]].copy()
 
 @st.cache_data(ttl=300, show_spinner=False)
+def load_total_supply_history(commodity: str, y0: int, y1: int) -> pd.DataFrame:
+    """Year-by-year Total Supply per state across a range of years."""
+    frames = []
+    for yr in range(y0, y1 + 1):
+        snap = load_total_supply_snapshot(commodity, yr)
+        if not snap.empty:
+            snap = snap.copy()
+            snap["year"] = yr
+            frames.append(snap)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_stocks_history(commodity: str, quarter: str, y0: int, y1: int,
                         storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
@@ -2438,26 +2452,31 @@ with tab_state:
                 tbl_years_list = list(range(tbl_y0, map_year + 1))
 
                 with st.spinner("Loading comparison table..."):
-                    tbl_shist = load_state_history(commodity, map_metric, tbl_y0, map_year)
+                    if map_metric == "Total Supply":
+                        tbl_shist = load_total_supply_history(commodity, tbl_y0, map_year)
+                    else:
+                        tbl_shist = load_state_history(commodity, map_metric, tbl_y0, map_year)
 
                 if tbl_shist.empty or "state_abbr" not in tbl_shist.columns:
-                    if map_metric != "Total Supply":
-                        c_msg, c_btn = st.columns([5, 1])
-                        c_msg.warning(
-                            "⏱ State comparison data unavailable — NASS API timed out."
-                        )
-                        if c_btn.button("🔄 Retry", key="retry_tbl"):
-                            st.cache_data.clear()
-                            st.rerun()
+                    c_msg, c_btn = st.columns([5, 1])
+                    c_msg.warning(
+                        "⏱ State comparison data unavailable — NASS API timed out."
+                    )
+                    if c_btn.button("🔄 Retry", key="retry_tbl"):
+                        st.cache_data.clear()
+                        st.rerun()
                 else:
                     # National values — reuse the already-fetched nat_df (no extra API call)
-                    nat_yr_vals = (
-                        nat_df[
-                            (nat_df["metric"] == map_metric) &
-                            (nat_df["year"].between(tbl_y0, map_year))
-                        ]
-                        .set_index("year")["value"].to_dict()
-                    )
+                    if map_metric == "Total Supply":
+                        nat_yr_vals = tbl_shist.groupby("year")["value"].sum().to_dict()
+                    else:
+                        nat_yr_vals = (
+                            nat_df[
+                                (nat_df["metric"] == map_metric) &
+                                (nat_df["year"].between(tbl_y0, map_year))
+                            ]
+                            .set_index("year")["value"].to_dict()
+                        )
                     nat_recent6  = [nat_yr_vals.get(yr) for yr in tbl_years_list[-6:]]
                     nat_olym_val = _olympic6(nat_recent6)
 
@@ -2822,10 +2841,16 @@ with tab_state:
                     )
 
                     with st.spinner(f"Loading {selected_name} history..."):
-                        s_hist = load_state_history(commodity, map_metric, year_range[0], year_range[1])
+                        if map_metric == "Total Supply":
+                            s_hist = load_total_supply_history(commodity, year_range[0], year_range[1])
+                        else:
+                            s_hist = load_state_history(commodity, map_metric, year_range[0], year_range[1])
 
                     s_data = s_hist[s_hist["state_abbr"] == selected_abbr].sort_values("year")
-                    nat_data = nat_df[nat_df["metric"] == map_metric][["year", "value"]].sort_values("year")
+                    if map_metric == "Total Supply":
+                        nat_data = s_hist.groupby("year", as_index=False)["value"].sum().sort_values("year")
+                    else:
+                        nat_data = nat_df[nat_df["metric"] == map_metric][["year", "value"]].sort_values("year")
 
                     if s_data.empty:
                         st.warning(f"No historical data found for {selected_name}.")
