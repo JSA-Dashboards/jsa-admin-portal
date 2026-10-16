@@ -44,8 +44,10 @@ everything else. The 15 livestock dashboards are generated mirrors of `JSA-Dashb
 (`subdir` entries in `sync/apps.json`: cme_feeder_cattle, livestock_seasonal, cot_report, cash_trade,
 beef_cutout, mexican_feeder_imports, canadian_feeder_cattle, beef_trimmings, beef_trade, beef_weight,
 us_cow_herd, cattle_on_feed, livestock_inventory, fed_cattle_crush, backgrounding_crush). The livestock
-portal's own two tools (JSA Daily Cattle Reports, Cattle Market Board: passphrase-gated, unlisted there) are
-NOT bundled. `livestock_seasonal`, `fed_cattle_crush` and `backgrounding_crush` carry module prefixes
+portal's own two staff tools (JSA Daily Cattle Reports, Cattle Market Board) are tiles that OPEN THE LIVESTOCK
+PORTAL (`...?tools=1` deep links, passphrase gate there), not mirrors: they load code from sibling `apps/<name>/` folders
+by file path (cof_recap, snowflake_db, massive_api, leverage...) and need its root `letter/` package and `portal_auth.py`,
+which the sync's prefixing and subdir mirrors don't reproduce. Bundling them means refactoring those paths upstream first. `livestock_seasonal`, `fed_cattle_crush` and `backgrounding_crush` carry module prefixes
 (`ls_`, `fcc_`, `bgc_`) because their `massive_api` / `snowflake_db` siblings differ from other apps'.
 `LIVESTOCK_PORTAL_URL` in `Home.py` is the standalone portal, linked under the tiles.
 
