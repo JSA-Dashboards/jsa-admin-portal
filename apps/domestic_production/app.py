@@ -121,6 +121,18 @@ STATE_CENTERS = {
     "WV":(38.6,-80.6),"WI":(44.3,-89.8),"WY":(43.0,-107.6),
 }
 
+# State abbr → 2-digit FIPS (for county GeoJSON filtering / ASD district builds)
+STATE_FIPS = {
+    "AL":"01","AK":"02","AZ":"04","AR":"05","CA":"06","CO":"08","CT":"09","DE":"10",
+    "FL":"12","GA":"13","HI":"15","ID":"16","IL":"17","IN":"18","IA":"19","KS":"20",
+    "KY":"21","LA":"22","ME":"23","MD":"24","MA":"25","MI":"26","MN":"27","MS":"28",
+    "MO":"29","MT":"30","NE":"31","NV":"32","NH":"33","NJ":"34","NM":"35","NY":"36",
+    "NC":"37","ND":"38","OH":"39","OK":"40","OR":"41","PA":"42","RI":"44","SC":"45",
+    "SD":"46","TN":"47","TX":"48","UT":"49","VT":"50","VA":"51","WA":"53","WV":"54",
+    "WI":"55","WY":"56",
+}
+_FIPS_STATE = {v: k for k, v in STATE_FIPS.items()}   # reverse map
+
 # ── Commodity definitions — add new crops here ───────────────────────────────
 # Each commodity maps metric labels to NASS QuickStats parameters.
 COMMODITIES = {
@@ -645,6 +657,8 @@ def _bar_label(v: float, metric: str, no_unit: bool = False) -> str:
         return f"{v:.0f}" if no_unit else f"{v:.0f} {unit}"
     if "Acres" in metric:
         return f"{v/1_000_000:.1f}" if no_unit else f"{v/1_000_000:.1f}M Ac"
+    if metric == "Total Supply":
+        return f"{v/1_000_000:.0f}" if no_unit else f"{v/1_000_000:.0f}M Bu"
     if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bu" in unit:
@@ -662,6 +676,8 @@ def _tbl_num(v, metric) -> str:
     Yield and Acres → 1 decimal; Production/Stocks → whole number."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "—"
+    if metric == "Total Supply":
+        return f"{round(v / 1_000_000):,}"
     if "Yield" in metric:
         return f"{v:.1f}"
     if "Acres" in metric:
@@ -682,6 +698,8 @@ def _nom_chg_str(chg, metric, no_unit=False) -> str:
         return f"{sign}{chg:.1f}" if no_unit else f"{sign}{chg:.1f} {unit}"
     if "Acres" in metric:
         return f"{sign}{chg / 1_000_000:.1f}" if no_unit else f"{sign}{chg / 1_000_000:.1f}M Ac"
+    if metric == "Total Supply":
+        return f"{sign}{chg / 1_000_000:.0f}" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Bu"
     if "Production" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bales" in unit:
@@ -693,6 +711,8 @@ def _nom_chg_str(chg, metric, no_unit=False) -> str:
 
 def _tbl_unit(metric) -> str:
     """Human-readable unit label for table title parenthetical."""
+    if metric == "Total Supply":
+        return "Million Bushels"
     if "Yield" in metric:
         return metric.split("(")[-1].replace(")", "").strip()
     if "Acres" in metric:
@@ -916,6 +936,8 @@ _HIST_METRIC_MAP: dict[str, dict[str, str]] = {
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.DataFrame:
+    if metric not in COMMODITIES.get(commodity, {}):
+        return pd.DataFrame()
     mp = COMMODITIES[commodity][metric]
     df = _fetch(_broad_metric_params(mp, "STATE"))
     if df.empty:
@@ -983,6 +1005,30 @@ def load_stocks_snapshot(commodity: str, quarter: str, year: int,
     return df[["state_name", "state_abbr", "value"]].copy()
 
 @st.cache_data(ttl=300, show_spinner=False)
+def load_total_supply_snapshot(commodity: str, year: int) -> pd.DataFrame:
+    """Sep 1 state stocks + state production = Total Supply per state."""
+    if commodity not in STOCKS_META:
+        return pd.DataFrame()
+    prod_lbl = next((m for m in COMMODITIES.get(commodity, {}) if "Production" in m), None)
+    if prod_lbl is None:
+        return pd.DataFrame()
+    stocks = load_stocks_snapshot(commodity, "SEP 1", year, "TOTAL")
+    prod_snap = load_state_snapshot(commodity, year)
+    if stocks.empty or prod_snap.empty:
+        return pd.DataFrame()
+    prod_s = (
+        prod_snap[prod_snap["metric"] == prod_lbl][["state_abbr", "value"]]
+        .rename(columns={"value": "prod"})
+    )
+    merged = (
+        stocks[["state_name", "state_abbr", "value"]]
+        .rename(columns={"value": "stocks"})
+        .merge(prod_s, on="state_abbr", how="inner")
+    )
+    merged["value"] = merged["stocks"] + merged["prod"]
+    return merged[["state_name", "state_abbr", "value"]].copy()
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_stocks_history(commodity: str, quarter: str, y0: int, y1: int,
                         storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
@@ -1018,6 +1064,203 @@ def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
     df = _filter_storage(df, storage)
     df = df.groupby("year", as_index=False)["value"].sum()
     return df[["year", "value"]].sort_values("year")
+
+# ── County / ASD helpers ─────────────────────────────────────────────────────
+
+def _county_params(mp: dict, year: int) -> dict:
+    """Build per-year county cache params matching jobs/domestic_production.py COUNTY_CROPS."""
+    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
+    return {
+        **base,
+        "source_desc": "SURVEY",
+        "domain_desc": "TOTAL",
+        "freq_desc": "ANNUAL",
+        "agg_level_desc": "COUNTY",
+        "year": str(year),
+    }
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_county_data(commodity: str, metric_label: str, year: int) -> pd.DataFrame:
+    """Return [State, County, fips, Value, asd_desc, asd_code] for one crop/metric/year.
+    Reads from the Snowflake NASS cache; returns empty frame if county data not yet cached."""
+    mp = COMMODITIES.get(commodity, {}).get(metric_label)
+    if mp is None:
+        return pd.DataFrame()
+    df = _fetch(_county_params(mp, year))
+    if df.empty:
+        return pd.DataFrame()
+    # Drop state/district aggregate rows
+    if "county_ansi" in df.columns:
+        df = df[~df["county_ansi"].isin({"998", "000", "999"})]
+    if "county_name" in df.columns:
+        df = df[~df["county_name"].str.strip().str.lower().str.startswith("other")]
+    if df.empty:
+        return pd.DataFrame()
+    df["Value"] = df["Value"].apply(_clean)
+    df = df.dropna(subset=["Value"])
+    if "state_fips_code" in df.columns and "county_ansi" in df.columns:
+        df["fips"] = df["state_fips_code"].str.zfill(2) + df["county_ansi"].str.zfill(3)
+    else:
+        df["fips"] = ""
+    df["State"]  = df["state_alpha"].str.strip() if "state_alpha" in df.columns else ""
+    df["County"] = df["county_name"].str.strip().str.title() if "county_name" in df.columns else ""
+    key_cols = ["State", "County", "fips"]
+    # Prefer ALL PRODUCTION PRACTICES rows; fill gaps with max across practices
+    if "prodn_practice_desc" in df.columns:
+        all_p = df[df["prodn_practice_desc"] == "ALL PRODUCTION PRACTICES"].copy()
+        rest  = df[~df["fips"].isin(all_p["fips"].unique())].copy()
+        if not rest.empty:
+            rest = rest.loc[rest.groupby(key_cols, sort=False)["Value"].idxmax()]
+        df = pd.concat([all_p, rest], ignore_index=True)
+    # Wheat: sum area/production across classes; max for yield
+    if commodity == "Wheat":
+        extra_agg = {c: "first" for c in ["asd_desc", "asd_code"] if c in df.columns}
+        if "Yield" in metric_label:
+            df = df.loc[df.groupby(key_cols, sort=False)["Value"].idxmax()].reset_index(drop=True)
+        else:
+            df = df.groupby(key_cols, as_index=False).agg({"Value": "sum", **extra_agg})
+    extra = [c for c in ["asd_desc", "asd_code"] if c in df.columns]
+    return df[key_cols + ["Value"] + extra].reset_index(drop=True)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_county_geojson() -> dict:
+    import json as _json, urllib.request as _urlreq
+    url = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
+    with _urlreq.urlopen(url, timeout=30) as r:
+        return _json.load(r)
+
+
+def _county_centroid(feat: dict):
+    """Simple mean-coordinate centroid of the largest polygon ring in a GeoJSON feature."""
+    geom = feat["geometry"]
+    if geom["type"] == "Polygon":
+        rings = [geom["coordinates"][0]]
+    elif geom["type"] == "MultiPolygon":
+        rings = [p[0] for p in geom["coordinates"]]
+    else:
+        return None, None
+    best = max(rings, key=lambda r: (
+        (max(p[0] for p in r) - min(p[0] for p in r)) *
+        (max(p[1] for p in r) - min(p[1] for p in r))
+    ))
+    cx = sum(p[0] for p in best) / len(best)
+    cy = sum(p[1] for p in best) / len(best)
+    return float(cx), float(cy)
+
+
+def _build_county_fig(df: pd.DataFrame, geo: dict, metric_label: str,
+                      state_fips: str | None = None) -> go.Figure:
+    """County-level choropleth. Optionally filter GeoJSON to a single state."""
+    is_yield = "Yield" in metric_label
+    is_acres = "Acres" in metric_label
+    unit     = " Bu/Ac" if is_yield else (" Ac" if is_acres else " Bu")
+    fmt      = ".1f" if is_yield else ",.0f"
+    cscale   = "RdYlGn" if is_yield else "YlOrRd"
+    geo_sub  = {
+        "type": "FeatureCollection",
+        "features": [f for f in geo["features"] if f["properties"]["STATE"] == state_fips],
+    } if state_fips else geo
+    fig = go.Figure(go.Choropleth(
+        geojson=geo_sub,
+        locations=df["fips"],
+        z=df["Value"],
+        featureidkey="id",
+        colorscale=cscale,
+        marker_line_width=0.4,
+        marker_line_color=BORDER,
+        colorbar=dict(
+            title=dict(text=unit.strip(), font=dict(size=11, color=TXT_SEC)),
+            tickfont=dict(size=10, color=TXT_SEC),
+            thickness=12, len=0.65, x=1.0,
+        ),
+        hovertemplate=f"<b>%{{text}}</b><br>{metric_label}: %{{z:{fmt}}}{unit}<extra></extra>",
+        text=df["County"] + ", " + df["State"],
+    ))
+    geo_kw = dict(fitbounds="geojson") if state_fips else {}
+    fig.update_geos(
+        scope="usa", projection_type="albers usa",
+        showlakes=False, showland=True, landcolor="#f8f9fa",
+        showcoastlines=False, showframe=False, **geo_kw,
+    )
+    fig.update_layout(
+        plot_bgcolor=CARD_BG, paper_bgcolor=CARD_BG,
+        margin=dict(l=0, r=0, t=0, b=0), height=520,
+        font=dict(color=TXT),
+    )
+    return fig
+
+
+def _build_asd_fig(df: pd.DataFrame, geo: dict, metric_label: str) -> go.Figure:
+    """County choropleth colored by ASD district aggregate — no geopandas needed.
+    Each county is colored by its district's aggregated value."""
+    if "asd_desc" not in df.columns or df["asd_desc"].isna().all():
+        return _build_county_fig(df, geo, metric_label)
+    is_yield = "Yield" in metric_label
+    is_acres = "Acres" in metric_label
+    unit     = " Bu/Ac" if is_yield else (" Ac" if is_acres else " Bu")
+    fmt      = ".1f" if is_yield else ",.0f"
+    agg_fn   = "mean" if is_yield else "sum"
+    dist_agg = (df.groupby(["asd_desc", "asd_code"], as_index=False)["Value"]
+                  .agg(agg_fn)
+                  .rename(columns={"Value": "DistValue"}))
+    merged   = df.merge(dist_agg, on=["asd_desc", "asd_code"], how="left")
+    sfips    = STATE_FIPS.get(merged["State"].iloc[0], "") if len(merged) else ""
+    geo_sub  = {
+        "type": "FeatureCollection",
+        "features": [f for f in geo["features"] if f["properties"]["STATE"] == sfips],
+    } if sfips else geo
+    fig = go.Figure(go.Choropleth(
+        geojson=geo_sub,
+        locations=merged["fips"],
+        z=merged["DistValue"],
+        featureidkey="id",
+        colorscale="RdYlGn" if is_yield else "YlOrRd",
+        marker_line_width=0.3,
+        marker_line_color=BORDER,
+        colorbar=dict(
+            title=dict(text=unit.strip(), font=dict(size=11, color=TXT_SEC)),
+            tickfont=dict(size=10, color=TXT_SEC),
+            thickness=12, len=0.65, x=1.0,
+        ),
+        hovertemplate=f"<b>%{{text}}</b><br>District {metric_label}: %{{z:{fmt}}}{unit}<extra></extra>",
+        text=merged["asd_desc"],
+    ))
+    # Build ASD centroid labels from county centroids
+    cent_map: dict = {}
+    for feat in geo_sub["features"]:
+        fips5 = feat["properties"]["STATE"] + feat["properties"]["COUNTY"]
+        cx, cy = _county_centroid(feat)
+        if cx is not None:
+            cent_map[fips5] = (cx, cy)
+    merged["_cx"] = merged["fips"].map(lambda f: cent_map.get(f, (None, None))[0])
+    merged["_cy"] = merged["fips"].map(lambda f: cent_map.get(f, (None, None))[1])
+    dist_cents = (merged.dropna(subset=["_cx"])
+                        .groupby("asd_desc", as_index=False)
+                        .agg(lon=("_cx","mean"), lat=("_cy","mean"), val=("DistValue","first")))
+    if not dist_cents.empty:
+        lbl_fn = (lambda v: f"{v:.1f}") if is_yield else (lambda v: f"{v/1e6:.1f}M" if v >= 1e6 else f"{v:,.0f}")
+        labels = dist_cents["asd_desc"].str.replace(" District", "", case=False, regex=False)
+        fig.add_trace(go.Scattergeo(
+            lon=dist_cents["lon"], lat=dist_cents["lat"],
+            text=labels + "<br>" + dist_cents["val"].apply(lbl_fn),
+            textfont=dict(size=8, color=TXT),
+            mode="text",
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+    fig.update_geos(
+        scope="usa", projection_type="albers usa",
+        showlakes=False, showland=True, landcolor="#f8f9fa",
+        showcoastlines=False, showframe=False, fitbounds="geojson",
+    )
+    fig.update_layout(
+        plot_bgcolor=CARD_BG, paper_bgcolor=CARD_BG,
+        margin=dict(l=0, r=0, t=0, b=0), height=520,
+        font=dict(color=TXT),
+    )
+    return fig
 
 # ── Production loaders (for disappearance calculation) ───────────────────────
 def _prod_metric_dict(commodity: str) -> dict:
@@ -1483,9 +1726,10 @@ with st.spinner("Fetching USDA NASS data..."):
     snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_nat, tab_state, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
+tab_nat, tab_state, tab_county, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
     "  📊  National Overview  ",
     "  🗺️  State Level  ",
+    "  📍  County / ASD  ",
     "  📦  Quarterly Stocks  ",
     "  🔄  Revision Tracker  ",
     "  🌾  WASDE  ",
@@ -1639,6 +1883,73 @@ with tab_nat:
             fig_yield.update_yaxes(tickformat=".1f", title=yield_label[0], title_font=dict(color=GRAY))
             st.plotly_chart(fig_yield, use_container_width=True)
 
+        # ── Total Supply (Sep 1 Stocks + Production) ─────────────────────────
+        if commodity in STOCKS_META and prod_label:
+            sep1_df = load_stocks_national(commodity, "SEP 1", year_range[0], year_range[1], "TOTAL")
+            prod_df = (
+                nat_df[nat_df["metric"] == prod_label[0]][["year", "value"]]
+                .rename(columns={"value": "production"})
+            )
+            if not sep1_df.empty and not prod_df.empty:
+                ts_df = sep1_df.rename(columns={"value": "stocks"}).merge(prod_df, on="year", how="inner")
+                ts_df["total_supply"] = ts_df["stocks"] + ts_df["production"]
+                ts_df = ts_df.sort_values("year")
+
+                st.markdown("<h3 class='jsa-section-hdr'>Total Supply</h3>", unsafe_allow_html=True)
+                st.markdown(
+                    "<p style='color:#6b7280;font-size:13px;margin-top:-8px;margin-bottom:12px'>"
+                    "Sep 1 Beginning Stocks + Production (same calendar year)</p>",
+                    unsafe_allow_html=True,
+                )
+
+                ts_latest = int(ts_df["year"].max())
+                ts_row = ts_df[ts_df["year"] == ts_latest]
+                if not ts_row.empty:
+                    ts_val   = float(ts_row["total_supply"].values[0])
+                    ts_prod  = float(ts_row["production"].values[0])
+                    ts_stk   = float(ts_row["stocks"].values[0])
+                    kpi_cols = st.columns([1, 1, 1, 3])
+                    for col, lbl, val in [
+                        (kpi_cols[0], "Total Supply",  ts_val),
+                        (kpi_cols[1], "Production",    ts_prod),
+                        (kpi_cols[2], "Sep 1 Stocks",  ts_stk),
+                    ]:
+                        yr_note = f"{ts_latest}{' — preliminary' if ts_latest == THIS_YEAR else ''}"
+                        col.markdown(
+                            f"<div class='kpi-card'>"
+                            f"<div class='kpi-label'>{lbl}</div>"
+                            f"<div class='kpi-value'>{_fmt(val, prod_label[0])}</div>"
+                            f"<div class='kpi-year'>{yr_note}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                fig_ts = go.Figure()
+                fig_ts.add_trace(go.Bar(
+                    x=ts_df["year"], y=ts_df["stocks"],
+                    name="Sep 1 Stocks",
+                    marker_color=TEAL, opacity=0.75,
+                    hovertemplate="<b>%{x}</b><br>Sep 1 Stocks: %{y:,.0f}<extra></extra>",
+                ))
+                fig_ts.add_trace(go.Bar(
+                    x=ts_df["year"], y=ts_df["production"],
+                    name="Production",
+                    marker_color=AMBER, opacity=0.85,
+                    hovertemplate="<b>%{x}</b><br>Production: %{y:,.0f}<extra></extra>",
+                ))
+                fig_ts.update_layout(
+                    barmode="stack",
+                    plot_bgcolor=CARD_BG, paper_bgcolor=CARD_BG,
+                    font=dict(color=TXT), height=420,
+                    margin=dict(l=65, r=20, t=30, b=40),
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TXT_SEC)),
+                    hoverlabel=dict(bgcolor=TXT, font_color=WHITE, bordercolor=TEAL),
+                    xaxis=dict(gridcolor=GRID_CLR, linecolor=BORDER, tickfont=dict(color=TXT_SEC)),
+                    yaxis=dict(tickformat=",.0f", gridcolor=GRID_CLR, linecolor=BORDER,
+                               tickfont=dict(color=TXT_SEC)),
+                )
+                st.plotly_chart(fig_ts, use_container_width=True)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 2 — STATE LEVEL
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1648,25 +1959,39 @@ with tab_state:
             st.warning(f"No state data available for {commodity} in {map_year}.")
         else:
             # ── Metric pill filter ────────────────────────────────────────────────
-            prod_default = next((m for m in metric_list if "Production" in m), metric_list[0])
+            state_metrics = metric_list + (["Total Supply"] if commodity in STOCKS_META else [])
+            prod_default = next((m for m in state_metrics if "Production" in m), state_metrics[0])
             map_metric = st.radio(
                 "State metric",
-                metric_list,
-                index=metric_list.index(prod_default),
+                state_metrics,
+                index=state_metrics.index(prod_default),
                 horizontal=True,
                 label_visibility="collapsed",
             )
             st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
-            metric_snap = snap_df[snap_df["metric"] == map_metric].copy()
+            if map_metric == "Total Supply":
+                _ts = load_total_supply_snapshot(commodity, map_year)
+                metric_snap = (
+                    _ts.assign(metric="Total Supply")
+                    if not _ts.empty
+                    else pd.DataFrame(columns=["state_name", "state_abbr", "value", "metric"])
+                )
+            else:
+                metric_snap = snap_df[snap_df["metric"] == map_metric].copy()
 
             if metric_snap.empty:
                 st.warning(f"No state data for {map_metric} in {map_year}.")
             else:
                 # ── Map view toggle ───────────────────────────────────────────────
+                _map_view_opts = (
+                    ["Value", "vs Last Year"]
+                    if map_metric == "Total Supply"
+                    else ["Value", "vs Last Year", "vs Olympic Avg", "vs Year", "vs Prior Report"]
+                )
                 map_view = st.radio(
                     "Map view",
-                    ["Value", "vs Last Year", "vs Olympic Avg", "vs Year", "vs Prior Report"],
+                    _map_view_opts,
                     horizontal=True,
                     label_visibility="collapsed",
                     key="map_view",
@@ -1714,12 +2039,20 @@ with tab_state:
                 st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
                 # ── Always load LY for hover ──────────────────────────────────────
-                prior_snap = load_state_snapshot(commodity, map_year - 1)
-                prior_metric = (
-                    prior_snap[prior_snap["metric"] == map_metric][["state_abbr", "value"]]
-                    .rename(columns={"value": "prior_value"})
-                    if not prior_snap.empty else pd.DataFrame(columns=["state_abbr", "prior_value"])
-                )
+                if map_metric == "Total Supply":
+                    _prior_ts = load_total_supply_snapshot(commodity, map_year - 1)
+                    prior_metric = (
+                        _prior_ts[["state_abbr", "value"]].rename(columns={"value": "prior_value"})
+                        if not _prior_ts.empty
+                        else pd.DataFrame(columns=["state_abbr", "prior_value"])
+                    )
+                else:
+                    prior_snap = load_state_snapshot(commodity, map_year - 1)
+                    prior_metric = (
+                        prior_snap[prior_snap["metric"] == map_metric][["state_abbr", "value"]]
+                        .rename(columns={"value": "prior_value"})
+                        if not prior_snap.empty else pd.DataFrame(columns=["state_abbr", "prior_value"])
+                    )
                 metric_snap = metric_snap.merge(prior_metric, on="state_abbr", how="left")
                 metric_snap["chg_nom"] = metric_snap["value"] - metric_snap["prior_value"]
                 metric_snap["chg_pct"] = metric_snap["chg_nom"] / metric_snap["prior_value"] * 100
@@ -2108,13 +2441,14 @@ with tab_state:
                     tbl_shist = load_state_history(commodity, map_metric, tbl_y0, map_year)
 
                 if tbl_shist.empty or "state_abbr" not in tbl_shist.columns:
-                    c_msg, c_btn = st.columns([5, 1])
-                    c_msg.warning(
-                        "⏱ State comparison data unavailable — NASS API timed out."
-                    )
-                    if c_btn.button("🔄 Retry", key="retry_tbl"):
-                        st.cache_data.clear()
-                        st.rerun()
+                    if map_metric != "Total Supply":
+                        c_msg, c_btn = st.columns([5, 1])
+                        c_msg.warning(
+                            "⏱ State comparison data unavailable — NASS API timed out."
+                        )
+                        if c_btn.button("🔄 Retry", key="retry_tbl"):
+                            st.cache_data.clear()
+                            st.rerun()
                 else:
                     # National values — reuse the already-fetched nat_df (no extra API call)
                     nat_yr_vals = (
@@ -2533,7 +2867,131 @@ with tab_state:
                         col_r.plotly_chart(fig_vs, use_container_width=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 3 — QUARTERLY STOCKS
+# TAB 3 — COUNTY / ASD
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_county:
+    if tab_county.open:
+        # ── Controls ─────────────────────────────────────────────────────────
+        county_metrics   = metric_list
+        prod_dflt_c      = next((m for m in county_metrics if "Production" in m), county_metrics[0])
+        ctrl_a, ctrl_b, ctrl_c = st.columns([4, 2, 3])
+        with ctrl_a:
+            county_metric = st.radio(
+                "County metric",
+                county_metrics,
+                index=county_metrics.index(prod_dflt_c),
+                horizontal=True,
+                label_visibility="collapsed",
+                key="county_metric",
+            )
+        with ctrl_b:
+            county_year = st.selectbox(
+                "Year",
+                list(range(THIS_YEAR, 2014, -1)),
+                key="county_year",
+            )
+        with ctrl_c:
+            state_opts   = ["All States"] + sorted(ABBREV_STATE.keys())
+            county_state = st.selectbox(
+                "State drill-down",
+                state_opts,
+                key="county_state",
+            )
+
+        # ── Load ─────────────────────────────────────────────────────────────
+        with st.spinner("Loading county data from NASS cache..."):
+            c_raw = load_county_data(commodity, county_metric, county_year)
+
+        if c_raw.empty:
+            st.info(
+                f"County-level data for **{commodity} — {county_metric}** is not yet "
+                "in the NASS cache. The ETL job will be updated to include county-level "
+                "queries. Check back after the next scheduled cache run.",
+                icon="ℹ️",
+            )
+        else:
+            # Filter to selected state
+            if county_state != "All States":
+                map_cdf = c_raw[c_raw["State"] == county_state].copy()
+            else:
+                map_cdf = c_raw.copy()
+
+            if map_cdf.empty:
+                st.warning(f"No county data found for {county_state} in {county_year}.")
+            else:
+                # ── ASD view toggle (state drill-down only) ───────────────────
+                has_asd  = "asd_desc" in map_cdf.columns and map_cdf["asd_desc"].notna().any()
+                asd_view = False
+                if county_state != "All States" and has_asd:
+                    view_mode = st.radio(
+                        "View",
+                        ["County", "ASD Districts"],
+                        horizontal=True,
+                        label_visibility="collapsed",
+                        key="county_view_mode",
+                    )
+                    asd_view = view_mode == "ASD Districts"
+
+                # ── KPI cards ────────────────────────────────────────────────
+                is_yield_c = "Yield" in county_metric
+                summary_val = map_cdf["Value"].mean() if is_yield_c else map_cdf["Value"].sum()
+                n_counties  = map_cdf["fips"].nunique()
+                unit_lbl_c  = "Bu/Ac" if is_yield_c else ("Ac" if "Acres" in county_metric else "Bu")
+                val_str_c   = f"{summary_val:,.1f}" if is_yield_c else f"{summary_val:,.0f}"
+                kc1, kc2, _ = st.columns([1, 1, 4])
+                with kc1:
+                    st.markdown(
+                        f"<div style='background:{CARD_BG};border:1px solid {BORDER};"
+                        f"border-radius:8px;padding:12px 16px;'>"
+                        f"<div style='font-size:11px;color:{TXT_SEC};text-transform:uppercase;"
+                        f"letter-spacing:.05em;'>{'Avg Yield' if is_yield_c else 'Total'}</div>"
+                        f"<div style='font-size:22px;font-weight:700;color:{TXT};margin-top:4px;'>"
+                        f"{val_str_c} <span style='font-size:13px;color:{TXT_SEC};'>{unit_lbl_c}</span></div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with kc2:
+                    st.markdown(
+                        f"<div style='background:{CARD_BG};border:1px solid {BORDER};"
+                        f"border-radius:8px;padding:12px 16px;'>"
+                        f"<div style='font-size:11px;color:{TXT_SEC};text-transform:uppercase;"
+                        f"letter-spacing:.05em;'>Counties Reporting</div>"
+                        f"<div style='font-size:22px;font-weight:700;color:{TXT};margin-top:4px;'>"
+                        f"{n_counties:,}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+                # ── Map ───────────────────────────────────────────────────────
+                with st.spinner("Rendering map..."):
+                    geo_data = _load_county_geojson()
+                    if asd_view:
+                        fig_county = _build_asd_fig(map_cdf, geo_data, county_metric)
+                    else:
+                        sfips_c = STATE_FIPS.get(county_state) if county_state != "All States" else None
+                        fig_county = _build_county_fig(map_cdf, geo_data, county_metric, sfips_c)
+                st.plotly_chart(fig_county, use_container_width=True)
+
+                # ── Data table ────────────────────────────────────────────────
+                with st.expander("Data table", expanded=False):
+                    if asd_view and has_asd:
+                        agg_mode = "mean" if is_yield_c else "sum"
+                        tbl_c = (map_cdf.groupby(
+                                    [c for c in ["asd_code", "asd_desc"] if c in map_cdf.columns],
+                                    as_index=False)["Value"]
+                                 .agg(agg_mode)
+                                 .rename(columns={"asd_desc": "District", "asd_code": "Code"}))
+                        tbl_c = tbl_c.sort_values("Code") if "Code" in tbl_c.columns else tbl_c
+                    else:
+                        tbl_c = map_cdf[["State", "County", "Value"]].copy()
+                    tbl_c["Value"] = tbl_c["Value"].apply(
+                        lambda v: f"{v:,.1f}" if is_yield_c else f"{v:,.0f}"
+                    )
+                    st.dataframe(tbl_c, use_container_width=True, hide_index=True)
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 4 — QUARTERLY STOCKS
 # ═════════════════════════════════════════════════════════════════════════════
 with tab_stocks:
     if tab_stocks.open:
@@ -3345,7 +3803,7 @@ with tab_stocks:
                         col_r.plotly_chart(fig_skv, use_container_width=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 4 — REVISION TRACKER
+# TAB 5 — REVISION TRACKER
 # ═════════════════════════════════════════════════════════════════════════════
 with tab_revisions:
     # Map friendly labels → actual COMMODITIES metric keys
@@ -3630,7 +4088,7 @@ with tab_revisions:
                         )
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 5 — WASDE / World S&D  (FAS PSD)
+# TAB 6 — WASDE / World S&D  (FAS PSD)
 # ═════════════════════════════════════════════════════════════════════════════
 with tab_wasde:
     if tab_wasde.open:
@@ -4709,7 +5167,7 @@ with tab_wasde:
             )
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 6 — GRAIN STORAGE CAPACITY  (NASS on-farm + off-farm)
+# TAB 7 — GRAIN STORAGE CAPACITY  (NASS on-farm + off-farm)
 # ═════════════════════════════════════════════════════════════════════════════
 with tab_storage_cap:
     if tab_storage_cap.open:
@@ -4836,7 +5294,7 @@ with tab_storage_cap:
             st.dataframe(_sc_tbl, use_container_width=True, hide_index=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 7 — STORAGE vs PRODUCTION
+# TAB 8 — STORAGE vs PRODUCTION
 # ═════════════════════════════════════════════════════════════════════════════
 with tab_storage_vs_prod:
     if tab_storage_vs_prod.open:
