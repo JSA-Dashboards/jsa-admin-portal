@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -160,6 +160,72 @@ def get_daily_bars_many(tickers: list[str], api_key: str, max_workers: int = 8) 
             except (MassiveApiError, requests.RequestException):
                 out[ticker] = pd.DataFrame(columns=BAR_COLUMNS)
     return out
+
+
+def get_settlement_history(ticker: str, api_key: str) -> pd.Series:
+    """Daily settlements for one contract, indexed by trading date (ascending). The same
+    prices get_daily_bars calls 'settle', without dropping a session whose open/high/low
+    is missing, so a settlement is never lost to an incomplete bar."""
+    data = _get(f"/aggs/{ticker}", api_key, params={"resolution": "1session", "limit": 50000})
+    rows: dict = {}
+    for bar in data.get("results", []):
+        day = bar.get("session_end_date")
+        price = bar.get("settlement_price") or bar.get("close")
+        if day and price:
+            rows[pd.to_datetime(day).date()] = float(price)
+    return pd.Series(rows, dtype=float).sort_index() if rows else pd.Series(dtype=float)
+
+
+def get_settlement_histories(tickers: list[str], api_key: str, max_workers: int = 8,
+                             retry_empty: bool = False) -> dict[str, pd.Series]:
+    """Settlement history for several contracts at once, in parallel. A failed call comes
+    back as an empty series, and callers cache that; `retry_empty` asks once more for the
+    empty ones, so a dropped request isn't read as "no history"."""
+    out: dict[str, pd.Series] = {}
+    if not tickers:
+        return out
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(tickers))) as pool:
+        futures = {pool.submit(get_settlement_history, t, api_key): t for t in tickers}
+        for fut in as_completed(futures):
+            ticker = futures[fut]
+            try:
+                out[ticker] = fut.result()
+            except (MassiveApiError, requests.RequestException):
+                out[ticker] = pd.Series(dtype=float)
+    if retry_empty:
+        missing = [t for t in tickers if not len(out.get(t, ()))]
+        if missing:
+            again = get_settlement_histories(missing, api_key, max_workers=max_workers)
+            out.update({t: s for t, s in again.items() if len(s)})
+    return out
+
+
+def get_front_curves(product_codes: list[str], api_key: str, as_of: date,
+                     n_contracts: int = 3) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
+    """Front months for several markets, fetched side by side. Returns (curves, errors):
+    a market that fails lands in `errors` with its message, so one feed hiccup doesn't
+    blank the rest. /contracts can come back empty right at the UTC date rollover, before
+    the feed has published that date's active set, so an empty curve is retried against
+    yesterday before being reported."""
+    def one(code: str) -> pd.DataFrame:
+        for back in (0, 1):
+            curve = get_futures_curve(code, api_key, as_of - timedelta(days=back),
+                                      n_contracts=n_contracts)
+            if not curve.empty:
+                return curve
+        raise MassiveApiError(f"Massive returned no priced {code} contracts.")
+
+    curves: dict[str, pd.DataFrame] = {}
+    errors: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(product_codes))) as pool:
+        futures = {pool.submit(one, code): code for code in product_codes}
+        for fut in as_completed(futures):
+            code = futures[fut]
+            try:
+                curves[code] = fut.result()
+            except (MassiveApiError, requests.RequestException) as e:
+                errors[code] = str(e)
+    return curves, errors
 
 
 FED_FUNDS_PRODUCT = "ZQ"

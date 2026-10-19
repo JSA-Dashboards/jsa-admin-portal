@@ -12,10 +12,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import stocks_use
+import trend_board
 from ai_chat import run_chat
 from hl_model import render_hl_tab
 from legacy_history import get_legacy_series, load_legacy_history
-from massive_api import MassiveApiError, get_daily_bars_many, get_futures_curve
+from massive_api import (MassiveApiError, get_daily_bars_many, get_front_curves, get_futures_curve,
+                         get_settlement_histories)
 from report_dates import NASS_2021_FALLBACK, ReportDatesError, get_nass_dates, get_wasde_dates
 
 HERE = Path(__file__).parent
@@ -514,6 +517,78 @@ def _add_seasonal_overlay(fig, by_dte: dict[str, pd.Series], window_days: int,
         ))
 
 
+@st.cache_data(ttl="24h", show_spinner="Loading USDA stocks/use…")
+def load_stocks_to_use(product_code: str) -> dict[int, float]:
+    """US stocks/use ratio by marketing year, from USDA FAS PSD (whole history in one
+    download) with the WASDE CSV as fallback. Long TTL — it only moves on WASDE release day."""
+    return stocks_use.fetch_stocks_to_use(product_code, date.today().year, 100)
+
+
+def similar_su_controls(code: str, key: str, candidate_years: list[int], near_expiry: date) -> list[int]:
+    """Toggle and tolerance that auto-highlight prior years whose US stocks/use ratio was
+    close to the current marketing year's. Returns the contract years to emphasise.
+
+    Similarity is judged on the marketing year the contract trades against, which is not its
+    calendar year: Dec '25 through Sep '26 corn all trade against the 2025/26 carryout.
+    `near_expiry` therefore drives the lookup, and matches are mapped back to contract years
+    so they line up with the overlaid lines."""
+    if not stocks_use.has_stocks_use(code):
+        return []
+    wheat_note = (" Chicago and KC wheat both use USDA's all-wheat balance sheet."
+                  if code in ("ZW", "KE") else "")
+    row = st.container(horizontal=True, vertical_alignment="bottom")
+    with row:
+        similar_on = st.toggle(
+            "Similar S/U years", value=True, key=f"simsu_{key}",
+            help="Auto-highlight prior years whose US stocks/use ratio was within the tolerance "
+                 "beside it of the current marketing year's. US balance sheets come from USDA "
+                 "FAS PSD, which covers every year on these charts; if PSD is unreachable it "
+                 "falls back to USDA's WASDE CSV, which only reaches 2019." + wheat_note,
+        )
+        if similar_on:
+            # Each market's ratio lives in its own range (meal spends years inside a fifth of a
+            # point), so the default and step follow the market.
+            tol_default = stocks_use.default_tolerance(code)
+            similar_tol = st.number_input(
+                "± pts", min_value=0.01, max_value=10.0, value=tol_default,
+                step=max(round(tol_default / 4, 2), 0.01),
+                format="%.2f" if tol_default < 0.5 else "%.1f",
+                key=f"simtol_{key}", width=100,
+            )
+    if not similar_on:
+        return []
+
+    # Meal lives inside a fifth of a point, so one decimal would print every year as "0.7%";
+    # show as many as the tolerance can distinguish.
+    ratio_fmt = ".2f" if similar_tol < 0.5 else ".1f"
+    stu = load_stocks_to_use(code)
+    this_my = stocks_use.marketing_year(code, near_expiry)
+    # Each overlaid year rolls the contract back a year, so its marketing year rolls back with
+    # it by the same offset.
+    offset = near_expiry.year - this_my
+    my_label = stocks_use.marketing_year_label(this_my)
+    all_similar = stocks_use.similar_years(stu, this_my, similar_tol)
+    # PSD reaches back decades, but only years actually overlaid can be bolded.
+    similar = [y + offset for y in all_similar if y + offset in candidate_years]
+    beyond = len(all_similar) - len(similar)
+    if not stu:
+        st.caption("Stocks/use data unavailable right now.")
+    elif this_my not in stu:
+        st.caption(f"USDA hasn't published a {my_label} balance sheet yet, so there's nothing to "
+                   "match against.")
+    elif not similar:
+        st.caption(f"{my_label} is {stu[this_my]:{ratio_fmt}}% S/U · no overlaid year within "
+                   f"±{similar_tol:g} pts."
+                   + (f" {beyond} match further back — raise *Prior years*." if beyond else ""))
+    else:
+        st.caption(
+            f"{my_label} is {stu[this_my]:{ratio_fmt}}% S/U · similar: "
+            + ", ".join(f"{stocks_use.marketing_year_label(y - offset)} "
+                        f"({stu[y - offset]:{ratio_fmt}}%)" for y in sorted(similar))
+            + (f" · {beyond} more further back" if beyond else ""))
+    return similar
+
+
 def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_dates: dict | None = None):
     code = commodity["product_code"]
     key = commodity["key"]
@@ -551,6 +626,8 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
     window_days = WINDOW_CHOICES.get(window_label or "1Y", 365)
     anchor_expiry = expiries[ticker]
     label = friendly_contract(ticker, code)
+    highlight_years = similar_su_controls(
+        code, f"fut_{key}", [anchor_expiry.year - b for b in range(years_back + 1)], anchor_expiry)
     y_title = "Index (start = 100)" if indexed else f"Price ({unit})"
     fmt = ".1f" if indexed else ".2f"
 
@@ -616,10 +693,12 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
         xs_dte = [dte[i] for i in keep]
         xs = [anchor_expiry + timedelta(days=d) for d in xs_dte]
         name = t + (" (current)" if back == 0 else "")
+        is_highlighted = base_year - back in highlight_years
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="lines", name=name,
-            line=dict(color=YEAR_COLORS[back % len(YEAR_COLORS)], width=3 if back == 0 else 1.5),
-            opacity=1.0 if back == 0 else 0.75,
+            line=dict(color=YEAR_COLORS[back % len(YEAR_COLORS)],
+                      width=3 if back == 0 else (2.5 if is_highlighted else 1.5)),
+            opacity=1.0 if (back == 0 or is_highlighted) else (0.3 if highlight_years else 0.75),
             hovertemplate=f"{name}<br>%{{y:{fmt}}}<extra></extra>",
         ))
         by_dte[t] = pd.Series(ys, index=pd.Index(xs_dte, name="dte"))
@@ -733,10 +812,13 @@ def render_leg_picker(curves: dict[str, pd.DataFrame], state_key: str,
 def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: date,
                          expiries_by_product: dict[str, dict[str, date]], years_back: int,
                          seasonal_line: str, window_label: str, unit: str,
-                         report_dates: dict | None, key: str):
+                         report_dates: dict | None, key: str,
+                         highlight_years: list[int] | None = None):
     """Shared recent-history + seasonal-overlay rendering for both the
     per-commodity calendar spread (fixed product_code across legs) and the
-    cross-commodity spread builder (each leg its own product_code)."""
+    cross-commodity spread builder (each leg its own product_code).
+    `highlight_years` are leg 1's contract years to draw heavier, the rest fading back."""
+    highlight_years = highlight_years or []
     window_days = WINDOW_CHOICES.get(window_label or "1Y", 365)
     label = _spread_label(legs)
     y_title = f"Spread ({unit})"
@@ -764,6 +846,7 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
 
     resolved: dict[str, pd.Series] = {}
     year_legsets: list[list[tuple[str, str, int]]] = []
+    year_backs: list[int] = []   # how many years back each entry of year_legsets is
     for back in range(years_back + 1):
         legset = []
         ok = True
@@ -776,6 +859,7 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
             legset.append((code, t_label, sign))
         if ok:
             year_legsets.append(legset)
+            year_backs.append(back)
 
     st.caption(f"**{label}** — recent history")
     current_series = _combine_series(resolved, year_legsets[0]) if year_legsets else None
@@ -806,7 +890,7 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
     by_dte: dict[str, pd.Series] = {}
     skipped: list[str] = []
 
-    for back, legset in enumerate(year_legsets):
+    for back, legset in zip(year_backs, year_legsets):
         spread = _combine_series(resolved, legset)
         if spread is None:
             skipped.append(_spread_label(legset))
@@ -823,10 +907,12 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
         xs = [anchor_expiry + timedelta(days=d) for d in xs_dte]
         ys = [spread.values[i] for i in keep]
         name = _spread_label(legset) + (" (current)" if back == 0 else "")
+        is_highlighted = base_years[(anchor_code, anchor_ticker)] - back in highlight_years
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="lines", name=name,
-            line=dict(color=YEAR_COLORS[back % len(YEAR_COLORS)], width=3 if back == 0 else 1.5),
-            opacity=1.0 if back == 0 else 0.75,
+            line=dict(color=YEAR_COLORS[back % len(YEAR_COLORS)],
+                      width=3 if back == 0 else (2.5 if is_highlighted else 1.5)),
+            opacity=1.0 if (back == 0 or is_highlighted) else (0.3 if highlight_years else 0.75),
             hovertemplate=f"{name}<br>%{{y:+.2f}}<extra></extra>",
         ))
         by_dte[_spread_label(legset)] = pd.Series(ys, index=pd.Index(xs_dte, name="dte"))
@@ -879,8 +965,14 @@ def render_seasonal_spread(commodity: dict, api_key: str, as_of: date, report_da
         return
 
     expiries = dict(zip(curve["ticker"], curve["expiration"]))
+    near_expiry = expiries.get(legs[0][1])
+    highlight_years = []
+    if near_expiry is not None:
+        highlight_years = similar_su_controls(
+            code, f"sp_{key}", [near_expiry.year - b for b in range(years_back + 1)], near_expiry)
     render_spread_charts(legs, api_key, as_of, {code: expiries}, years_back, seasonal_line or "Average",
-                         window_label, unit, report_dates, key=f"{key}_{'_'.join(t for _, t, _ in legs)}")
+                         window_label, unit, report_dates, key=f"{key}_{'_'.join(t for _, t, _ in legs)}",
+                         highlight_years=highlight_years)
 
 
 def build_spread_matrix(curve: pd.DataFrame, code: str) -> tuple[pd.DataFrame, list[str]]:
@@ -1377,6 +1469,317 @@ def render_ask_ai(api_key: str, anthropic_key: str, as_of: date,
     render_ask_ai_chat(api_key, anthropic_key, as_of, wasde_dates, nass_dates)
 
 
+# ── Trends snapshot ──────────────────────────────────────────────────────────
+TREND_CONTRACTS = 3        # ask for three, so a front month without a price doesn't leave one short
+MASSIVE_FLOOR = date(2021, 9, 2)   # Massive's first daily bar (see DATA_START_NOTE)
+DELAYED_QUOTES_NOTE = "Massive futures prices are delayed ~10 minutes — not a real-time or executable quote."
+TREND_COLUMNS = ["Market", "Contract", "Last", "vs 1 wk", "vs 1 mo", "vs 1 yr",
+                 "Seasonal, next 30d", "Years ▲ / ● / ▼", "SMA 20", "SMA 100", "SMA 200"]
+SEASONAL_ARROW = {"Higher": "▲", "Neutral": "●", "Weaker": "▼"}
+SEASONAL_STYLE = {
+    "Higher": "background-color:#C6EFCE;color:#006100;",
+    "Neutral": "background-color:#ECEFF1;color:#37474f;",
+    "Weaker": "background-color:#FFC7CE;color:#9C0006;",
+}
+TREND_UP = "color:#006100;"
+TREND_DOWN = "color:#9C0006;"
+TREND_GROUP_TOP = "border-top:2px solid #8FCB8F;"
+
+
+@st.cache_data(ttl="5m", show_spinner=False)
+def _load_trend_curves(api_key: str, as_of: str):
+    return get_front_curves([c["product_code"] for c in COMMODITIES], api_key,
+                            date.fromisoformat(as_of), n_contracts=TREND_CONTRACTS)
+
+
+def load_trend_curves(api_key: str, as_of: str):
+    """(curves, errors) for every market. A partial failure is shown but not kept: the cache
+    is dropped, so the next rerun asks again instead of serving the gap for five minutes."""
+    result = _load_trend_curves(api_key, as_of)
+    if result[1]:
+        _load_trend_curves.clear()
+    return result
+
+
+@st.cache_data(ttl="6h", show_spinner=False)
+def load_trend_histories(tickers: tuple[str, ...], api_key: str, as_of: str) -> dict[str, pd.Series]:
+    """Daily settlements of the front contracts, today's session included."""
+    return get_settlement_histories(list(tickers), api_key, max_workers=len(tickers),
+                                    retry_empty=True)
+
+
+@st.cache_data(ttl="12h", show_spinner=False)
+def load_trend_analogs(tickers: tuple[str, ...], api_key: str, as_of: str) -> dict[str, pd.Series]:
+    """Prior-year contracts for the seasonal read. Massive serves about one history a second
+    however many are asked for at once, so a cold load of ~60 takes about a minute."""
+    return get_settlement_histories(list(tickers), api_key, max_workers=16, retry_empty=True)
+
+
+def load_trend_fronts(api_key: str, as_of: date) -> list[dict]:
+    """The two nearest contracts of every market, with live price and settlement history. A
+    market that couldn't be loaded appears once, carrying its error."""
+    iso = as_of.isoformat()
+    curves, errors = load_trend_curves(api_key, iso)
+    fronts = {c["product_code"]: curves[c["product_code"]].head(2)
+              for c in COMMODITIES if c["product_code"] in curves}
+    tickers = tuple(t for curve in fronts.values() for t in curve["ticker"])
+    histories = load_trend_histories(tickers, api_key, iso) if tickers else {}
+    out = []
+    for commodity in COMMODITIES:
+        code = commodity["product_code"]
+        curve = fronts.get(code)
+        if curve is None:
+            out.append({"commodity": commodity, "error": errors.get(code, "no live contracts")})
+            continue
+        for r in curve.itertuples():
+            suffix = r.ticker[len(code):]
+            out.append({"commodity": commodity, "ticker": r.ticker, "expiration": r.expiration,
+                        "price": float(r.price), "history": histories.get(r.ticker),
+                        "letter": suffix[0] if len(suffix) == 2 and suffix[0] in MONTH_LETTERS else ""})
+    return out
+
+
+def trend_analog_plan(front: dict, as_of: date, legacy: pd.DataFrame) -> dict[int, "pd.Series | str"]:
+    """{years_back: history, or the Massive ticker to fetch it with} for the same contract
+    month in prior years. The bundled pre-2022 file serves corn and soybeans; every other
+    case comes from Massive, which has nothing before its first bar, so a year whose window
+    opens earlier than that is skipped rather than fetched."""
+    code = front["commodity"]["product_code"]
+    letter = front["letter"]
+    plan: dict[int, pd.Series | str] = {}
+    if not letter:
+        return plan
+    for years_back, year in trend_board.analog_years(front["expiration"]):
+        old = get_legacy_series(legacy, code, letter, year) if year <= 2021 else pd.Series(dtype=float)
+        if len(old):
+            plan[years_back] = old
+        elif year >= MASSIVE_FLOOR.year and trend_board.shift_back(as_of, years=years_back) >= MASSIVE_FLOOR:
+            plan[years_back] = f"{code}{letter}{year % 10}"
+    return plan
+
+
+def trend_rows(fronts: list[dict], as_of: date, plans: list[dict] | None = None,
+               fetched: dict[str, pd.Series] | None = None):
+    """[(commodity, ContractTrend | None, error | None)]. Without `plans` the seasonal read
+    is left out, which is how the table first appears while its history is still loading."""
+    rows = []
+    for i, front in enumerate(fronts):
+        if "error" in front:
+            rows.append((front["commodity"], None, front["error"]))
+            continue
+        analogs = {}
+        if plans is not None:
+            for years_back, source in plans[i].items():
+                series = source if isinstance(source, pd.Series) else (fetched or {}).get(source)
+                if series is not None and len(series):
+                    analogs[years_back] = series
+        rows.append((front["commodity"], trend_board.contract_trend(
+            front["ticker"], front["expiration"], front["price"], front["history"], analogs, as_of), None))
+    return rows
+
+
+def fmt_trend_change(change) -> str:
+    if change is None:
+        return "—"
+    return f"{change[0]:+,.2f} ({change[1]:+.1%})"
+
+
+def fmt_trend_seasonal(trend) -> str:
+    read = trend.seasonal
+    if read is None or read.label is None:
+        return "—"
+    tail = f" ({trend.horizon_days}d)" if trend.horizon_days < trend_board.HORIZON_DAYS else ""
+    return f"{SEASONAL_ARROW[read.label]} {read.label} {read.average:+.1%}{tail}"
+
+
+def fmt_trend_years(trend) -> str:
+    read = trend.seasonal
+    if read is None:
+        return "—"
+    if read.label is None:
+        return f"only {read.years} yr{'s' if read.years != 1 else ''}"
+    return f"{read.higher} / {read.neutral} / {read.weaker} of {read.years}"
+
+
+def trend_frames(rows, ready: bool) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(display, cell styles, export): the table as shown, a CSS string per cell, and the
+    same rows as plain numbers for CSV. `ready` is False while the seasonal is still loading."""
+    shown, styles, export = [], [], []
+    for market_no, commodity in enumerate(COMMODITIES):
+        mine = [(t, e) for c, t, e in rows if c is commodity]
+        for i, (trend, _) in enumerate(mine):
+            first = i == 0
+            base = (GROUP_BAND if market_no % 2 == 0 else "") + (TREND_GROUP_TOP if first else "")
+            style = dict.fromkeys(TREND_COLUMNS, base)
+            # The market's name on its first row, its price unit under it.
+            label = commodity["label"] if first else commodity["unit"]
+            style["Market"] = base + ("font-weight:600;" if first else "color:#6b7280;")
+            if trend is None:
+                shown.append({**dict.fromkeys(TREND_COLUMNS, "—"), "Market": label,
+                              "Contract": "unavailable"})
+                styles.append(style)
+                export.append({"market": commodity["label"], "contract": "unavailable"})
+                continue
+            code = commodity["product_code"]
+            row = {"Market": label,
+                   "Contract": f"{code}{trend.ticker[len(code)]}{trend.expiration.year % 100:02d}",
+                   "Last": f"{trend.last:,.2f}"}
+            for col, period in (("vs 1 wk", "1 week"), ("vs 1 mo", "1 month"), ("vs 1 yr", "1 year")):
+                change = trend.changes[period]
+                row[col] = fmt_trend_change(change)
+                if change is not None and change[0] != 0:
+                    style[col] = base + (TREND_UP if change[0] > 0 else TREND_DOWN)
+            if ready:
+                row["Seasonal, next 30d"] = fmt_trend_seasonal(trend)
+                row["Years ▲ / ● / ▼"] = fmt_trend_years(trend)
+                if trend.seasonal is not None and trend.seasonal.label:
+                    style["Seasonal, next 30d"] = base + SEASONAL_STYLE[trend.seasonal.label]
+            else:
+                row["Seasonal, next 30d"] = row["Years ▲ / ● / ▼"] = "loading…"
+            for window in trend_board.SMA_WINDOWS:
+                avg = trend.averages[window]
+                row[f"SMA {window}"] = "—" if avg is None else f"{avg:,.2f}"
+                if avg is not None and avg != trend.last:
+                    style[f"SMA {window}"] = base + (TREND_UP if trend.last > avg else TREND_DOWN)
+            shown.append(row)
+            styles.append(style)
+
+            read = trend.seasonal
+            record = {"market": commodity["label"], "unit": commodity["unit"], "contract": row["Contract"],
+                      "ticker": trend.ticker, "expires": trend.expiration, "last": trend.last}
+            for tag, period in (("1w", "1 week"), ("1m", "1 month"), ("1y", "1 year")):
+                change = trend.changes[period]
+                record[f"chg_{tag}"] = None if change is None else round(change[0], 4)
+                record[f"chg_{tag}_pct"] = None if change is None else round(change[1] * 100, 2)
+            for window in trend_board.SMA_WINDOWS:
+                avg = trend.averages[window]
+                record[f"sma_{window}"] = None if avg is None else round(avg, 4)
+            record.update({
+                "seasonal": read.label if read else None,
+                "seasonal_avg_pct": None if read is None else round(read.average * 100, 2),
+                "seasonal_years": None if read is None else read.years,
+                "years_higher": None if read is None else read.higher,
+                "years_neutral": None if read is None else read.neutral,
+                "years_weaker": None if read is None else read.weaker,
+                "seasonal_days": trend.horizon_days,
+            })
+            export.append(record)
+
+    return (pd.DataFrame(shown, columns=TREND_COLUMNS), pd.DataFrame(styles, columns=TREND_COLUMNS),
+            pd.DataFrame(export))
+
+
+def draw_trend_table(rows, ready: bool) -> pd.DataFrame:
+    """Draw the snapshot table; returns the plain-number frame for CSV."""
+    display, styles, export = trend_frames(rows, ready)
+    styler = display.style.apply(lambda _: styles, axis=None)
+
+    def right_text(**options):
+        return st.column_config.TextColumn(alignment="right", **options)
+
+    # Every figure is pre-formatted text (a missing one reads "—", where a numeric column would
+    # say "None"), so the number columns are right-aligned by hand.
+    column_config = {
+        "Market": st.column_config.TextColumn(width=135),
+        "Contract": st.column_config.TextColumn(width=80),
+        "Last": right_text(width=72, help="Live price, in the market's quote units (shown under its name)."),
+        "vs 1 wk": right_text(help="Change against this contract's settlement a week ago."),
+        "vs 1 mo": right_text(help="Change against this contract's settlement a month ago."),
+        "vs 1 yr": right_text(help="Change against this contract's settlement a year ago."),
+        "Seasonal, next 30d": st.column_config.TextColumn(
+            help="Average move of the same contract month over the same 30 days in prior years. "
+                 "Higher: +3% or more. Weaker: -3% or less. Neutral: in between."),
+        "Years ▲ / ● / ▼": st.column_config.TextColumn(
+            width=118,
+            help="How many prior years finished up more than 3%, inside +/-3%, and down more "
+                 "than 3%, out of the years on file."),
+        **{f"SMA {w}": right_text(width=76, help=f"Simple average of the last {w} daily "
+                                  "settlements. Green: price above it. Red: below.")
+           for w in trend_board.SMA_WINDOWS},
+    }
+    st.dataframe(styler, hide_index=True, width="stretch", column_config=column_config,
+                 height=min(35 * (len(display) + 1) + 3, 900))
+    return export
+
+
+def render_trend_legend():
+    chips = "".join(
+        f'<span style="{SEASONAL_STYLE[label]}padding:2px 10px;border-radius:4px;font-size:0.82rem;'
+        f'white-space:nowrap;">{SEASONAL_ARROW[label]} {label} &middot; {txt}</span>'
+        for label, txt in (("Higher", "avg move &ge; +3%"),
+                           ("Neutral", "within &plusmn;3%"),
+                           ("Weaker", "avg move &le; &minus;3%")))
+    st.markdown(
+        '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:2px 0 6px;">'
+        '<span style="font-size:0.82rem;color:#6b7280;">Seasonal read</span>' + chips + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_trends(api_key: str, as_of: date):
+    head = st.container(horizontal=True, vertical_alignment="center")
+    with head:
+        st.markdown("##### Trends")
+        st.markdown(
+            f"<div style='text-align:right;font-size:0.82rem;padding-top:10px;'>"
+            f"<b>Date</b>&nbsp;&nbsp;{as_of:%m/%d/%Y}</div>",
+            unsafe_allow_html=True,
+        )
+    st.caption(
+        "The two front months of each market: where they trade against a week, a month and a "
+        "year ago, their 20, 100 and 200-day averages, and what the seasonal says about the "
+        "next 30 days."
+    )
+    st.caption(DELAYED_QUOTES_NOTE)
+    render_trend_legend()
+
+    with st.spinner("Loading the front months…"):
+        fronts = load_trend_fronts(api_key, as_of)
+
+    # Prices, changes and averages are ready now; the seasonal needs ~60 more histories, so the
+    # table is drawn without it first and redrawn in place once they arrive.
+    slot = st.empty()
+    with slot.container():
+        draw_trend_table(trend_rows(fronts, as_of), ready=False)
+
+    legacy = load_legacy_history_cached()
+    plans = [trend_analog_plan(f, as_of, legacy) if "error" not in f else {} for f in fronts]
+    wanted = tuple(sorted({src for plan in plans for src in plan.values() if isinstance(src, str)}))
+    fetched: dict[str, pd.Series] = {}
+    if wanted:
+        with st.spinner("Loading the seasonal history (about a minute the first time)…"):
+            fetched = load_trend_analogs(wanted, api_key, as_of.isoformat())
+    rows = trend_rows(fronts, as_of, plans, fetched)
+    with slot.container():
+        export = draw_trend_table(rows, ready=True)
+    export_row(export, "trends_snapshot", key="trends")
+
+    st.caption(
+        "Changes compare the live price with that same contract's settlement a week, a month and a "
+        "year earlier. Averages are the simple mean of the contract's last 20, 100 and 200 daily "
+        "settlements; green means the price is above it, red below. Seasonal takes the same contract "
+        "month in each prior year (up to 15) and measures its move over the same 30 days from "
+        "today's date. The average sets the read, and the years column counts how many of those "
+        "years finished up more than 3%, inside ±3%, or down more than 3%. A contract that "
+        "expires inside 30 days is read to its expiry (marked with the days used); a dash means "
+        "it expires within 10 days or has too little history on file."
+    )
+    years_on_file: dict[str, int] = {}
+    for commodity, trend, _ in rows:
+        if trend is not None and trend.seasonal is not None:
+            label = commodity["label"]
+            years_on_file[label] = max(years_on_file.get(label, 0), trend.seasonal.years)
+    thin = [f"{label} ({n})" for label, n in years_on_file.items() if n < trend_board.SEASONAL_YEARS]
+    if thin:
+        st.caption(
+            f"Fewer than {trend_board.SEASONAL_YEARS} years of settlements are on file for "
+            + ", ".join(thin) + ", so their seasonal rests on the years shown."
+        )
+    for commodity, trend, error in rows:
+        if trend is None:
+            st.warning(f"{commodity['label']}: {error}")
+
+
 def main():
     col_logo, col_title = st.columns([1, 6], vertical_alignment="center")
     with col_logo:
@@ -1422,7 +1825,7 @@ def main():
     anthropic_key = get_anthropic_key()
 
     tab_labels = [c["label"] for c in COMMODITIES] + [
-        "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
+        "Trends", "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
     ]
     tabs = st.tabs(tab_labels, on_change="rerun")
     for tab, commodity in zip(tabs, COMMODITIES):
@@ -1430,6 +1833,9 @@ def main():
             if tab.open:
                 st.caption(commodity["sublabel"])
                 render_commodity(commodity, api_key, as_of, report_dates_visible)
+    with tabs[-5]:
+        if tabs[-5].open:
+            render_trends(api_key, as_of)
     with tabs[-4]:
         if tabs[-4].open:
             render_cross_commodity_spread(api_key, as_of, report_dates_visible)

@@ -1,17 +1,19 @@
 {
  "branch": "master",
- "commit": "bebcee6beb94db190d4be4bbc535e706208931ac",
+ "commit": "ee20583e117d3da0c25a439b4e77b00a6afd911d",
  "files": {
   "ai_chat.py": "ce709346974c7de8b116e5b7cf707cbd56f5043c9fb1cda5cd36e09b8e171957",
-  "app.py": "4a6cb610e4e96880140ce80ec9b560f64ecb4a244815cc4b2552a9a2324b966b",
+  "app.py": "962e595ae8a41a27015b580dc53ac86c47ea9a39dd88b2df5c3e2fe40d15fd70",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "data/High Low Model.xlsx": "8e7996dc969d8e0495da9ed667bb68c109e9503ace5616c7227916f147dd3c73",
   "hl_model.py": "6c99f5f5b7d70167a1d18e829ce77e6c8443762312f7450981ac30c21e50b873",
   "legacy_futures_history.csv": "b9edcebe4aa92440a60925794563f50362c2c3558ccda0cbbf23108ef299b55e",
   "legacy_history.py": "c678ec9c6d122eb82ddf962296e1245a992693f9005fef911c5a8ea9cfac2107",
-  "massive_api.py": "c0ab8691d5e1e58f5e0e7fdce80cfc946cae54622dc2e08e10ccfa551a4548b8",
-  "report_dates.py": "d434c81f00062d5a4df9886f02c00e6029fd9404fd4cee051d6e899c9c5cbeb3"
+  "massive_api.py": "6c7f42a38111a2345aa8b46967c6a2fa83566975e22121f44c4353d1cde4978a",
+  "report_dates.py": "d434c81f00062d5a4df9886f02c00e6029fd9404fd4cee051d6e899c9c5cbeb3",
+  "stocks_use.py": "5f6f96f3a9af81fdfcd1bc59ab6443f702d1c9644db7b39a9b803cbc3f4e172a",
+  "trend_board.py": "58dff29a31716207df3cc3f0745821f0d47643073936f279b2a38be214bd8bee"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/grain-seasonal-dashboard",
