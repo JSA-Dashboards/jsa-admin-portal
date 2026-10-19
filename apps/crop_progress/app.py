@@ -286,29 +286,54 @@ def select(df: pd.DataFrame, meta: dict, stage: str) -> pd.DataFrame:
     return d
 
 
-def weekly_matrix(d: pd.DataFrame) -> pd.DataFrame:
-    """(state, crop_year) x week, interpolated between reports and carried forward after the last."""
-    p = d.pivot_table(index=["state", "crop_year"], columns="week", values="value", aggfunc="last")
-    p = p.reindex(columns=range(1, 54))
-    p = p.interpolate(axis=1, limit_area="inside")
-    return p.ffill(axis=1)
+def _back(ts: pd.Timestamp, years: int) -> pd.Timestamp:
+    """Same month/day `years` earlier (Feb 29 -> Feb 28)."""
+    try:
+        return ts.replace(year=ts.year - years)
+    except ValueError:
+        return ts.replace(year=ts.year - years, day=28)
 
 
-def five_year_avg(p: pd.DataFrame, year: int, week: int) -> pd.Series:
-    prior = p[p.index.get_level_values("crop_year").isin(range(year - 5, year))][week].dropna()
-    g = prior.groupby(level="state")
-    return g.mean().where(g.count() >= 3)
+def build_series(d: pd.DataFrame) -> dict:
+    """(state, crop_year) -> (week-ending ordinals, values), for date-aligned lookups."""
+    out = {}
+    for key, g in d.dropna(subset=["week_ending"]).sort_values("week_ending").groupby(["state", "crop_year"]):
+        out[key] = (g["week_ending"].map(pd.Timestamp.toordinal).to_numpy(),
+                    g["value"].to_numpy(float))
+    return out
 
 
-def comparison_table(p: pd.DataFrame, year: int, week: int) -> pd.DataFrame:
-    def col(y, w):
-        try:
-            return p.xs(y, level="crop_year")[w]
-        except KeyError:
-            return pd.Series(dtype=float)
-    out = pd.DataFrame({"TW": col(year, week), "LW": col(year, week - 1),
-                        "LY": col(year - 1, week), "5YA": five_year_avg(p, year, week)})
-    out = out.dropna(subset=["TW"])
+def aligned(series: dict, state: str, crop_year: int, ts: pd.Timestamp) -> float:
+    """One season's value on calendar date ts, interpolated between its weekly reports.
+
+    NASS "week numbers" land on different dates each year (week 42 ended Oct 18 in 2026 but
+    Oct 24 in 2021), so comparing by week number overstates progress. NASS's own prior-year and
+    5-year-average columns line up by date, and so does this. Before a season's first report
+    there is no value; after its last report the finished value is held (only if it got to 90%+).
+    """
+    s_ = series.get((state, crop_year))
+    if s_ is None:
+        return np.nan
+    x, y = s_
+    o = ts.toordinal()
+    if o < x[0]:
+        return np.nan
+    if o > x[-1]:
+        return float(y[-1]) if y[-1] >= 90 else np.nan
+    return float(np.interp(o, x, y))
+
+
+def comparison_table(d: pd.DataFrame, series: dict, year: int, week: int, ts: pd.Timestamp) -> pd.DataFrame:
+    cur = d[(d["crop_year"] == year) & (d["week"] == week)].set_index("state")["value"]
+    rows = {}
+    for st_, tw in cur.items():
+        five = [aligned(series, st_, y, _back(ts, year - y)) for y in range(year - 5, year)]
+        five = [v for v in five if not np.isnan(v)]
+        rows[st_] = dict(TW=tw,
+                         LW=aligned(series, st_, year, ts - pd.Timedelta(days=7)),
+                         LY=aligned(series, st_, year - 1, _back(ts, 1)),
+                         **{"5YA": float(np.mean(five)) if len(five) >= 3 else np.nan})
+    out = pd.DataFrame.from_dict(rows, orient="index", columns=["TW", "LW", "LY", "5YA"])
     out["ΔLW"], out["ΔLY"], out["Δ5YA"] = out.TW - out.LW, out.TW - out.LY, out.TW - out["5YA"]
     return out
 
@@ -352,7 +377,7 @@ newest = max(reversed(stages), key=lambda x: select(raw, meta, x)["week_ending"]
 stage = f[1].selectbox("Crop stage", stages, index=stages.index(newest),
                        format_func=str.title, key=f"stage_{commodity}")
 d = select(raw, meta, stage)
-P = weekly_matrix(d)
+series = build_series(d)
 
 years = sorted(d["crop_year"].unique(), reverse=True)
 map_year = f[2].selectbox("Marketing year", years, format_func=year_label,
@@ -377,7 +402,8 @@ chart_state = g[1].selectbox("State for line chart", state_opts,
                              key=f"cstate_{commodity}_{stage}")
 show_5ya = g[2].toggle("Show 5-year average", value=True)
 
-table = comparison_table(P, map_year, week)
+ref_ts = we[week]
+table = comparison_table(d, series, map_year, week, ref_ts)
 
 latest = d["week_ending"].max()
 st.markdown(f'<div class="asof">Updated <b>{latest:%B %d, %Y}</b> &middot; USDA NASS Crop Progress, '
@@ -395,7 +421,7 @@ if "US" in table.index:
         return "—" if pd.isna(v) else f"{v:.0f}%"
     k[0].markdown(tile(f"{commodity} {stage.lower()} — week #{week}", pct(u.TW), delta(u.ΔLW),
                        "change vs last week"), unsafe_allow_html=True)
-    k[1].markdown(tile("Last year (same week)", pct(u.LY), delta(u.ΔLY), "this week minus last year"),
+    k[1].markdown(tile("Last year (same date)", pct(u.LY), delta(u.ΔLY), "this week minus last year"),
                   unsafe_allow_html=True)
     k[2].markdown(tile("5-year average", pct(u["5YA"]), delta(u.Δ5YA), "this week minus 5-yr avg"),
                   unsafe_allow_html=True)
@@ -468,22 +494,30 @@ for i, y in enumerate(sorted(chart_years)):
                              hovertemplate="Week %{x}: %{y:.0f}%<extra>" + year_label(y) + "</extra>"))
 if show_5ya and chart_years:
     ref = max(chart_years)
-    if chart_state in P.index.get_level_values("state"):
-        pm = P.xs(chart_state, level="state")
-        orig = d[d["state"] == chart_state]
-        hist = pm[pm.index.isin(range(ref - 10, ref))]          # prior 10 seasons
-        n_rep = orig[orig["crop_year"].isin(range(ref - 10, ref))].groupby("week").size()
-        wks = [w for w in hist.columns if n_rep.get(w, 0) >= 5]  # weeks most seasons reported
-        mean10, sd10 = hist[wks].mean(), hist[wks].std(ddof=1)
+    ref_rows = d[(d["crop_year"] == ref) & d["week_ending"].notna()]
+    hist_rows = sub[sub["crop_year"].isin(range(ref - 10, ref))]
+    if not ref_rows.empty and not hist_rows.empty:
+        anchor = ref_rows.iloc[0]                      # week number -> that week's date this season
+        date_of = lambda w: anchor["week_ending"] + pd.Timedelta(days=7 * (int(w) - int(anchor["week"])))
+        wks = list(range(int(hist_rows["week"].min()), int(hist_rows["week"].max()) + 1))
+        m10, sd10, wk10, a5, wk5 = [], [], [], [], []
+        for w in wks:
+            ts_w = date_of(w)
+            v10 = [aligned(series, chart_state, y, _back(ts_w, ref - y)) for y in range(ref - 10, ref)]
+            v10 = [v for v in v10 if not np.isnan(v)]
+            if len(v10) >= 5:
+                wk10.append(w); m10.append(np.mean(v10)); sd10.append(np.std(v10, ddof=1))
+                v5 = [aligned(series, chart_state, y, _back(ts_w, ref - y)) for y in range(ref - 5, ref)]
+                v5 = [v for v in v5 if not np.isnan(v)]
+                if len(v5) >= 3:
+                    wk5.append(w); a5.append(np.mean(v5))
+        mean10, sd10 = np.array(m10), np.array(sd10)
         for k, name, fill in ((2, "±2 SD", "rgba(94,113,100,0.14)"), (1, "±1 SD", "rgba(94,113,100,0.28)")):
-            hi, lo = (mean10 + k * sd10).clip(0, 100), (mean10 - k * sd10).clip(0, 100)
-            fig.add_trace(go.Scatter(x=wks + wks[::-1], y=list(hi) + list(lo)[::-1], fill="toself",
+            hi, lo = np.clip(mean10 + k * sd10, 0, 100), np.clip(mean10 - k * sd10, 0, 100)
+            fig.add_trace(go.Scatter(x=wk10 + wk10[::-1], y=list(hi) + list(lo)[::-1], fill="toself",
                                      fillcolor=fill, line=dict(width=0), name=f"{name} (10-yr)",
                                      hoverinfo="skip", legendgroup=name))
-        h5 = pm[pm.index.isin(range(ref - 5, ref))]
-        wk5 = [w for w in h5.columns if n_rep.get(w, 0) >= 5]
-        avg = h5[wk5].mean().where(h5[wk5].count() >= 3).dropna()
-        fig.add_trace(go.Scatter(x=avg.index, y=avg.values, mode="lines", name="5-year average",
+        fig.add_trace(go.Scatter(x=wk5, y=a5, mode="lines", name="5-year average",
                                  line=dict(color=DM_TEXT, width=2, dash="dash"),
                                  hovertemplate="Week %{x}: %{y:.0f}%<extra>5-yr avg</extra>"))
 add_watermark(fig)
@@ -537,5 +571,5 @@ else:
     st.caption("No NASS acreage estimate is cached for this commodity yet, so share and acres left are blank.")
 
 st.caption("Source: USDA NASS Crop Progress (weekly, Mondays 4 pm ET) via the JSA NASS cache. "
-           "LY and 5YA compare the same calendar week; the 5-year average needs at least 3 prior "
+           "LY and 5YA are lined up by calendar date (interpolated between weekly reports), not week number; the 5-year average needs at least 3 prior "
            f"years. Cache last refreshed: {cache_freshness() or 'unknown'}.")
