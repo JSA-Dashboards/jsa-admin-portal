@@ -91,6 +91,37 @@ def read_archive() -> pd.DataFrame:
     return frame
 
 
+SETTLEMENTS_TABLE = "FUTURES_SETTLEMENTS"   # banked daily by settlement_archive.py
+
+
+def read_settlements(product_codes: list[str], first_year: int) -> pd.DataFrame:
+    """Banked daily settlements as product_code / month / year / date / price, for the given
+    markets and contract years from `first_year` on. Same shape as read_archive()."""
+    marks = ", ".join(["%s"] * len(product_codes))
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                f"SELECT PRODUCT_CODE, MONTH, YEAR, DATE, SETTLE "
+                f"FROM {SCHEMA}.{SETTLEMENTS_TABLE} "
+                f"WHERE PRODUCT_CODE IN ({marks}) AND YEAR >= %s "
+                f"ORDER BY PRODUCT_CODE, YEAR, MONTH, DATE",
+                (*product_codes, int(first_year)),
+            )
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+
+    frame = pd.DataFrame(rows, columns=["product_code", "month", "year", "date", "price"])
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame["year"] = frame["year"].astype(int)
+    frame["price"] = frame["price"].astype(float)
+    return frame
+
+
 # ── USDA AMS ethanol prices (refreshed by .github/workflows/refresh-ams.yml) ──────────
 
 AMS_COLUMNS = ["date", "commodity", "state", "variety", "trans_mode",
