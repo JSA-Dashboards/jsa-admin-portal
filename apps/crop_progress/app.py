@@ -182,6 +182,24 @@ def comparison_table(p: pd.DataFrame, year: int, week: int) -> pd.DataFrame:
     return out
 
 
+# Approximate state label positions (lon, lat) for the map's data labels.
+STATE_XY = {
+    "AL": (-86.8, 32.8), "AZ": (-111.7, 34.2), "AR": (-92.4, 34.9), "CA": (-119.6, 37.2),
+    "CO": (-105.5, 39.0), "CT": (-72.7, 41.6), "DE": (-75.5, 39.0), "FL": (-81.7, 28.6),
+    "GA": (-83.4, 32.7), "ID": (-114.6, 44.4), "IL": (-89.2, 40.0), "IN": (-86.3, 39.9),
+    "IA": (-93.5, 42.0), "KS": (-98.4, 38.5), "KY": (-85.3, 37.5), "LA": (-92.0, 31.0),
+    "ME": (-69.2, 45.3), "MD": (-76.8, 39.0), "MA": (-72.1, 42.3), "MI": (-84.6, 43.9),
+    "MN": (-94.3, 46.3), "MS": (-89.7, 32.7), "MO": (-92.5, 38.4), "MT": (-109.6, 47.0),
+    "NE": (-99.8, 41.5), "NH": (-71.6, 43.7), "NJ": (-74.5, 40.1), "NM": (-106.1, 34.4),
+    "NY": (-75.5, 42.9), "NC": (-79.4, 35.5), "ND": (-100.5, 47.5), "OH": (-82.8, 40.3),
+    "OK": (-97.5, 35.6), "OR": (-120.6, 44.0), "PA": (-77.8, 40.9), "RI": (-71.5, 41.7),
+    "SC": (-80.9, 33.9), "SD": (-100.2, 44.4), "TN": (-86.3, 35.8), "TX": (-99.3, 31.5),
+    "UT": (-111.7, 39.3), "VT": (-72.7, 44.0), "VA": (-78.8, 37.5), "WA": (-120.5, 47.4),
+    "WV": (-80.6, 38.6), "WI": (-89.9, 44.6), "WY": (-107.5, 43.0),
+}
+SMALL_STATES = {"CT", "DE", "MA", "MD", "NH", "NJ", "RI", "VT"}
+
+
 # ---------------------------------------------------------------------------
 # Header + selectors
 # ---------------------------------------------------------------------------
@@ -191,120 +209,115 @@ if logo.exists():
     c_logo.image(str(logo), width=150)
 c_title.title("Crop Progress Dashboard")
 
-commodity = st.session_state.get("commodity", "Corn")
-left, right = st.columns([1, 4], gap="large")
+# ---- filters: one row along the top ----
+f = st.columns([1.1, 1.1, 1, 1.3, 1.2])
+commodity = f[0].selectbox("Commodity", list(COMMODITIES), key="commodity")
+meta = COMMODITIES[commodity]
+try:
+    raw = load_progress(meta["desc"])
+except Exception as e:  # noqa: BLE001
+    st.error(f"Could not read the NASS cache: {e}")
+    st.stop()
+if raw.empty:
+    st.warning("No cached crop progress rows for this commodity yet.")
+    st.stop()
 
-with left:
-    commodity = st.selectbox("Commodity", list(COMMODITIES), key="commodity")
-    meta = COMMODITIES[commodity]
-    try:
-        raw = load_progress(meta["desc"])
-    except Exception as e:  # noqa: BLE001
-        st.error(f"Could not read the NASS cache: {e}")
-        st.stop()
-    if raw.empty:
-        st.warning("No cached crop progress rows for this commodity yet.")
-        st.stop()
+stages = [s for s in meta["stages"] if not select(raw, meta, s).empty]
+newest = max(reversed(stages), key=lambda x: select(raw, meta, x)["week_ending"].max())
+stage = f[1].selectbox("Crop stage", stages, index=stages.index(newest),
+                       format_func=str.title, key=f"stage_{commodity}")
+d = select(raw, meta, stage)
+P = weekly_matrix(d)
 
-    stages = [s for s in meta["stages"] if not select(raw, meta, s).empty]
-    newest = max(reversed(stages), key=lambda x: select(raw, meta, x)["week_ending"].max())
-    stage = st.selectbox("Crop stage", stages, index=stages.index(newest),
-                         format_func=str.title, key=f"stage_{commodity}")
-    d = select(raw, meta, stage)
-    P = weekly_matrix(d)
+years = sorted(d["crop_year"].unique(), reverse=True)
+map_year = f[2].selectbox("Marketing year", years, format_func=year_label,
+                          key=f"myear_{commodity}_{stage}")
+wk_opts = sorted(d.loc[d["crop_year"] == map_year, "week"].unique())
+we = d[(d["crop_year"] == map_year)].groupby("week")["week_ending"].max()
+week = f[3].selectbox("Calendar week", wk_opts, index=len(wk_opts) - 1,
+                      format_func=lambda w: f"Week #{w}" + (
+                          f" (w/e {we[w]:%b %d})" if w in we.index and pd.notna(we[w]) else ""),
+                      key=f"week_{commodity}_{stage}_{map_year}")
+metric = f[4].selectbox("Map selection", ["TW (this week)", "LW (last week)", "LY (last year)",
+                                          "5YA (5-year avg)", "ΔLW", "ΔLY", "Δ5YA"],
+                        key="map_metric")
 
-    years = sorted(d["crop_year"].unique(), reverse=True)
-    map_year = st.selectbox("Marketing year for map", years, format_func=year_label,
-                            key=f"myear_{commodity}_{stage}")
-    wk_opts = sorted(d.loc[d["crop_year"] == map_year, "week"].unique())
-    # Week labels: the week-ending date from the US row when we have it
-    we = d[(d["crop_year"] == map_year)].groupby("week")["week_ending"].max()
-    week = st.selectbox("Calendar week", wk_opts, index=len(wk_opts) - 1,
-                        format_func=lambda w: f"Week #{w}" + (
-                            f" (w/e {we[w]:%b %d})" if w in we.index and pd.notna(we[w]) else ""),
-                        key=f"week_{commodity}_{stage}_{map_year}")
-    metric = st.selectbox("Map selection", ["TW (this week)", "LW (last week)", "LY (last year)",
-                                            "5YA (5-year avg)", "ΔLW", "ΔLY", "Δ5YA"],
-                          key="map_metric")
-    chart_years = st.multiselect("Marketing year(s) for line chart", years,
-                                 default=years[:2], format_func=year_label,
-                                 key=f"cyears_{commodity}_{stage}")
-    state_opts = ["US"] + sorted(s for s in d["state"].unique() if s != "US")
-    chart_state = st.selectbox("State for line chart", state_opts,
-                               format_func=lambda s: "US total" if s == "US" else STATES.get(s, s),
-                               key=f"cstate_{commodity}_{stage}")
-    show_5ya = st.toggle("Show 5-year average", value=True)
+g = st.columns([2, 1.2, 1], vertical_alignment="bottom")
+chart_years = g[0].multiselect("Marketing year(s) for line chart", years,
+                               default=years[:2], format_func=year_label,
+                               key=f"cyears_{commodity}_{stage}")
+state_opts = ["US"] + sorted(s for s in d["state"].unique() if s != "US")
+chart_state = g[1].selectbox("State for line chart", state_opts,
+                             format_func=lambda s: "US total" if s == "US" else STATES.get(s, s),
+                             key=f"cstate_{commodity}_{stage}")
+show_5ya = g[2].toggle("Show 5-year average", value=True)
 
 table = comparison_table(P, map_year, week)
 
-with right:
-    latest = d["week_ending"].max()
-    st.caption(f"Updated {latest:%B %d, %Y}  ·  USDA NASS Crop Progress, "
-               f"{commodity.lower()} {stage.lower()} (% of acreage)")
+latest = d["week_ending"].max()
+st.caption(f"Updated {latest:%B %d, %Y}  ·  USDA NASS Crop Progress, "
+           f"{commodity.lower()} {stage.lower()} (% of acreage)")
 
-    # KPI cards for the US row
-    if "US" in table.index:
-        u = table.loc["US"]
-        k = st.columns(4)
+# ---- KPI cards for the US row ----
+if "US" in table.index:
+    u = table.loc["US"]
+    k = st.columns(4)
 
-        def delta(v):
-            return None if pd.isna(v) else f"{v:+.0f} pts"
-        k[0].metric(f"{commodity} {stage.lower()} — week #{week}", f"{u.TW:.0f}%", delta(u.ΔLW))
-        k[1].metric("vs last year", "—" if pd.isna(u.LY) else f"{u.LY:.0f}%", delta(u.ΔLY),
-                    help="Last year's value for the same calendar week; delta is this week minus it.")
-        k[2].metric("vs 5-year avg", "—" if pd.isna(u["5YA"]) else f"{u['5YA']:.0f}%",
-                    delta(u.Δ5YA))
-        k[3].metric("Last week", "—" if pd.isna(u.LW) else f"{u.LW:.0f}%")
-    else:
-        st.info("No US total reported for this week.")
+    def delta(v):
+        return None if pd.isna(v) else f"{v:+.0f} pts"
+    k[0].metric(f"{commodity} {stage.lower()} — week #{week}", f"{u.TW:.0f}%", delta(u.ΔLW))
+    k[1].metric("vs last year", "—" if pd.isna(u.LY) else f"{u.LY:.0f}%", delta(u.ΔLY),
+                help="Last year's value for the same calendar week; delta is this week minus it.")
+    k[2].metric("vs 5-year avg", "—" if pd.isna(u["5YA"]) else f"{u['5YA']:.0f}%", delta(u.Δ5YA))
+    k[3].metric("Last week", "—" if pd.isna(u.LW) else f"{u.LW:.0f}%")
+else:
+    st.info("No US total reported for this week.")
 
-    mcol, tcol = st.columns([5, 4], gap="medium")
+# ---- full-width map with data labels ----
+key = metric.split(" ")[0]
+is_delta = key.startswith("Δ")
+st_rows = table.drop(index="US", errors="ignore")
+vals = st_rows[key]
+if is_delta:
+    lim = float(min(40, max(15, np.nanmax(np.abs(vals.values)) if len(vals) else 15)))
+    zmin, zmax = -lim, lim
+    scale = [[0, "#c0392b"], [0.5, "#f4f4f4"], [1, "#04477a"]]
+else:
+    zmin, zmax = 0, 100
+    scale = [[0, "#e8f3fc"], [1, "#04477a"]]
 
-    # ---- map ----
-    key = metric.split(" ")[0]
-    is_delta = key.startswith("Δ")
-    st_rows = table.drop(index="US", errors="ignore")
-    with mcol, st.container(border=True):
-        fig = go.Figure(go.Choropleth(
-            locations=st_rows.index, z=st_rows[key], locationmode="USA-states",
-            text=[STATES.get(s, s) for s in st_rows.index],
-            colorscale=[[0, "#ef4444"], [0.5, "#f5f5f5"], [1, BLUE]] if is_delta
-            else [[0, "#eef6fd"], [1, BLUE]],
-            zmid=0 if is_delta else None,
-            zmin=None if is_delta else 0, zmax=None if is_delta else 100,
-            marker_line_color="white", colorbar=dict(title="pts" if is_delta else "%", thickness=12),
-            hovertemplate="%{text}: %{z:.0f}<extra></extra>"))
-        fig.update_geos(scope="usa", showlakes=False, bgcolor="rgba(0,0,0,0)")
-        fig.update_layout(height=380, margin=dict(l=0, r=0, t=28, b=0),
-                          title=dict(text=f"{commodity} {stage.lower()} — {metric}, week #{week}",
-                                     font=dict(size=14)))
-        st.plotly_chart(fig, width="stretch")
 
-    # ---- table ----
-    with tcol:
-        disp = table.copy()
-        disp.index = ["US TOTAL" if s == "US" else s for s in disp.index]
-        disp = disp.sort_index(key=lambda ix: ix.map(lambda s: (s != "US TOTAL", s)))
-        disp.index.name = "STATE"
-        def _blend(v, vmin, vmax, lo, hi):
-            if pd.isna(v):
-                return ""
-            t = min(max((v - vmin) / (vmax - vmin), 0), 1)
-            r, g, b = (int(lo[i] + (hi[i] - lo[i]) * t) for i in range(3))
-            return f"background-color: rgb({r},{g},{b}); color: {DARK}"
+def _dark_fill(v):
+    return (abs(v) > 0.5 * zmax) if is_delta else (v >= 55)
 
-        def _delta_css(v):  # red (behind) -> white -> blue (ahead)
-            if pd.isna(v):
-                return ""
-            return (_blend(v, -30, 0, (239, 120, 120), (255, 255, 255)) if v < 0
-                    else _blend(v, 0, 30, (255, 255, 255), (110, 180, 235)))
 
-        styled = (disp.style.format("{:.0f}", na_rep="–")
-                  .format("{:+.0f}", subset=["ΔLW", "ΔLY", "Δ5YA"], na_rep="–")
-                  .map(_delta_css, subset=["ΔLW", "ΔLY", "Δ5YA"])
-                  .map(lambda v: _blend(v, 0, 100, (255, 255, 255), (190, 224, 247)),
-                       subset=["TW", "LW", "LY", "5YA"]))
-        st.dataframe(styled, height=420, width="stretch")
+lab = st_rows[st_rows.index.isin(STATE_XY)].dropna(subset=[key])
+
+
+def fmt(v):
+    return f"{v:+.0f}" if is_delta else f"{v:.0f}"
+
+
+with st.container(border=True):
+    fig = go.Figure(go.Choropleth(
+        locations=vals.index, z=vals, locationmode="USA-states",
+        text=[STATES.get(s, s) for s in vals.index],
+        colorscale=scale, zmin=zmin, zmax=zmax,
+        marker_line_color="#32373c", marker_line_width=1.1,
+        colorbar=dict(title="pts" if is_delta else "%", thickness=16, len=0.8),
+        hovertemplate="%{text}: %{z:.0f}<extra></extra>"))
+    fig.add_trace(go.Scattergeo(
+        lon=[STATE_XY[s][0] for s in lab.index], lat=[STATE_XY[s][1] for s in lab.index],
+        mode="text", hoverinfo="skip", showlegend=False,
+        text=[f"<b>{s}</b><br>{fmt(v)}" if s not in SMALL_STATES else f"<b>{fmt(v)}</b>"
+              for s, v in lab[key].items()],
+        textfont=dict(size=[9 if s in SMALL_STATES else 12 for s in lab.index],
+                      color=["white" if _dark_fill(v) else DARK for v in lab[key]])))
+    fig.update_geos(scope="usa", showlakes=False, bgcolor="rgba(0,0,0,0)")
+    fig.update_layout(dragmode=False, height=620, margin=dict(l=0, r=0, t=36, b=0),
+                      title=dict(text=f"{commodity} {stage.lower()} — {metric}, week #{week}",
+                                 font=dict(size=16)))
+    st.plotly_chart(fig, width="stretch", config={"scrollZoom": False, "displayModeBar": False})
 
 # ---------------------------------------------------------------------------
 # Seasonal line chart
@@ -336,6 +349,34 @@ fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10), template="plo
                   hovermode="x unified")
 with st.container(border=True):
     st.plotly_chart(fig, width="stretch")
+
+# ---------------------------------------------------------------------------
+# State table
+# ---------------------------------------------------------------------------
+st.subheader(f"State detail — week #{week}")
+disp = table.copy()
+disp.index = ["US TOTAL" if s == "US" else s for s in disp.index]
+disp = disp.sort_index(key=lambda ix: ix.map(lambda s: (s != "US TOTAL", s)))
+disp.index.name = "STATE"
+def _blend(v, vmin, vmax, lo, hi):
+    if pd.isna(v):
+        return ""
+    t = min(max((v - vmin) / (vmax - vmin), 0), 1)
+    r, g, b = (int(lo[i] + (hi[i] - lo[i]) * t) for i in range(3))
+    return f"background-color: rgb({r},{g},{b}); color: {DARK}"
+
+def _delta_css(v):  # red (behind) -> white -> blue (ahead)
+    if pd.isna(v):
+        return ""
+    return (_blend(v, -30, 0, (239, 120, 120), (255, 255, 255)) if v < 0
+            else _blend(v, 0, 30, (255, 255, 255), (110, 180, 235)))
+
+styled = (disp.style.format("{:.0f}", na_rep="–")
+          .format("{:+.0f}", subset=["ΔLW", "ΔLY", "Δ5YA"], na_rep="–")
+          .map(_delta_css, subset=["ΔLW", "ΔLY", "Δ5YA"])
+          .map(lambda v: _blend(v, 0, 100, (255, 255, 255), (190, 224, 247)),
+               subset=["TW", "LW", "LY", "5YA"]))
+st.dataframe(styled, height=560, width="stretch")
 
 st.caption("Source: USDA NASS Crop Progress (weekly, Mondays 4 pm ET) via the JSA NASS cache. "
            "LY and 5YA compare the same calendar week; the 5-year average needs at least 3 prior "
