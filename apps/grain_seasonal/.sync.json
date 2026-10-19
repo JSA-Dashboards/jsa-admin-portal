@@ -1,9 +1,9 @@
 {
  "branch": "master",
- "commit": "ee20583e117d3da0c25a439b4e77b00a6afd911d",
+ "commit": "987d24fd4ddeaac8972cb69417907061692d9461",
  "files": {
   "ai_chat.py": "ce709346974c7de8b116e5b7cf707cbd56f5043c9fb1cda5cd36e09b8e171957",
-  "app.py": "962e595ae8a41a27015b580dc53ac86c47ea9a39dd88b2df5c3e2fe40d15fd70",
+  "app.py": "507c1cce3ac8199d14089bf5bce09d9f67beb99ec383d7d17ad2bc1366e33acc",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "data/High Low Model.xlsx": "8e7996dc969d8e0495da9ed667bb68c109e9503ace5616c7227916f147dd3c73",

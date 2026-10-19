@@ -1824,18 +1824,21 @@ def main():
     )
     anthropic_key = get_anthropic_key()
 
-    tab_labels = [c["label"] for c in COMMODITIES] + [
-        "Trends", "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
+    tab_labels = ["Trends"] + [c["label"] for c in COMMODITIES] + [
+        "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
     ]
+    # Trends leads, so it is also the tab the app opens on. Don't pass st.tabs(default=) to keep
+    # Corn as the landing tab: with the lazy .open logic below, Streamlit 1.56 highlights the
+    # first tab in the browser but renders the default one, leaving a blank page.
     tabs = st.tabs(tab_labels, on_change="rerun")
-    for tab, commodity in zip(tabs, COMMODITIES):
+    with tabs[0]:
+        if tabs[0].open:
+            render_trends(api_key, as_of)
+    for tab, commodity in zip(tabs[1:], COMMODITIES):
         with tab:
             if tab.open:
                 st.caption(commodity["sublabel"])
                 render_commodity(commodity, api_key, as_of, report_dates_visible)
-    with tabs[-5]:
-        if tabs[-5].open:
-            render_trends(api_key, as_of)
     with tabs[-4]:
         if tabs[-4].open:
             render_cross_commodity_spread(api_key, as_of, report_dates_visible)
