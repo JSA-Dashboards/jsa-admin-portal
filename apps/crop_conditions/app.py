@@ -65,7 +65,7 @@ body{{background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe
   color:#32373c;font-size:12px;font-weight:500;
   cursor:pointer;transition:all .15s;white-space:nowrap;line-height:1.5
 }}
-.btn:hover{{border-color:#0693e3;color:#0693e3;background:#edf6fe}}
+.btn:hover{{border-color:#5e7164;color:#5e7164;background:#f0f5f1}}
 .btn.ok{{border-color:#16a34a;color:#16a34a;background:#f0fdf4}}
 .btn.err{{border-color:#dc2626;color:#dc2626;background:#fef2f2}}
 </style>
@@ -164,17 +164,17 @@ PSD_SEP1_MAP = {
 }
 
 JPSI_DARK       = "#32373c"
-JPSI_BLUE       = "#16a34a"   # JSA green — darkened for light-mode contrast
+JPSI_BLUE       = "#5e7164"   # sage green — matches COT dashboard JSA_GREEN
 JPSI_WHITE      = "#ffffff"
-JPSI_LIGHT_GRAY = "#f4f5f7"
+JPSI_LIGHT_GRAY = "#f4f5f4"
 
-# Light-mode palette
-DM_BG      = "#f8fafb"   # page background
+# Light-mode sage palette (mirrors CFTC COT dashboard)
+DM_BG      = "#f6f8f7"   # page background
 DM_SURFACE = "#ffffff"   # cards, sidebar, table rows
-DM_SURFACE2= "#f2f5f7"   # slightly off-white — chart bg
-DM_BORDER  = "#dde2e6"   # borders / dividers
-DM_TEXT    = "#1e2533"   # primary text
-DM_MUTED   = "#5a6878"   # secondary / caption text
+DM_SURFACE2= "#eef1ee"   # chart plot area (slight sage tint)
+DM_BORDER  = "#d7e2dc"   # borders / dividers
+DM_TEXT    = "#32373c"   # primary text
+DM_MUTED   = "#5f7267"   # secondary / caption text
 DM_LAND    = "#e4eae4"   # map land colour (non-wheat states)
 
 CONDITIONS = ["VERY POOR", "POOR", "FAIR", "GOOD", "EXCELLENT"]
@@ -5019,12 +5019,19 @@ except TypeError:  # older Streamlit without st.html JS support
 
 st.markdown(f"""
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600&family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
+
   /* ── App background ── */
   .stApp, .main, [data-testid="stAppViewContainer"] {{
     background-color: {DM_BG} !important;
   }}
   /* Catch all inner blocks */
-  .block-container {{ background-color: {DM_BG} !important; }}
+  .block-container {{ background-color: {DM_BG} !important; max-width: 1400px; }}
+
+  /* ── Base typography ── */
+  html, body, .stApp, [data-testid="stAppViewContainer"] {{
+    font-family: 'Source Sans 3', 'Source Sans Pro', sans-serif !important;
+  }}
 
   /* ── Sidebar ── */
   [data-testid="stSidebar"] {{
@@ -5067,10 +5074,11 @@ st.markdown(f"""
   .dash-header-logo img {{ height: 56px; display: block; }}
   .dash-header-text {{ flex: 1; text-align: center; }}
   .dash-header-text h1 {{
+    font-family: 'EB Garamond', Georgia, serif !important;
     color: {DM_TEXT} !important;
     margin: 0;
     font-size: 1.65rem;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: -0.01em;
   }}
   .dash-header-text p {{
@@ -5085,51 +5093,54 @@ st.markdown(f"""
     background-color: transparent !important;
   }}
 
-  /* ── KPI cards ── */
+  /* ── KPI cards — COT tile style ── */
   .kpi-card {{
     background: {DM_SURFACE} !important;
-    border-radius: 8px;
-    padding: 20px 16px 14px 16px;
+    border: 1px solid {DM_BORDER};
+    border-top: 3px solid {JPSI_BLUE};
+    border-radius: 10px;
+    padding: 16px 20px 14px 20px;
     text-align: center;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    border-top: 4px solid {JPSI_BLUE};
   }}
-  .kpi-main  {{ font-size: 2rem; font-weight: 700; color: {DM_TEXT} !important; line-height: 1.1; }}
-  .kpi-label {{ font-size: 0.72rem; color: {DM_MUTED} !important; text-transform: uppercase; letter-spacing: .06em; margin-top: 6px; }}
+  .kpi-main  {{ font-size: 1.85rem; font-weight: 700; color: {DM_TEXT} !important; line-height: 1.1; }}
+  .kpi-label {{ font-size: 0.68rem; color: {DM_MUTED} !important; text-transform: uppercase; letter-spacing: .09em; margin-top: 6px; }}
 
   /* HRW index cards — amber accent */
   .kpi-card-hrw {{
     background: {DM_SURFACE} !important;
-    border-radius: 8px;
-    padding: 20px 16px 14px 16px;
+    border: 1px solid {DM_BORDER};
+    border-top: 3px solid #d97706;
+    border-radius: 10px;
+    padding: 16px 20px 14px 20px;
     text-align: center;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    border-top: 4px solid #f59e0b;
   }}
-  /* SRW index cards — emerald accent */
+  /* SRW index cards — teal accent */
   .kpi-card-srw {{
     background: {DM_SURFACE} !important;
-    border-radius: 8px;
-    padding: 20px 16px 14px 16px;
+    border: 1px solid {DM_BORDER};
+    border-top: 3px solid #6fa8c4;
+    border-radius: 10px;
+    padding: 16px 20px 14px 20px;
     text-align: center;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    border-top: 4px solid #10b981;
   }}
-  /* White wheat index cards — indigo accent */
+  /* White wheat index cards — muted purple accent */
   .kpi-card-white {{
     background: {DM_SURFACE} !important;
-    border-radius: 8px;
-    padding: 20px 16px 14px 16px;
+    border: 1px solid {DM_BORDER};
+    border-top: 3px solid #9b89c4;
+    border-radius: 10px;
+    padding: 16px 20px 14px 20px;
     text-align: center;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    border-top: 4px solid #818cf8;
   }}
 
-  /* ── Section headers ── */
+  /* ── Section headers — small-caps bottom-border, matching COT style ── */
   .sec-hdr {{
-    font-size: 1.05rem; font-weight: 600; color: {DM_TEXT};
-    border-left: 4px solid {JPSI_BLUE};
-    padding-left: 10px;
+    font-family: 'Source Sans 3', 'Source Sans Pro', sans-serif;
+    font-size: 0.72rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: {DM_MUTED};
+    border-bottom: 1px solid {DM_BORDER};
+    padding-bottom: 5px;
     margin: 1.6rem 0 0.8rem 0;
   }}
 
@@ -5167,19 +5178,19 @@ st.markdown(f"""
   .filter-bar {{
     background: {DM_SURFACE};
     border: 1px solid {DM_BORDER};
-    border-top: 3px solid #0693e3;
+    border-top: 3px solid {JPSI_BLUE};
     border-radius: 8px;
     padding: 12px 20px 8px 20px;
     margin-bottom: 14px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    box-shadow: 0 1px 4px rgba(0,0,0,.05);
   }}
-  /* Bold blue labels */
+  /* Sage labels */
   .filter-bar label,
   .filter-bar .stSelectbox label,
   .filter-bar .stButton label {{
     font-size: 11px !important;
     font-weight: 700 !important;
-    color: #0693e3 !important;
+    color: {JPSI_BLUE} !important;
     text-transform: uppercase !important;
     letter-spacing: .07em !important;
     margin-bottom: 3px !important;
@@ -5196,8 +5207,8 @@ st.markdown(f"""
   }}
   .filter-bar .stSelectbox > div > div:focus-within,
   .filter-bar .stSelectbox > div > div:hover {{
-    border-color: #0693e3 !important;
-    box-shadow: 0 0 0 2px rgba(6,147,227,.15) !important;
+    border-color: {JPSI_BLUE} !important;
+    box-shadow: 0 0 0 2px rgba(94,113,100,.15) !important;
   }}
   /* Refresh button alignment */
   .filter-bar .stButton > button {{
@@ -5211,8 +5222,8 @@ st.markdown(f"""
     transition: border-color .15s, background .15s !important;
   }}
   .filter-bar .stButton > button:hover {{
-    border-color: #0693e3 !important;
-    background: #f0f8ff !important;
+    border-color: {JPSI_BLUE} !important;
+    background: {DM_SURFACE2} !important;
   }}
 </style>
 """, unsafe_allow_html=True)
