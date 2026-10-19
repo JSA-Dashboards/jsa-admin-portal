@@ -42,20 +42,6 @@ def _frame_to_series(df: pd.DataFrame) -> dict[tuple[str, str, int], pd.Series]:
     return out
 
 
-def load_settlement_bank(product_codes: list[str],
-                         first_year: int) -> dict[tuple[str, str, int], pd.Series]:
-    """Daily settlements banked in Snowflake since late 2021 (settlement_archive.py), for every
-    market, keyed like load_price_archive(): {(product_code, month_letter, contract_year): ...}.
-
-    Empty when Snowflake is switched off. When it is on but unreachable this raises, so a
-    caller that caches the result doesn't pin an outage for hours."""
-    import coc_snowflake_db as snowflake_db
-
-    if not snowflake_db.use_snowflake():
-        return {}
-    return _frame_to_series(snowflake_db.read_settlements(product_codes, first_year))
-
-
 def load_price_archive() -> dict[tuple[str, str, int], pd.Series]:
     """{(product_code, month_letter, year): Series(date -> price)}.
 

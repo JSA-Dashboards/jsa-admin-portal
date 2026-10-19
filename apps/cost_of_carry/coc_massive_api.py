@@ -150,13 +150,9 @@ def get_settlement_history(ticker: str, api_key: str) -> pd.Series:
     return pd.Series(rows).sort_index()
 
 
-def get_settlement_histories(tickers: list[str], api_key: str, max_workers: int = 8,
-                             retry_empty: bool = False) -> dict[str, pd.Series]:
+def get_settlement_histories(tickers: list[str], api_key: str, max_workers: int = 8) -> dict[str, pd.Series]:
     """Settlement history for several contracts at once. Fetched in parallel — each
-    call is ~5s of round trip, so a curve's worth in sequence is painfully slow.
-
-    A failed call comes back as an empty series, and callers cache that. `retry_empty`
-    asks once more for the empty ones, so a dropped request isn't read as "no history"."""
+    call is ~5s of round trip, so a curve's worth in sequence is painfully slow."""
     out: dict[str, pd.Series] = {}
     if not tickers:
         return out
@@ -168,38 +164,7 @@ def get_settlement_histories(tickers: list[str], api_key: str, max_workers: int 
                 out[ticker] = fut.result()
             except (MassiveApiError, requests.RequestException):
                 out[ticker] = pd.Series(dtype=float)
-    if retry_empty:
-        missing = [t for t in tickers if not len(out.get(t, ()))]
-        if missing:
-            again = get_settlement_histories(missing, api_key, max_workers=max_workers)
-            out.update({t: s for t, s in again.items() if len(s)})
     return out
-
-
-def get_front_curves(product_codes: list[str], api_key: str, as_of: date,
-                     n_contracts: int = 3) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
-    """Front months for several markets, fetched side by side. Returns (curves, errors):
-    a market that fails lands in `errors` with its message, so one feed hiccup doesn't
-    blank the rest. An empty curve is a feed hiccup too (every market always has live
-    months), so it is retried once before being reported."""
-    def one(code: str) -> pd.DataFrame:
-        for _ in range(2):
-            curve = get_futures_curve(code, api_key, as_of, n_contracts=n_contracts)
-            if not curve.empty:
-                return curve
-        raise MassiveApiError(f"Massive returned no priced {code} contracts.")
-
-    curves: dict[str, pd.DataFrame] = {}
-    errors: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=max(1, len(product_codes))) as pool:
-        futures = {pool.submit(one, code): code for code in product_codes}
-        for fut in as_completed(futures):
-            code = futures[fut]
-            try:
-                curves[code] = fut.result()
-            except (MassiveApiError, requests.RequestException) as e:
-                errors[code] = str(e)
-    return curves, errors
 
 
 FED_FUNDS_PRODUCT = "ZQ"
