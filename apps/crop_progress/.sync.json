@@ -1,9 +1,10 @@
 {
  "branch": "main",
- "commit": "1c4c81a4256a2134f5e5195186a66c7848fbd48a",
+ "commit": "c9bd83f4e41357bc2654c6a851ca8fc3e2b4f0e5",
  "files": {
   "JSA Logo.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
-  "app.py": "e147c1c368acffdb97c238b54044d457baca5ab76bd786b9ca34535719aa4375",
+  "app.py": "3873eaf34b36cde539964f122cb2d87eacd9fd3622c3fc287bbdb57c518974e7",
+  "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",

@@ -11,6 +11,7 @@ week with an optional 5-year average.
 import sys as _sys  # portal-sync: sibling imports resolve to this folder
 from pathlib import Path as _Path  # portal-sync
 _sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
+import base64
 import datetime as dt
 from pathlib import Path
 
@@ -25,10 +26,98 @@ import nass_cache_client as ncc
 from nass_cache_client import cache_freshness, fetch_cached
 
 HERE = Path(__file__).parent
-BLUE, DARK, GREY = "#0693e3", "#32373c", "#8a9199"
-LINE_COLORS = ["#0693e3", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#14b8a6", "#64748b"]
+# -- palette (matches cftc-cot-dashboard / livestock-portal cot_report) --------
+JSA_GREEN = "#5e7164"
+DM_BG, DM_SURFACE, DM_BORDER = "#f6f8f7", "#ffffff", "#d7e2dc"
+DM_TEXT, DM_MUTED = "#32373c", "#5f7267"
+COL_POS, COL_NEG = "#16a34a", "#dc2626"
+DARK, GREY = DM_TEXT, DM_MUTED
+LINE_COLORS = ["#6fa8c4", "#c4785a", "#5e7164", "#9b89c4", "#b8c4bc", "#d4a84b", "#4c7c9a"]
+WATERMARK = HERE / "assets" / "logo-50yr.png"
+WATERMARK_OPACITY = 0.10
 
 pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+
+
+@st.cache_data(show_spinner=False)
+def watermark_uri() -> str | None:
+    try:
+        return "data:image/png;base64," + base64.b64encode(WATERMARK.read_bytes()).decode()
+    except OSError:
+        return None
+
+
+_wm = watermark_uri()
+# The dataframe grid paints on an opaque canvas, so the mark is overlaid instead
+# (pointer-events:none keeps sorting, scrolling and the toolbar working).
+table_wm_css = (f"""
+[class*="st-key-tablewrap_"] {{ position: relative; }}
+[class*="st-key-tablewrap_"]::after {{
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  background-image: url('{_wm}'); background-repeat: no-repeat; background-position: center center;
+  background-size: min(34%, 260px); opacity: {WATERMARK_OPACITY};
+}}""" if _wm else "")
+
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap');
+html, body, [data-testid="stAppViewContainer"] {{ background-color:{DM_BG}; color:{DM_TEXT}; }}
+html, body, p, span, div, label, button, td, th {{ font-family:'Source Sans 3','Source Sans Pro',sans-serif; }}
+.block-container {{ padding-top: 3.2rem; max-width: 1400px; }}
+.dash-header {{ display:flex; align-items:center; gap:18px; padding-bottom:10px;
+    border-bottom:1px solid {DM_BORDER}; margin-bottom:14px; }}
+.dash-header img {{ height:40px; }}
+.dash-header .t b {{ font-family:'EB Garamond',Georgia,serif; font-size:1.7rem; color:{DM_TEXT}; font-weight:600; }}
+.dash-header .t div {{ font-size:.85rem; color:{DM_MUTED}; }}
+@media (max-width: 640px) {{ .dash-header img {{ display:none; }} }}
+.tile {{ background:{DM_SURFACE}; border:1px solid {DM_BORDER}; border-top:3px solid {JSA_GREEN};
+    border-radius:10px; padding:16px 20px; text-align:center; height:100%; min-height:150px; }}
+.tile-label {{ color:{DM_MUTED}; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.09em; margin-bottom:6px; }}
+.tile-value {{ color:{DM_TEXT}; font-size:1.55rem; font-weight:700; line-height:1.1; }}
+.tile-sub {{ color:{DM_MUTED}; font-size:0.72rem; margin-top:5px; }}
+.tile-delta-neu {{ color:{DM_MUTED}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
+.sec-header {{ color:{DM_MUTED}; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em;
+    padding:10px 0 4px; border-bottom:1px solid {DM_BORDER}; margin-bottom:12px; }}
+.asof {{ background:{DM_SURFACE}; border:1px solid {DM_BORDER}; border-radius:8px; padding:10px 16px;
+    color:{DM_MUTED}; font-size:0.82rem; margin-bottom:12px; }}
+.asof b {{ color:{DM_TEXT}; }}
+hr {{ border-color:{DM_BORDER}; }}
+{table_wm_css}
+#MainMenu, footer {{ visibility:hidden; }}
+.stDeployButton {{ display:none; }}
+</style>
+<div class="dash-header">
+  <img src="https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png">
+  <div class="t"><b>Crop Progress Dashboard</b>
+  <div>USDA weekly crop progress &middot; John Stewart &amp; Associates</div></div>
+</div>
+""", unsafe_allow_html=True)
+
+
+def sec(text: str):
+    st.markdown(f'<div class="sec-header">{text}</div>', unsafe_allow_html=True)
+
+
+def tile(label_: str, value: str, delta_: str | None = None, sub: str = "") -> str:
+    d_ = f'<div class="tile-delta-neu">{delta_}</div>' if delta_ else ""
+    s_ = f'<div class="tile-sub">{sub}</div>' if sub else ""
+    return (f'<div class="tile"><div class="tile-label">{label_}</div>'
+            f'<div class="tile-value">{value}</div>{d_}{s_}</div>')
+
+
+AXIS = dict(gridcolor=DM_BORDER, linecolor=DM_BORDER, showgrid=True,
+            tickfont=dict(color=DM_MUTED, size=11),
+            title_font=dict(color=DM_MUTED, size=11), zeroline=False)
+
+
+def add_watermark(fig: go.Figure, above: bool = False) -> None:
+    """Corner-to-corner logo mark. Choropleth fills cover anything drawn below them,
+    so the map passes above=True."""
+    if _wm:
+        fig.add_layout_image(dict(
+            source=_wm, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+            xanchor="center", yanchor="middle", sizing="contain",
+            opacity=WATERMARK_OPACITY, layer="above" if above else "below"))
 
 # ---------------------------------------------------------------------------
 # Catalog: UI commodity -> NASS commodity_desc, class filter, stage order
@@ -203,12 +292,6 @@ SMALL_STATES = {"CT", "DE", "MA", "MD", "NH", "NJ", "RI", "VT"}
 # ---------------------------------------------------------------------------
 # Header + selectors
 # ---------------------------------------------------------------------------
-logo = HERE / "JSA Logo.png"
-c_logo, c_title = st.columns([1, 6], vertical_alignment="center")
-if logo.exists():
-    c_logo.image(str(logo), width=150)
-c_title.title("Crop Progress Dashboard")
-
 # ---- filters: one row along the top ----
 f = st.columns([1.1, 1.1, 1, 1.3, 1.2])
 commodity = f[0].selectbox("Commodity", list(COMMODITIES), key="commodity")
@@ -255,8 +338,8 @@ show_5ya = g[2].toggle("Show 5-year average", value=True)
 table = comparison_table(P, map_year, week)
 
 latest = d["week_ending"].max()
-st.caption(f"Updated {latest:%B %d, %Y}  ·  USDA NASS Crop Progress, "
-           f"{commodity.lower()} {stage.lower()} (% of acreage)")
+st.markdown(f'<div class="asof">Updated <b>{latest:%B %d, %Y}</b> &middot; USDA NASS Crop Progress, '
+            f'{commodity.lower()} {stage.lower()} (% of acreage)</div>', unsafe_allow_html=True)
 
 # ---- KPI cards for the US row ----
 if "US" in table.index:
@@ -265,11 +348,16 @@ if "US" in table.index:
 
     def delta(v):
         return None if pd.isna(v) else f"{v:+.0f} pts"
-    k[0].metric(f"{commodity} {stage.lower()} — week #{week}", f"{u.TW:.0f}%", delta(u.ΔLW))
-    k[1].metric("vs last year", "—" if pd.isna(u.LY) else f"{u.LY:.0f}%", delta(u.ΔLY),
-                help="Last year's value for the same calendar week; delta is this week minus it.")
-    k[2].metric("vs 5-year avg", "—" if pd.isna(u["5YA"]) else f"{u['5YA']:.0f}%", delta(u.Δ5YA))
-    k[3].metric("Last week", "—" if pd.isna(u.LW) else f"{u.LW:.0f}%")
+
+    def pct(v):
+        return "—" if pd.isna(v) else f"{v:.0f}%"
+    k[0].markdown(tile(f"{commodity} {stage.lower()} — week #{week}", pct(u.TW), delta(u.ΔLW),
+                       "change vs last week"), unsafe_allow_html=True)
+    k[1].markdown(tile("Last year (same week)", pct(u.LY), delta(u.ΔLY), "this week minus last year"),
+                  unsafe_allow_html=True)
+    k[2].markdown(tile("5-year average", pct(u["5YA"]), delta(u.Δ5YA), "this week minus 5-yr avg"),
+                  unsafe_allow_html=True)
+    k[3].markdown(tile("Last week", pct(u.LW), None, "prior weekly report"), unsafe_allow_html=True)
 else:
     st.info("No US total reported for this week.")
 
@@ -281,10 +369,10 @@ vals = st_rows[key]
 if is_delta:
     lim = float(min(40, max(15, np.nanmax(np.abs(vals.values)) if len(vals) else 15)))
     zmin, zmax = -lim, lim
-    scale = [[0, "#c0392b"], [0.5, "#f4f4f4"], [1, "#04477a"]]
+    scale = [[0, COL_NEG], [0.5, "#f6f8f7"], [1, COL_POS]]
 else:
     zmin, zmax = 0, 100
-    scale = [[0, "#e8f3fc"], [1, "#04477a"]]
+    scale = [[0, "#eef3f0"], [1, "#3f5246"]]
 
 
 def _dark_fill(v):
@@ -298,12 +386,13 @@ def fmt(v):
     return f"{v:+.0f}" if is_delta else f"{v:.0f}"
 
 
+sec(f"State map — {metric}")
 with st.container(border=True):
     fig = go.Figure(go.Choropleth(
         locations=vals.index, z=vals, locationmode="USA-states",
         text=[STATES.get(s, s) for s in vals.index],
         colorscale=scale, zmin=zmin, zmax=zmax,
-        marker_line_color="#32373c", marker_line_width=1.1,
+        marker_line_color=DM_SURFACE, marker_line_width=1.2,
         colorbar=dict(title="pts" if is_delta else "%", thickness=16, len=0.8),
         hovertemplate="%{text}: %{z:.0f}<extra></extra>"))
     fig.add_trace(go.Scattergeo(
@@ -314,15 +403,17 @@ with st.container(border=True):
         textfont=dict(size=[9 if s in SMALL_STATES else 12 for s in lab.index],
                       color=["white" if _dark_fill(v) else DARK for v in lab[key]])))
     fig.update_geos(scope="usa", showlakes=False, bgcolor="rgba(0,0,0,0)")
+    add_watermark(fig, above=True)
     fig.update_layout(dragmode=False, height=620, margin=dict(l=0, r=0, t=36, b=0),
+                      paper_bgcolor=DM_SURFACE, plot_bgcolor=DM_SURFACE,
                       title=dict(text=f"{commodity} {stage.lower()} — {metric}, week #{week}",
-                                 font=dict(size=16)))
+                                 font=dict(size=16, color=DM_TEXT)))
     st.plotly_chart(fig, width="stretch", config={"scrollZoom": False, "displayModeBar": False})
 
 # ---------------------------------------------------------------------------
 # Seasonal line chart
 # ---------------------------------------------------------------------------
-st.subheader(f"{commodity} {stage.lower()} seasonal chart — {'US total' if chart_state == 'US' else STATES.get(chart_state, chart_state)}")
+sec(f"{commodity} {stage.lower()} seasonal chart — {'US total' if chart_state == 'US' else STATES.get(chart_state, chart_state)}")
 fig = go.Figure()
 sub = d[d["state"] == chart_state]
 for i, y in enumerate(sorted(chart_years)):
@@ -343,17 +434,19 @@ if show_5ya and chart_years:
         fig.add_trace(go.Scatter(x=avg.index, y=avg.values, mode="lines", name="5-year average",
                                  line=dict(color=GREY, width=2, dash="dash"),
                                  hovertemplate="Week %{x}: %{y:.0f}%<extra>5-yr avg</extra>"))
-fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10), template="plotly_white",
-                  xaxis_title="Calendar week", yaxis_title="Percent complete",
-                  yaxis=dict(range=[0, 100]), legend=dict(orientation="h", y=1.1),
-                  hovermode="x unified")
+add_watermark(fig)
+fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
+                  paper_bgcolor=DM_SURFACE, plot_bgcolor=DM_SURFACE, hovermode="x unified",
+                  legend=dict(orientation="h", y=1.12, x=0, font=dict(size=11, color=DM_MUTED)),
+                  xaxis=dict(**AXIS, title="Calendar week"),
+                  yaxis=dict(**AXIS, title="Percent complete", range=[0, 100]))
 with st.container(border=True):
     st.plotly_chart(fig, width="stretch")
 
 # ---------------------------------------------------------------------------
 # State table
 # ---------------------------------------------------------------------------
-st.subheader(f"State detail — week #{week}")
+sec(f"State detail — week #{week}")
 disp = table.copy()
 disp.index = ["US TOTAL" if s == "US" else s for s in disp.index]
 disp = disp.sort_index(key=lambda ix: ix.map(lambda s: (s != "US TOTAL", s)))
@@ -368,15 +461,16 @@ def _blend(v, vmin, vmax, lo, hi):
 def _delta_css(v):  # red (behind) -> white -> blue (ahead)
     if pd.isna(v):
         return ""
-    return (_blend(v, -30, 0, (239, 120, 120), (255, 255, 255)) if v < 0
-            else _blend(v, 0, 30, (255, 255, 255), (110, 180, 235)))
+    return (_blend(v, -30, 0, (240, 150, 150), (255, 255, 255)) if v < 0
+            else _blend(v, 0, 30, (255, 255, 255), (140, 200, 160)))
 
 styled = (disp.style.format("{:.0f}", na_rep="–")
           .format("{:+.0f}", subset=["ΔLW", "ΔLY", "Δ5YA"], na_rep="–")
           .map(_delta_css, subset=["ΔLW", "ΔLY", "Δ5YA"])
-          .map(lambda v: _blend(v, 0, 100, (255, 255, 255), (190, 224, 247)),
+          .map(lambda v: _blend(v, 0, 100, (255, 255, 255), (190, 208, 198)),
                subset=["TW", "LW", "LY", "5YA"]))
-st.dataframe(styled, height=560, width="stretch")
+with st.container(key="tablewrap_state"):
+    st.dataframe(styled, height=560, width="stretch")
 
 st.caption("Source: USDA NASS Crop Progress (weekly, Mondays 4 pm ET) via the JSA NASS cache. "
            "LY and 5YA compare the same calendar week; the 5-year average needs at least 3 prior "
