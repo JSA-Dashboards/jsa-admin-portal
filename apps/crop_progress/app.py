@@ -123,21 +123,21 @@ def add_watermark(fig: go.Figure, above: bool = False) -> None:
 # Catalog: UI commodity -> NASS commodity_desc, class filter, stage order
 # ---------------------------------------------------------------------------
 COMMODITIES = {
-    "Corn": dict(desc="CORN", cls=None,
+    "Corn": dict(desc="CORN", cls=None, area_cls="ALL CLASSES",
                  stages=["PLANTED", "EMERGED", "SILKING", "DOUGH", "DENTED", "MATURE", "HARVESTED"]),
-    "Soybeans": dict(desc="SOYBEANS", cls=None,
+    "Soybeans": dict(desc="SOYBEANS", cls=None, area_cls="ALL CLASSES",
                      stages=["PLANTED", "EMERGED", "BLOOMING", "SETTING PODS",
                              "DROPPING LEAVES", "HARVESTED"]),
-    "Winter wheat": dict(desc="WHEAT", cls="WINTER",
+    "Winter wheat": dict(desc="WHEAT", cls="WINTER", area_cls="WINTER",
                          stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"], fall=("PLANTED", "EMERGED")),
-    "Spring wheat": dict(desc="WHEAT", cls="SPRING, (EXCL",
+    "Spring wheat": dict(desc="WHEAT", cls="SPRING, (EXCL", area_cls="SPRING, (EXCL DURUM)",
                          stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
-    "Sorghum": dict(desc="SORGHUM", cls=None,
+    "Sorghum": dict(desc="SORGHUM", cls=None, area_cls="ALL CLASSES",
                     stages=["PLANTED", "HEADED", "COLORING", "MATURE", "HARVESTED"]),
-    "Oats": dict(desc="OATS", cls=None, stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
-    "Barley": dict(desc="BARLEY", cls=None, stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
-    "Rice": dict(desc="RICE", cls=None, stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
-    "Cotton": dict(desc="COTTON", cls="UPLAND",
+    "Oats": dict(desc="OATS", cls=None, area_cls="ALL CLASSES", stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
+    "Barley": dict(desc="BARLEY", cls=None, area_cls="ALL CLASSES", stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
+    "Rice": dict(desc="RICE", cls=None, area_cls="ALL CLASSES", stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
+    "Cotton": dict(desc="COTTON", cls="UPLAND", area_cls="UPLAND",
                    stages=["PLANTED", "SQUARING", "SETTING BOLLS", "BOLLS OPENING", "HARVESTED"]),
 }
 
@@ -231,6 +231,48 @@ def load_progress(desc: str) -> pd.DataFrame:
     df["week_ending"] = pd.to_datetime(df["week_ending"], errors="coerce")
     return df[["year", "week", "week_ending", "state", "class_desc", "stage", "value"]] \
         .drop_duplicates(["year", "week", "state", "class_desc", "stage"], keep="last")
+
+
+@st.cache_data(ttl=3600, max_entries=24, show_spinner=False)
+def load_area(desc: str, cls: str, stat: str) -> pd.DataFrame:
+    """Annual state acreage estimates (same cache keys as jobs/crop_progress.area_jobs)."""
+    rows = _read_many([{
+        "source_desc": "SURVEY", "sector_desc": "CROPS", "group_desc": "FIELD CROPS",
+        "commodity_desc": desc, "class_desc": cls, "statisticcat_desc": stat,
+        "unit_desc": "ACRES", "agg_level_desc": "STATE", "year__GE": "1985",
+    }])
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df = df[(df["domain_desc"] == "TOTAL")
+            & (df["prodn_practice_desc"] == "ALL PRODUCTION PRACTICES")].copy()
+    df["value"] = pd.to_numeric(df["Value"].astype(str).str.replace(",", ""), errors="coerce")
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["value", "year"])
+    df["year"] = df["year"].astype(int)
+    df["grain"] = df["util_practice_desc"].eq("GRAIN")  # grain rows beat silage/all-use rows
+    df["load_time"] = pd.to_datetime(df["load_time"], errors="coerce")
+    return df.rename(columns={"state_alpha": "state"})[
+        ["state", "year", "value", "grain", "load_time", "reference_period_desc"]]
+
+
+def acre_basis(meta: dict, stage: str, target_year: int):
+    """(acres by state, year used, estimate label, stat) -- latest NASS estimate at or before
+    target_year. Harvest uses area harvested; every other stage uses area planted."""
+    stat = "AREA HARVESTED" if stage == "HARVESTED" else "AREA PLANTED"
+    df = load_area(meta["desc"], meta["area_cls"], stat)
+    if df.empty and stat == "AREA HARVESTED":
+        stat = "AREA PLANTED"
+        df = load_area(meta["desc"], meta["area_cls"], stat)
+    if df.empty:
+        return pd.Series(dtype=float), None, "", stat
+    df = df[(df["year"] <= target_year) & (df["year"] >= target_year - 2)]
+    if df.empty:
+        return pd.Series(dtype=float), None, "", stat
+    df = df.sort_values(["state", "year", "grain", "load_time"]).groupby("state").tail(1)
+    latest = df.sort_values(["year", "load_time"]).iloc[-1]
+    ref = str(latest["reference_period_desc"]).title().replace("Year - ", "")
+    return df.set_index("state")["value"], int(latest["year"]), ref, stat
 
 
 def select(df: pd.DataFrame, meta: dict, stage: str) -> pd.DataFrame:
@@ -426,13 +468,23 @@ for i, y in enumerate(sorted(chart_years)):
                              hovertemplate="Week %{x}: %{y:.0f}%<extra>" + year_label(y) + "</extra>"))
 if show_5ya and chart_years:
     ref = max(chart_years)
-    pm = P.xs(chart_state, level="state") if chart_state in P.index.get_level_values("state") else None
-    if pm is not None:
-        prior = pm[pm.index.isin(range(ref - 5, ref))]
-        avg = prior.mean().where(prior.count() >= 3).dropna()
-        avg = avg[(avg.index >= sub["week"].min()) & (avg.index <= sub["week"].max())]
+    if chart_state in P.index.get_level_values("state"):
+        pm = P.xs(chart_state, level="state")
+        orig = d[d["state"] == chart_state]
+        hist = pm[pm.index.isin(range(ref - 10, ref))]          # prior 10 seasons
+        n_rep = orig[orig["crop_year"].isin(range(ref - 10, ref))].groupby("week").size()
+        wks = [w for w in hist.columns if n_rep.get(w, 0) >= 5]  # weeks most seasons reported
+        mean10, sd10 = hist[wks].mean(), hist[wks].std(ddof=1)
+        for k, name, fill in ((2, "±2 SD", "rgba(94,113,100,0.14)"), (1, "±1 SD", "rgba(94,113,100,0.28)")):
+            hi, lo = (mean10 + k * sd10).clip(0, 100), (mean10 - k * sd10).clip(0, 100)
+            fig.add_trace(go.Scatter(x=wks + wks[::-1], y=list(hi) + list(lo)[::-1], fill="toself",
+                                     fillcolor=fill, line=dict(width=0), name=f"{name} (10-yr)",
+                                     hoverinfo="skip", legendgroup=name))
+        h5 = pm[pm.index.isin(range(ref - 5, ref))]
+        wk5 = [w for w in h5.columns if n_rep.get(w, 0) >= 5]
+        avg = h5[wk5].mean().where(h5[wk5].count() >= 3).dropna()
         fig.add_trace(go.Scatter(x=avg.index, y=avg.values, mode="lines", name="5-year average",
-                                 line=dict(color=GREY, width=2, dash="dash"),
+                                 line=dict(color=DM_TEXT, width=2, dash="dash"),
                                  hovertemplate="Week %{x}: %{y:.0f}%<extra>5-yr avg</extra>"))
 add_watermark(fig)
 fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
@@ -446,31 +498,43 @@ with st.container(border=True):
 # ---------------------------------------------------------------------------
 # State table
 # ---------------------------------------------------------------------------
-sec(f"State detail — week #{week}")
-disp = table.copy()
-disp.index = ["US TOTAL" if s == "US" else s for s in disp.index]
-disp = disp.sort_index(key=lambda ix: ix.map(lambda s: (s != "US TOTAL", s)))
-disp.index.name = "STATE"
-def _blend(v, vmin, vmax, lo, hi):
-    if pd.isna(v):
-        return ""
-    t = min(max((v - vmin) / (vmax - vmin), 0), 1)
-    r, g, b = (int(lo[i] + (hi[i] - lo[i]) * t) for i in range(3))
-    return f"background-color: rgb({r},{g},{b}); color: {DARK}"
+sec(f"State detail — % {stage.lower()}, week #{week}")
+basis, basis_year, basis_ref, basis_stat = acre_basis(meta, stage, map_year)
+disp = table[["TW", "ΔLW", "Δ5YA"]].copy()
+us_total_acres = float(basis.sum()) if len(basis) else np.nan
+acres = basis.reindex(disp.index)
+if "US" in disp.index:
+    acres.loc["US"] = us_total_acres
+disp["share"] = acres / us_total_acres * 100 if us_total_acres else np.nan
+disp["left"] = acres * (1 - disp["TW"] / 100) / 1000
+disp.columns = ["This wk", "WoW", "Δ5Y-avg",
+                "% of US harvested acres" if stage == "HARVESTED" else "% of US planted acres",
+                "Acres left (000)"]
+disp["_k"] = [(s != "US", -(v if pd.notna(v) else -1)) for s, v in zip(disp.index, disp.iloc[:, 3])]
+disp = disp.sort_values("_k").drop(columns="_k")
+disp.index = ["US TOTAL" if s == "US" else STATES.get(s, s).upper() for s in disp.index]
+disp.index.name = None
 
-def _delta_css(v):  # red (behind) -> white -> blue (ahead)
-    if pd.isna(v):
-        return ""
-    return (_blend(v, -30, 0, (240, 150, 150), (255, 255, 255)) if v < 0
-            else _blend(v, 0, 30, (255, 255, 255), (140, 200, 160)))
 
-styled = (disp.style.format("{:.0f}", na_rep="–")
-          .format("{:+.0f}", subset=["ΔLW", "ΔLY", "Δ5YA"], na_rep="–")
-          .map(_delta_css, subset=["ΔLW", "ΔLY", "Δ5YA"])
-          .map(lambda v: _blend(v, 0, 100, (255, 255, 255), (190, 208, 198)),
-               subset=["TW", "LW", "LY", "5YA"]))
+def _chg(v):
+    return "" if pd.isna(v) else f"color: {COL_POS if v >= 0 else COL_NEG}; font-weight: 600"
+
+
+styled = (disp.style
+          .format({"This wk": "{:.0f}", "WoW": "{:+.0f}", "Δ5Y-avg": "{:+.1f}",
+                   disp.columns[3]: "{:.1f}%", "Acres left (000)": "{:,.0f}"}, na_rep="–")
+          .map(_chg, subset=["Δ5Y-avg"])
+          .map(lambda v: "font-weight: 700", subset=["WoW"])
+          .apply(lambda r: ["font-weight: 700; background-color: #eef3f0"] * len(r)
+                 if r.name == "US TOTAL" else [""] * len(r), axis=1))
 with st.container(key="tablewrap_state"):
     st.dataframe(styled, height=560, width="stretch")
+if basis_year:
+    st.caption(f"Acres left = latest NASS {basis_stat.lower()} estimate ({basis_year}, {basis_ref}) "
+               f"× (1 − % {stage.lower()}); share = state's slice of the US total of that estimate. "
+               "Fall-planted winter wheat uses the most recent seeded-acre estimate.")
+else:
+    st.caption("No NASS acreage estimate is cached for this commodity yet, so share and acres left are blank.")
 
 st.caption("Source: USDA NASS Crop Progress (weekly, Mondays 4 pm ET) via the JSA NASS cache. "
            "LY and 5YA compare the same calendar week; the 5-year average needs at least 3 prior "
