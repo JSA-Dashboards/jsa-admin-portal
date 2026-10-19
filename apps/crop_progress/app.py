@@ -13,6 +13,7 @@ from pathlib import Path as _Path  # portal-sync
 _sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import base64
 import datetime as dt
+import re
 from pathlib import Path
 
 import numpy as np
@@ -48,16 +49,7 @@ def watermark_uri() -> str | None:
 
 
 _wm = watermark_uri()
-# The dataframe grid paints on an opaque canvas, so the mark is overlaid instead
-# (pointer-events:none keeps sorting, scrolling and the toolbar working).
-table_wm_css = (f"""
-[class*="st-key-tablewrap_"] {{ position: relative; }}
-[class*="st-key-tablewrap_"]::after {{
-  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
-  background-image: url('{_wm}'); background-repeat: no-repeat; background-position: center center;
-  background-size: min(34%, 260px); opacity: {WATERMARK_OPACITY};
-}}""" if _wm else "")
-
+_wm_url = _wm or ""
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap');
@@ -82,7 +74,17 @@ html, body, p, span, div, label, button, td, th {{ font-family:'Source Sans 3','
     color:{DM_MUTED}; font-size:0.82rem; margin-bottom:12px; }}
 .asof b {{ color:{DM_TEXT}; }}
 hr {{ border-color:{DM_BORDER}; }}
-{table_wm_css}
+.snap-wrap {{ position: relative; background:{DM_SURFACE}; border:1px solid {DM_BORDER};
+    border-radius:10px; padding:6px 10px 10px; }}
+.snap-wrap::after {{ content:""; position:absolute; inset:0; pointer-events:none;
+    background:url('{_wm_url}') center center / min(34%, 260px) no-repeat; opacity:{WATERMARK_OPACITY}; }}
+.snap-grid {{ border-collapse:collapse; width:100%; font-size:0.86rem; color:{DM_TEXT}; }}
+.snap-grid th {{ text-align:right; color:{DM_MUTED}; font-weight:600; font-size:0.72rem;
+    text-transform:uppercase; letter-spacing:0.05em; padding:8px 12px; border-bottom:2px solid {DM_BORDER}; }}
+.snap-grid th:first-child, .snap-grid td:first-child {{ text-align:left; }}
+.snap-grid td {{ text-align:right; padding:6px 12px; border-bottom:1px solid {DM_BORDER}; }}
+.snap-grid tbody th {{ text-align:left; text-transform:none; letter-spacing:0; font-size:0.86rem; font-weight:600;
+    color:{DM_TEXT}; padding:6px 12px; border-bottom:1px solid {DM_BORDER}; }}
 #MainMenu, footer {{ visibility:hidden; }}
 .stDeployButton {{ display:none; }}
 </style>
@@ -92,6 +94,84 @@ hr {{ border-color:{DM_BORDER}; }}
   <div>USDA weekly crop progress &middot; John Stewart &amp; Associates</div></div>
 </div>
 """, unsafe_allow_html=True)
+
+
+def _safe_filename(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|]+', " ", str(name)).strip() or "chart"
+
+
+def _snap_anchor(snap_id: str):
+    """Zero-height marker so the snapshot tool can find the Plotly chart that follows it."""
+    st.markdown(f'<div id="{snap_id}" style="height:0"></div>', unsafe_allow_html=True)
+
+
+_SNAP_JS = """
+<div style="display:flex;gap:6px;align-items:center;margin:2px 0 14px 0">
+  <button id="dl__ID__" style="font:600 13px system-ui,sans-serif;color:#fff;
+    background:__ACCENT__;border:none;border-radius:6px;padding:6px 12px;cursor:pointer">\U0001F4E5 PNG</button>
+  <button id="cp__ID__" style="font:600 13px system-ui,sans-serif;color:__ACCENT__;
+    background:transparent;border:1.5px solid __ACCENT__;border-radius:6px;padding:6px 12px;
+    cursor:pointer">\U0001F4CB Copy</button>
+  <span id="msg__ID__" style="font:12px system-ui,sans-serif;color:__MUTED__"></span>
+</div>
+<script>
+(function(){
+  const ANCHOR="__ID__", FN="__FN__";
+  function ensureH2C(){
+    if(window.html2canvas) return Promise.resolve();
+    if(window.__h2c) return window.__h2c;
+    window.__h2c=new Promise((res,rej)=>{
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+      s.onload=()=>res(); s.onerror=()=>rej(new Error("load failed"));
+      document.head.appendChild(s); setTimeout(()=>rej(new Error("timeout")),10000);
+    });
+    return window.__h2c;
+  }
+  // The tagged wrapper itself if it holds content (tables), else the first Plotly chart
+  // after the anchor in document order (a chart can't carry an id of its own).
+  function target(){
+    const el=document.getElementById(ANCHOR); if(!el) return null;
+    if(el.querySelector("table,canvas,svg")) return el;
+    const charts=[...document.querySelectorAll('[data-testid="stPlotlyChart"]')];
+    for(const c of charts){
+      if(el.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) return c;
+    }
+    return charts[0]||el;
+  }
+  async function shoot(){
+    await ensureH2C();
+    const el=target(); if(!el) throw new Error("nothing to capture");
+    return await window.html2canvas(el,{scale:2,backgroundColor:"__BG__",logging:false,useCORS:true});
+  }
+  const msgEl=document.getElementById("msg__ID__");
+  const msg=t=>{ if(msgEl){ msgEl.textContent=t; if(t) setTimeout(()=>{msgEl.textContent="";},2500);} };
+  document.getElementById("dl__ID__").onclick=async()=>{
+    msg("…"); try{ const c=await shoot(); const a=document.createElement("a");
+      a.download=FN+".png"; a.href=c.toDataURL("image/png"); a.click(); msg("✓ saved"); }
+    catch(e){ msg("⚠ "+e.message); }
+  };
+  // Promise-based ClipboardItem keeps the click's user gesture through html2canvas's async work.
+  document.getElementById("cp__ID__").onclick=async()=>{
+    msg("…");
+    try{
+      await navigator.clipboard.write([new ClipboardItem({"image/png":(async()=>{
+        const c=await shoot();
+        return await new Promise(r=>c.toBlob(r,"image/png"));
+      })()})]);
+      msg("✓ copied");
+    }catch(e){ msg("⚠ "+(e.name||e.message)); }
+  };
+})();
+</script>
+"""
+
+
+def _snap_toolbar(snap_id: str, filename: str):
+    """PNG download + clipboard copy of the actual on-screen chart/map/table."""
+    st.html(_SNAP_JS.replace("__ID__", snap_id).replace("__FN__", _safe_filename(filename))
+            .replace("__ACCENT__", JSA_GREEN).replace("__MUTED__", DM_MUTED)
+            .replace("__BG__", DM_SURFACE), unsafe_allow_javascript=True)
 
 
 def sec(text: str):
@@ -323,6 +403,31 @@ def aligned(series: dict, state: str, crop_year: int, ts: pd.Timestamp) -> float
     return float(np.interp(o, x, y))
 
 
+def default_stage(raw: pd.DataFrame, meta: dict, stages: list) -> str:
+    """The stage a trader wants to see first: the one the latest report is about.
+
+    Looks only at the newest report week for the US. Planting is the headline until it is
+    ~90% done; once harvest has started it is the headline; in between it is the furthest
+    stage still under way (silking, dough, setting pods ...). Falls back to the last stage.
+    """
+    latest = {}
+    for stg in stages:
+        r = select(raw, meta, stg)
+        r = r[r["state"] == "US"].sort_values("week_ending")
+        if not r.empty:
+            latest[stg] = (r.iloc[-1]["week_ending"], r.iloc[-1]["value"])
+    if not latest:
+        return stages[-1]
+    newest = max(w for w, _ in latest.values())
+    live = {k: v for k, (w, v) in latest.items() if (newest - w).days <= 7}  # still being reported
+    if "PLANTED" in live and live["PLANTED"] < 90:
+        return "PLANTED"
+    if live.get("HARVESTED", 0) > 0:
+        return "HARVESTED"
+    under_way = [stg for stg in stages if stg in live and live[stg] < 97]
+    return under_way[-1] if under_way else [stg for stg in stages if stg in live][-1]
+
+
 def comparison_table(d: pd.DataFrame, series: dict, year: int, week: int, ts: pd.Timestamp) -> pd.DataFrame:
     cur = d[(d["crop_year"] == year) & (d["week"] == week)].set_index("state")["value"]
     rows = {}
@@ -373,21 +478,21 @@ if raw.empty:
     st.stop()
 
 stages = [s for s in meta["stages"] if not select(raw, meta, s).empty]
-newest = max(reversed(stages), key=lambda x: select(raw, meta, x)["week_ending"].max())
-stage = f[1].selectbox("Crop stage", stages, index=stages.index(newest),
-                       format_func=str.title, key=f"stage_{commodity}")
+latest_rep = f"{raw['week_ending'].max():%Y%m%d}"  # new NASS release -> new widget keys -> defaults reset
+stage = f[1].selectbox("Crop stage", stages, index=stages.index(default_stage(raw, meta, stages)),
+                       format_func=str.title, key=f"stage_{commodity}_{latest_rep}")
 d = select(raw, meta, stage)
 series = build_series(d)
 
 years = sorted(d["crop_year"].unique(), reverse=True)
 map_year = f[2].selectbox("Marketing year", years, format_func=year_label,
-                          key=f"myear_{commodity}_{stage}")
+                          key=f"myear_{commodity}_{stage}_{latest_rep}")
 wk_opts = sorted(d.loc[d["crop_year"] == map_year, "week"].unique())
 we = d[(d["crop_year"] == map_year)].groupby("week")["week_ending"].max()
 week = f[3].selectbox("Calendar week", wk_opts, index=len(wk_opts) - 1,
                       format_func=lambda w: f"Week #{w}" + (
                           f" (w/e {we[w]:%b %d})" if w in we.index and pd.notna(we[w]) else ""),
-                      key=f"week_{commodity}_{stage}_{map_year}")
+                      key=f"week_{commodity}_{stage}_{map_year}_{latest_rep}")
 metric = f[4].selectbox("Map selection", ["TW (this week)", "LW (last week)", "LY (last year)",
                                           "5YA (5-year avg)", "ΔLW", "ΔLY", "Δ5YA"],
                         key="map_metric")
@@ -476,7 +581,9 @@ with st.container(border=True):
                       paper_bgcolor=DM_SURFACE, plot_bgcolor=DM_SURFACE,
                       title=dict(text=f"{commodity} {stage.lower()} — {metric}, week #{week}",
                                  font=dict(size=16, color=DM_TEXT)))
+    _snap_anchor("snap_map")
     st.plotly_chart(fig, width="stretch", config={"scrollZoom": False, "displayModeBar": False})
+    _snap_toolbar("snap_map", f"Crop Progress {commodity} {stage} {metric.split(' ')[0]} week {week}")
 
 # ---------------------------------------------------------------------------
 # Seasonal line chart
@@ -527,7 +634,9 @@ fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
                   xaxis=dict(**AXIS, title="Calendar week"),
                   yaxis=dict(**AXIS, title="Percent complete", range=[0, 100]))
 with st.container(border=True):
+    _snap_anchor("snap_chart")
     st.plotly_chart(fig, width="stretch")
+    _snap_toolbar("snap_chart", f"Crop Progress {commodity} {stage} seasonal {chart_state}")
 
 # ---------------------------------------------------------------------------
 # State table
@@ -561,8 +670,9 @@ styled = (disp.style
           .map(lambda v: "font-weight: 700", subset=["WoW"])
           .apply(lambda r: ["font-weight: 700; background-color: #eef3f0"] * len(r)
                  if r.name == "US TOTAL" else [""] * len(r), axis=1))
-with st.container(key="tablewrap_state"):
-    st.dataframe(styled, height=560, width="stretch")
+styled = styled.set_table_attributes('class="snap-grid"').hide(names=True)
+st.html(f'<div class="snap-wrap" id="snap_table">{styled.to_html()}</div>')
+_snap_toolbar("snap_table", f"Crop Progress {commodity} {stage} state table week {week}")
 if basis_year:
     st.caption(f"Acres left = latest NASS {basis_stat.lower()} estimate ({basis_year}, {basis_ref}) "
                f"× (1 − % {stage.lower()}); share = state's slice of the US total of that estimate. "
