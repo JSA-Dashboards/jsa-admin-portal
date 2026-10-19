@@ -124,6 +124,10 @@
     "FIELD_CHECK": "1"
    }
   },
+  "crop_progress": {
+   "repo": "JSA-Dashboards/crop-progress-dashboard",
+   "branch": "main"
+  },
   "domestic_production": {
    "repo": "JSA-Dashboards/domestic-production-dashboard"
   },

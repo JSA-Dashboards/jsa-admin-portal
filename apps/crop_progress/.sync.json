@@ -1,0 +1,12 @@
+{
+ "branch": "main",
+ "commit": "d23ef3169ebae5797e0d0d62b2cb16a376ae7ae3",
+ "files": {
+  "JSA Logo.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
+  "app.py": "d5d0536da001252c0801add30499b28b54b42627a39ff2e9d9724faf2beb5a3f",
+  "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/crop-progress-dashboard",
+ "subdir": null
+}
