@@ -12,14 +12,16 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import settlement_bank
 import stocks_use
 import trend_board
 from ai_chat import run_chat
 from hl_model import render_hl_tab
 from legacy_history import get_legacy_series, load_legacy_history
-from massive_api import (MassiveApiError, get_daily_bars_many, get_front_curves, get_futures_curve,
-                         get_settlement_histories)
+from massive_api import (MassiveApiError, get_daily_bars_many, get_front_contracts, get_futures_curve,
+                         get_prices, get_settlement_histories)
 from report_dates import NASS_2021_FALLBACK, ReportDatesError, get_nass_dates, get_wasde_dates
+from table_png import table_png_button
 
 HERE = Path(__file__).parent
 
@@ -242,7 +244,9 @@ def figure_png(fig_json: str) -> bytes | None:
         return None
 
 
-def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
+def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, table: dict | None = None):
+    """Copy + CSV, plus PNG for a chart (`fig`) or for a styled table (`table`: a dict with the
+    pandas "styler" to snapshot and an optional "title" and "note" to put around it)."""
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
         tsv = frame.to_csv(sep="\t", index=False)
@@ -251,6 +255,10 @@ def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
             st.code(tsv, language=None, height=260)
         st.download_button("CSV", frame.to_csv(index=False).encode(), f"{filename}.csv",
                            "text/csv", key=f"csv_{key}", width=90)
+        if table is not None:
+            wm = watermark_path()
+            table_png_button(table["styler"], filename, key, table.get("title", ""),
+                             table.get("note", ""), watermark_uri=watermark_uri(wm) if wm else None)
         if fig is not None:
             if st.button("PNG", key=f"png_btn_{key}", width=90,
                          help="Render this chart as a PNG for download."):
@@ -1472,6 +1480,8 @@ def render_ask_ai(api_key: str, anthropic_key: str, as_of: date,
 # ── Trends snapshot ──────────────────────────────────────────────────────────
 TREND_CONTRACTS = 3        # ask for three, so a front month without a price doesn't leave one short
 MASSIVE_FLOOR = date(2021, 9, 2)   # Massive's first daily bar (see DATA_START_NOTE)
+BANK_FIRST_YEAR = 2021     # earliest contract year in the Snowflake settlement bank
+BANK_FRESH_DAYS = 4        # a front month's banked history more than this far behind (a missed job) comes from Massive instead
 DELAYED_QUOTES_NOTE = "Massive futures prices are delayed ~10 minutes — not a real-time or executable quote."
 TREND_COLUMNS = ["Market", "Contract", "Last", "vs 1 wk", "vs 1 mo", "vs 1 yr",
                  "Seasonal, next 30d", "Years ▲ / ● / ▼", "SMA 20", "SMA 100", "SMA 200"]
@@ -1486,19 +1496,58 @@ TREND_DOWN = "color:#9C0006;"
 TREND_GROUP_TOP = "border-top:2px solid #8FCB8F;"
 
 
+@st.cache_data(ttl="12h", show_spinner=False)
+def _load_trend_contracts(api_key: str, as_of: str):
+    return get_front_contracts([c["product_code"] for c in COMMODITIES], api_key,
+                               date.fromisoformat(as_of), n_contracts=TREND_CONTRACTS)
+
+
 @st.cache_data(ttl="5m", show_spinner=False)
-def _load_trend_curves(api_key: str, as_of: str):
-    return get_front_curves([c["product_code"] for c in COMMODITIES], api_key,
-                            date.fromisoformat(as_of), n_contracts=TREND_CONTRACTS)
+def _load_trend_prices(api_key: str, tickers: tuple[str, ...]) -> dict[str, float]:
+    return get_prices(list(tickers), api_key)
 
 
 def load_trend_curves(api_key: str, as_of: str):
-    """(curves, errors) for every market. A partial failure is shown but not kept: the cache
-    is dropped, so the next rerun asks again instead of serving the gap for five minutes."""
-    result = _load_trend_curves(api_key, as_of)
-    if result[1]:
-        _load_trend_curves.clear()
-    return result
+    """(curves, errors): every market's front contracts, each with a live price. Which
+    contracts are the front ones only changes when one expires or lists, so a day's list is
+    kept (12 h) and just the prices are re-read, every five minutes. A partial failure is shown
+    but not kept: the caches are dropped, so the next rerun asks again."""
+    contracts, listing_errors = _load_trend_contracts(api_key, as_of)
+    errors = dict(listing_errors)
+    tickers = tuple(sorted(c["ticker"] for rows in contracts.values() for c in rows))
+    prices: dict[str, float] = {}
+    if tickers:
+        try:
+            prices = _load_trend_prices(api_key, tickers)
+        except MassiveApiError as e:
+            errors.update({code: str(e) for code in contracts})
+    curves: dict[str, pd.DataFrame] = {}
+    for code, rows in contracts.items():
+        priced = [{"ticker": c["ticker"], "expiration": pd.to_datetime(c["expiration"]).date(),
+                   "price": prices[c["ticker"]]} for c in rows if c["ticker"] in prices]
+        if priced:
+            curves[code] = pd.DataFrame(priced)
+        else:
+            errors.setdefault(code, f"Massive returned no priced {code} contracts.")
+    if errors:
+        _load_trend_contracts.clear()
+        _load_trend_prices.clear()
+    return curves, errors
+
+
+@st.cache_resource(ttl="6h", show_spinner=False)
+def _settlement_bank(as_of: str) -> dict[tuple[str, str, int], pd.Series]:
+    return settlement_bank.load_bank([c["product_code"] for c in COMMODITIES], BANK_FIRST_YEAR)
+
+
+def load_settlement_bank(as_of: str) -> dict[tuple[str, str, int], pd.Series]:
+    """Settlements banked in Snowflake since late 2021, or {} when Snowflake is off or
+    unreachable. The tab then asks Massive instead: slower (about a minute), and a year
+    shorter for meal, oil and wheat, since Massive's per-contract history starts later."""
+    try:
+        return _settlement_bank(as_of)
+    except Exception:  # Snowflake fails in many ways; none of them should blank the tab
+        return {}
 
 
 @st.cache_data(ttl="6h", show_spinner=False)
@@ -1515,15 +1564,46 @@ def load_trend_analogs(tickers: tuple[str, ...], api_key: str, as_of: str) -> di
     return get_settlement_histories(list(tickers), api_key, max_workers=16, retry_empty=True)
 
 
-def load_trend_fronts(api_key: str, as_of: date) -> list[dict]:
+def contract_letter(ticker: str, code: str) -> str:
+    """The month letter of an outright like ZCZ6, or "" for anything else."""
+    suffix = ticker[len(code):]
+    return suffix[0] if len(suffix) == 2 and suffix[0] in MONTH_LETTERS else ""
+
+
+def banked_series(bank: dict, code: str, letter: str, year: int) -> "pd.Series | None":
+    series = bank.get((code, letter, year))
+    return series if series is not None and len(series) else None
+
+
+def settled_before(series: "pd.Series | None", as_of: date) -> "pd.Series | None":
+    """The sessions before `as_of`. Massive's bar for the session in progress carries its last
+    trade, not a settlement, and the bank only holds a day once its job has run, so cutting both
+    at the same place makes the averages mean the same thing whichever source supplied them."""
+    if series is None or not len(series):
+        return series
+    return series[[day < as_of for day in series.index]]
+
+
+def load_trend_fronts(api_key: str, as_of: date, bank: dict) -> list[dict]:
     """The two nearest contracts of every market, with live price and settlement history. A
-    market that couldn't be loaded appears once, carrying its error."""
+    market that couldn't be loaded appears once, carrying its error. History comes from the
+    settlement bank while it is current for that contract (a weekend or holiday is fine; a
+    missed job isn't), and from Massive otherwise."""
     iso = as_of.isoformat()
     curves, errors = load_trend_curves(api_key, iso)
     fronts = {c["product_code"]: curves[c["product_code"]].head(2)
               for c in COMMODITIES if c["product_code"] in curves}
-    tickers = tuple(t for curve in fronts.values() for t in curve["ticker"])
-    histories = load_trend_histories(tickers, api_key, iso) if tickers else {}
+    histories: dict[str, pd.Series] = {}
+    unbanked: list[str] = []
+    for code, curve in fronts.items():
+        for r in curve.itertuples():
+            series = banked_series(bank, code, contract_letter(r.ticker, code), r.expiration.year)
+            if series is not None and (as_of - series.index[-1]).days <= BANK_FRESH_DAYS:
+                histories[r.ticker] = series
+            else:
+                unbanked.append(r.ticker)
+    if unbanked:
+        histories.update(load_trend_histories(tuple(unbanked), api_key, iso))
     out = []
     for commodity in COMMODITIES:
         code = commodity["product_code"]
@@ -1532,18 +1612,19 @@ def load_trend_fronts(api_key: str, as_of: date) -> list[dict]:
             out.append({"commodity": commodity, "error": errors.get(code, "no live contracts")})
             continue
         for r in curve.itertuples():
-            suffix = r.ticker[len(code):]
             out.append({"commodity": commodity, "ticker": r.ticker, "expiration": r.expiration,
-                        "price": float(r.price), "history": histories.get(r.ticker),
-                        "letter": suffix[0] if len(suffix) == 2 and suffix[0] in MONTH_LETTERS else ""})
+                        "price": float(r.price), "letter": contract_letter(r.ticker, code),
+                        "history": settled_before(histories.get(r.ticker), as_of)})
     return out
 
 
-def trend_analog_plan(front: dict, as_of: date, legacy: pd.DataFrame) -> dict[int, "pd.Series | str"]:
+def trend_analog_plan(front: dict, as_of: date, legacy: pd.DataFrame,
+                      bank: dict) -> dict[int, "pd.Series | str"]:
     """{years_back: history, or the Massive ticker to fetch it with} for the same contract
-    month in prior years. The bundled pre-2022 file serves corn and soybeans; every other
-    case comes from Massive, which has nothing before its first bar, so a year whose window
-    opens earlier than that is skipped rather than fetched."""
+    month in prior years. The bundled pre-2022 file serves corn and soybeans, the settlement
+    bank everything since late 2021 (the longer of the two wins where they overlap). Massive
+    is asked only when there is no bank at all, and it has nothing before its first bar, so a
+    year whose window opens earlier than that is skipped rather than fetched."""
     code = front["commodity"]["product_code"]
     letter = front["letter"]
     plan: dict[int, pd.Series | str] = {}
@@ -1551,9 +1632,13 @@ def trend_analog_plan(front: dict, as_of: date, legacy: pd.DataFrame) -> dict[in
         return plan
     for years_back, year in trend_board.analog_years(front["expiration"]):
         old = get_legacy_series(legacy, code, letter, year) if year <= 2021 else pd.Series(dtype=float)
-        if len(old):
+        banked = banked_series(bank, code, letter, year)
+        if len(old) and (banked is None or len(old) >= len(banked)):
             plan[years_back] = old
-        elif year >= MASSIVE_FLOOR.year and trend_board.shift_back(as_of, years=years_back) >= MASSIVE_FLOOR:
+        elif banked is not None:
+            plan[years_back] = banked
+        elif (not bank and year >= MASSIVE_FLOOR.year
+              and trend_board.shift_back(as_of, years=years_back) >= MASSIVE_FLOOR):
             plan[years_back] = f"{code}{letter}{year % 10}"
     return plan
 
@@ -1669,8 +1754,9 @@ def trend_frames(rows, ready: bool) -> tuple[pd.DataFrame, pd.DataFrame, pd.Data
             pd.DataFrame(export))
 
 
-def draw_trend_table(rows, ready: bool) -> pd.DataFrame:
-    """Draw the snapshot table; returns the plain-number frame for CSV."""
+def draw_trend_table(rows, ready: bool) -> tuple[pd.DataFrame, "pd.io.formats.style.Styler"]:
+    """Draw the snapshot table; returns the plain-number frame for CSV and the styled table
+    for the PNG."""
     display, styles, export = trend_frames(rows, ready)
     styler = display.style.apply(lambda _: styles, axis=None)
 
@@ -1699,7 +1785,27 @@ def draw_trend_table(rows, ready: bool) -> pd.DataFrame:
     }
     st.dataframe(styler, hide_index=True, width="stretch", column_config=column_config,
                  height=min(35 * (len(display) + 1) + 3, 900))
-    return export
+    return export, styler
+
+
+TREND_PNG_NOTE = (
+    f"{DELAYED_QUOTES_NOTE} Changes are against the same contract's settlement a week, a month "
+    "and a year earlier. Averages are the last 20, 100 and 200 daily settlements before today. "
+    "Seasonal is the average move of the same contract month over the same 30 days in prior "
+    "years (up to 15): Higher at +3% or more, Weaker at -3% or less, Neutral between."
+)
+
+
+def history_source_note(bank: dict) -> str:
+    """Where the settlement history came from, so a stale or missing bank is visible."""
+    if bank:
+        latest = max(series.index[-1] for series in bank.values() if len(series))
+        return f"History: JSA's Snowflake settlement bank, through {latest:%b %d}."
+    if settlement_bank.use_snowflake():
+        return ("History: Massive daily settlements. The Snowflake settlement bank couldn't be "
+                "read just now, so this load took longer; it tries again in a few minutes.")
+    return ("History: Massive daily settlements. This copy isn't connected to the Snowflake "
+            "settlement bank, so the first load takes about a minute.")
 
 
 def render_trend_legend():
@@ -1733,37 +1839,42 @@ def render_trends(api_key: str, as_of: date):
     st.caption(DELAYED_QUOTES_NOTE)
     render_trend_legend()
 
+    iso = as_of.isoformat()
     with st.spinner("Loading the front months…"):
-        fronts = load_trend_fronts(api_key, as_of)
-
-    # Prices, changes and averages are ready now; the seasonal needs ~60 more histories, so the
-    # table is drawn without it first and redrawn in place once they arrive.
-    slot = st.empty()
-    with slot.container():
-        draw_trend_table(trend_rows(fronts, as_of), ready=False)
+        bank = load_settlement_bank(iso)
+        fronts = load_trend_fronts(api_key, as_of, bank)
 
     legacy = load_legacy_history_cached()
-    plans = [trend_analog_plan(f, as_of, legacy) if "error" not in f else {} for f in fronts]
+    plans = [trend_analog_plan(f, as_of, legacy, bank) if "error" not in f else {} for f in fronts]
     wanted = tuple(sorted({src for plan in plans for src in plan.values() if isinstance(src, str)}))
     fetched: dict[str, pd.Series] = {}
+    slot = st.empty()
     if wanted:
+        # No settlement bank here, so the seasonal needs ~60 histories from Massive, about a
+        # minute. Prices, changes and averages are ready now: draw the table without the seasonal
+        # first and redraw it in place once the history arrives.
+        with slot.container():
+            draw_trend_table(trend_rows(fronts, as_of), ready=False)
         with st.spinner("Loading the seasonal history (about a minute the first time)…"):
-            fetched = load_trend_analogs(wanted, api_key, as_of.isoformat())
+            fetched = load_trend_analogs(wanted, api_key, iso)
     rows = trend_rows(fronts, as_of, plans, fetched)
     with slot.container():
-        export = draw_trend_table(rows, ready=True)
-    export_row(export, "trends_snapshot", key="trends")
+        export, styler = draw_trend_table(rows, ready=True)
+    export_row(export, "trends_snapshot", key="trends",
+               table={"styler": styler, "title": f"Trends snapshot · {as_of:%b %d, %Y}",
+                      "note": TREND_PNG_NOTE})
 
     st.caption(
         "Changes compare the live price with that same contract's settlement a week, a month and a "
         "year earlier. Averages are the simple mean of the contract's last 20, 100 and 200 daily "
-        "settlements; green means the price is above it, red below. Seasonal takes the same contract "
-        "month in each prior year (up to 15) and measures its move over the same 30 days from "
-        "today's date. The average sets the read, and the years column counts how many of those "
-        "years finished up more than 3%, inside ±3%, or down more than 3%. A contract that "
-        "expires inside 30 days is read to its expiry (marked with the days used); a dash means "
-        "it expires within 10 days or has too little history on file."
+        "settlements before today; green means the price is above it, red below. Seasonal takes "
+        "the same contract month in each prior year (up to 15) and measures its move over the same "
+        "30 days from today's date. The average sets the read, and the years column counts how "
+        "many of those years finished up more than 3%, inside ±3%, or down more than 3%. A "
+        "contract that expires inside 30 days is read to its expiry (marked with the days used); "
+        "a dash means it expires within 10 days or has too little history on file."
     )
+    st.caption(history_source_note(bank))
     years_on_file: dict[str, int] = {}
     for commodity, trend, _ in rows:
         if trend is not None and trend.seasonal is not None:
@@ -1803,8 +1914,7 @@ def main():
         st.stop()
 
     as_of = date.today()
-    wasde_dates = load_wasde_dates()
-    nass_dates = load_nass_dates(tuple(range(2021, as_of.year + 1)))
+    nass_years = tuple(range(2021, as_of.year + 1))
 
     st.caption("Report markers — vertical lines on the price/candlestick charts:")
     marker_row = st.container(horizontal=True, vertical_alignment="center")
@@ -1819,10 +1929,14 @@ def main():
             "NASS Crop Progress (weekly)", value=False, key="show_crop_progress",
             help="Off by default — weekly releases add a lot of lines.",
         )
-    report_dates_visible = _selected_report_dates(
-        wasde_dates, nass_dates, show_wasde, show_nass_major, show_crop_progress
-    )
     anthropic_key = get_anthropic_key()
+
+    # The WASDE and NASS calendars take ~30 s to fetch cold and only the chart tabs, the report
+    # calendar and Ask AI use them, so they load when one of those opens (and are cached for a
+    # day) rather than holding up Trends, the tab the app lands on.
+    def report_dates_visible() -> dict[str, list[date]]:
+        return _selected_report_dates(load_wasde_dates(), load_nass_dates(nass_years),
+                                      show_wasde, show_nass_major, show_crop_progress)
 
     tab_labels = ["Trends"] + [c["label"] for c in COMMODITIES] + [
         "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
@@ -1838,16 +1952,17 @@ def main():
         with tab:
             if tab.open:
                 st.caption(commodity["sublabel"])
-                render_commodity(commodity, api_key, as_of, report_dates_visible)
+                render_commodity(commodity, api_key, as_of, report_dates_visible())
     with tabs[-4]:
         if tabs[-4].open:
-            render_cross_commodity_spread(api_key, as_of, report_dates_visible)
+            render_cross_commodity_spread(api_key, as_of, report_dates_visible())
     with tabs[-3]:
         if tabs[-3].open:
-            render_report_calendar(wasde_dates, nass_dates, as_of)
+            render_report_calendar(load_wasde_dates(), load_nass_dates(nass_years), as_of)
     with tabs[-2]:
         if tabs[-2].open:
-            render_ask_ai(api_key, anthropic_key, as_of, wasde_dates, nass_dates)
+            render_ask_ai(api_key, anthropic_key, as_of, load_wasde_dates(),
+                          load_nass_dates(nass_years))
     with tabs[-1]:
         if tabs[-1].open:
             render_hl_tab(api_key, load_legacy_history_cached())

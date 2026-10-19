@@ -1,18 +1,20 @@
 {
  "branch": "master",
- "commit": "987d24fd4ddeaac8972cb69417907061692d9461",
+ "commit": "d5e4d1c86cb7740a13f4cbb5bbddb291bebd07c4",
  "files": {
   "ai_chat.py": "ce709346974c7de8b116e5b7cf707cbd56f5043c9fb1cda5cd36e09b8e171957",
-  "app.py": "507c1cce3ac8199d14089bf5bce09d9f67beb99ec383d7d17ad2bc1366e33acc",
+  "app.py": "3ce4ddb90ef77f221d4b48beee0d3a5a5e57bf4aa11c7947e2f71b1f1ece0d46",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "data/High Low Model.xlsx": "8e7996dc969d8e0495da9ed667bb68c109e9503ace5616c7227916f147dd3c73",
   "hl_model.py": "6c99f5f5b7d70167a1d18e829ce77e6c8443762312f7450981ac30c21e50b873",
   "legacy_futures_history.csv": "b9edcebe4aa92440a60925794563f50362c2c3558ccda0cbbf23108ef299b55e",
   "legacy_history.py": "c678ec9c6d122eb82ddf962296e1245a992693f9005fef911c5a8ea9cfac2107",
-  "massive_api.py": "6c7f42a38111a2345aa8b46967c6a2fa83566975e22121f44c4353d1cde4978a",
+  "massive_api.py": "1da4730266152dcd2e090fb2b0659b49567f190e45c8484630de2e9d01ed335e",
   "report_dates.py": "d434c81f00062d5a4df9886f02c00e6029fd9404fd4cee051d6e899c9c5cbeb3",
+  "settlement_bank.py": "c81263bdf278e3a142577400bb0d2e661b5b5cd8ea4c667c67c8c20a5f566c65",
   "stocks_use.py": "5f6f96f3a9af81fdfcd1bc59ab6443f702d1c9644db7b39a9b803cbc3f4e172a",
+  "table_png.py": "f571e4397c1d1ca64b2892250f662d547806b4720508aa3f4ee7a1dc5b074012",
   "trend_board.py": "58dff29a31716207df3cc3f0745821f0d47643073936f279b2a38be214bd8bee"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",

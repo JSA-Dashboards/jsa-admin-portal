@@ -200,32 +200,43 @@ def get_settlement_histories(tickers: list[str], api_key: str, max_workers: int 
     return out
 
 
-def get_front_curves(product_codes: list[str], api_key: str, as_of: date,
-                     n_contracts: int = 3) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
-    """Front months for several markets, fetched side by side. Returns (curves, errors):
-    a market that fails lands in `errors` with its message, so one feed hiccup doesn't
-    blank the rest. /contracts can come back empty right at the UTC date rollover, before
-    the feed has published that date's active set, so an empty curve is retried against
-    yesterday before being reported."""
-    def one(code: str) -> pd.DataFrame:
+def get_front_contracts(product_codes: list[str], api_key: str, as_of: date,
+                        n_contracts: int = 3) -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """The nearest outright contracts of several markets, fetched side by side, as
+    {product_code: [{"ticker", "expiration"}]} with no prices (see get_prices). Returns
+    (contracts, errors): a market that fails lands in `errors` with its message, so one feed
+    hiccup doesn't blank the rest. /contracts can come back empty right at the UTC date
+    rollover, before the feed has published that date's active set, so an empty list is
+    retried against yesterday before being reported."""
+    def one(code: str) -> list[dict]:
         for back in (0, 1):
-            curve = get_futures_curve(code, api_key, as_of - timedelta(days=back),
-                                      n_contracts=n_contracts)
-            if not curve.empty:
-                return curve
-        raise MassiveApiError(f"Massive returned no priced {code} contracts.")
+            contracts = get_active_contract_tickers(code, api_key, as_of - timedelta(days=back))
+            if contracts:
+                return contracts[:n_contracts]
+        raise MassiveApiError(f"Massive listed no {code} contracts.")
 
-    curves: dict[str, pd.DataFrame] = {}
+    out: dict[str, list[dict]] = {}
     errors: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=max(1, len(product_codes))) as pool:
         futures = {pool.submit(one, code): code for code in product_codes}
         for fut in as_completed(futures):
             code = futures[fut]
             try:
-                curves[code] = fut.result()
+                out[code] = fut.result()
             except (MassiveApiError, requests.RequestException) as e:
                 errors[code] = str(e)
-    return curves, errors
+    return out, errors
+
+
+def get_prices(tickers: list[str], api_key: str) -> dict[str, float]:
+    """The live price of each ticker that has one, from a single batch of snapshots. A failed
+    request raises MassiveApiError, however it failed."""
+    try:
+        snapshots = get_snapshots(tickers, api_key)
+    except requests.RequestException as e:
+        raise MassiveApiError(f"Massive snapshot request failed: {e}") from e
+    return {t: price for t, snap in snapshots.items()
+            if (price := _extract_price(snap)) is not None}
 
 
 FED_FUNDS_PRODUCT = "ZQ"
