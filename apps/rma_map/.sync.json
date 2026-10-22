@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "048683397a5c9927ac3449f494babc13f9c4637d",
+ "commit": "5f556b470cc81314a174c8ba365f637928e93d8c",
  "files": {
-  "app.py": "128575b4b09e9b4f945a9981087085a647f89f9866210be5c79243d806237d24",
+  "app.py": "052f3d9474b75f37811f9719adad8c4cb96968bbf22c3f45415a82d8d3db4ad6",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/Transparent Smal logo.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
   "assets/logo-full.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
@@ -18,7 +18,7 @@
   "data/nass_sep1_stocks_state.csv": "c119b9e4a9597f237e4fbd932333f67ccc134b935fa5452f288d5aadc98c7271",
   "data/wcmd_county.csv": "10932081505d520525895c952437eee8cb6ad5b0e3c24798c4993b171fda5732",
   "data/wcmd_warehouses.csv": "56f5dca36df5194d17dc3902d4c1c1915526171d77c6049101821ec18172bad8",
-  "demand_module.py": "74040c6dd67b2375c0715c953ca65b65f26d58abe8a3e20c752e81bd4bde7b53",
+  "demand_module.py": "ff7ea21e0228605b0a7da53a3379cbec1066c32d8d1b14b8ba572be35a5b1737",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
   "wcmd_scraper.py": "f25cc7f0a01f9f703efee8470d56c8d5c0d279c4e4c698d24d5a925efb52a1bb"
  },
