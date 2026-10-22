@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "0058265309eda250a1ef5ac2c066242d47b8c35b",
+ "commit": "adbeee39af0d2b26b00f8fa64b7be5bfd8de6cee",
  "files": {
   "app.py": "0e30258f7a77515a11cc7be68e1746a864f960e8d59d297f268a11ec66bd92c1",
   "app_pages/add.py": "9606b5593e572b5375307e19e485fc14d2026a482a6d0ee9c8ad951575719be3",
@@ -12,9 +12,10 @@
   "app_pages/review.py": "170304c1ec3aca2ade79a23fd282553d28326e843cd86e1e831fd9b9895736bc",
   "app_pages/strip_trials.py": "956fc31444427d89816c277b76e05fb254d71671be7c7a1a170dc226804e6522",
   "app_pages/trials.py": "16e4f45854950de6f8c9137b728560af127289eb1de970e3d1b3e5d69b414f6c",
+  "assets/jsa_logo.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
   "yp_analysis.py": "399facaf0f34cf32e185a116665cb9772e4d2dcc5b8d4874fa47a910984af562",
   "yp_baselines.py": "b2b70e04df775e4bb5553faf372e3fe1baf6822d24f0191027593595097956f3",
-  "yp_checks.py": "b08d74e23206672fdb4232453a8cf034a1dad37a6cdc55cefcec3d5cb44464ff",
+  "yp_checks.py": "e5056b2bcbaacdd8fbc9c839cef6f835c6d5daef8b991dce52484a3e9cf616f3",
   "yp_data.py": "e30aa18d9669d54de13def754669c989bb35a8a17f3e43139a1c9cf65c91549c",
   "yp_db.py": "2428e6ac51d47505a0ca24d7bba7ba41ff8dbc29ffd4d397274e495997b4e23e",
   "yp_field_issues.py": "06959558e64d558c94a17c2394a12afed4fcf47b5f41b6add1c39f7daeb4e24e",
@@ -35,7 +36,7 @@
   "yp_reimport_pdfs.py": "9d813ecb33fc92c6b2191ad6ed341504b22b809b4a0e3e451f717a7bafba43a5",
   "yp_report_text.py": "211486c2811f3f3e47fa36c005f3e2d16db42390ead8d7772d668f4c65cec4d8",
   "yp_trials.py": "4b9598a09bdda48b5b6a3f20ec9aef3897de0ef2dddab5a5315fcbf9f7ea04c5",
-  "yp_weekly_email.py": "73e5d4014eb8d5273916d5e2c179cf0c3f0df8b0b482a37322858a74d26eefb3"
+  "yp_weekly_email.py": "ff8306f63ef73bd8515fb8a128f554ba7a684b822741ab8bcd51c841de2f61c2"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/yield-portal",
