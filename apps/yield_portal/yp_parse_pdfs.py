@@ -66,7 +66,7 @@ _SEP = r"[:\-–—(]"
 # "<place/county>, ST:"  or  "<place> ST –"   (ST = 2-letter abbrev)
 NEW_OBS_RE = re.compile(
     r"^([A-Z][\w.&'/, ]{0,44}?)[, ]+(%s)\b\s*%s" % ("|".join(ABBRS), _SEP))
-# "<Name> Co/County <FullStateName>"  e.g. "Monona County Iowa Silage Appraisals".
+# "<Name> Co/County <FullStateName>"  e.g. "Shelby County Iowa Corn Yields".
 # The county word is required so a sentence that merely names a state
 # ("Common story for Indiana, ...") is not taken as a new observation.
 _FULL = "|".join(sorted(STATE_ABBR, key=len, reverse=True))
@@ -193,7 +193,7 @@ _ROAD = re.compile(r"(?:hwy|highway|route|rte|interstate|i-)\s*$", re.I)
 # Context classifiers. A line usually mixes this year's yield with last year's,
 # the expectation, and differences ("down 12 bu", "20 bpa less than APH");
 # only the first kind is the observation's yield.
-_PRE_DELTA = re.compile(   # "down 12 bu", "better than expected by about 10 bu"
+_PRE_DELTA = re.compile(   # "down 12 bu", "better than expected by about 12 bu"
     r"\b(down|up|off|by|plus|minus)(?:\s+(?:about|around|roughly|approximately|"
     r"nearly|almost|just|over))?\s*$", re.I)
 _POST_DELTA = re.compile(    # "10bpa behind last year" is a difference, not LY 10
@@ -256,16 +256,16 @@ LY_TAIL_RE = re.compile(
 # "240 bu/ac expected" is the expectation; but in "yield 52 bpa expected 215bpa"
 # the expectation is the NEXT number, so 47 stays the actual.
 # \b pins the whole word; without it \w* backtracks to "expect" and the
-# lookahead then sees "ed 220bpa" and wrongly passes.
+# lookahead then sees "ed 214bpa" and wrongly passes.
 # Likewise "went 54.5 bpa, expected 42": a figure after "expected" is the
-# expectation. A percentage there ("240 bu/ac expected – 100% irrigated") isn't;
+# expectation. A percentage there ("235 bu/ac expected, 100% irrigated") isn't;
 # (?!\d) stops \d{2,3} backtracking to "10" of "100%", and (?!\.\d) — not
 # (?![\d.]) — still lets "expected 40." end a sentence.
 _EXP_POST = re.compile(
     r"^[^\w.]{0,3}(expect\w*|estimat\w*|target\w*|budget\w*|trend\w*|"      # not past a full stop
     r"(?:\d+|five|ten)[- ]?year\s+(?:avg|average))\b"           # "230bpa 10-year average"
     r"(?!\W{0,3}\d{2,3}(?:\.\d+)?(?!\d)(?!\.\d)(?!\s*%))", re.I)
-# What the farmer thought it would make is an expectation too: "Producer a bit
+# What the farmer thought it would make is an expectation too: "The grower was
 # surprised, thought it was 215" (the verb is optional here because a bare
 # "was 215" match starts at "was"; the context before it ends at "thought it").
 _THOUGHT = (r"(?:thought|figured|guessed)(?:\s+(?:it|they|we|he|she))?"
@@ -282,13 +282,13 @@ _EXP_PRE = re.compile(r"(expect\w*(?:\s+(?:near|about|around|close to|roughly))?
                       r"(?:\d+|five|ten)[- ]?year\s+(?:avg|average)(?:\s+(?:is|was|of))?)\W{0,10}$"
                       % _THOUGHT, re.I)
 # A hope or a guess about what's coming: "Hopes the better ground will be 210 bpa",
-# "farmer estimates should average 68 BPA" (but "total average will be 58 bpa" is the
+# "grower estimates should average 64 BPA" (but "total average will be 58 bpa" is the
 # result).
 _HOPE_WILL = re.compile(
     r"\b(?:hop\w*|think\w*|thought|believ\w*|estimat\w*|guess\w*|expect\w*|figur\w*)\b[^.\d]{0,40}?"
     r"\b(?:will|should|would|could|might)\s+(?:be|average|make|run|go)"
     r"(?:\s+(?:about|around|near|over|up around))?\W{0,10}$", re.I)
-# A record already on the books is a past yield: "the record for that field is 72 bu",
+# A record already on the books is a past yield: "the record for that field is 66 bu",
 # "my record yield of 83.2", "previous record was 225 bpa" ("a record 268" is this year's).
 _PAST_RECORD = re.compile(
     r"\b(?:previous|prior|old|former|past|my|our|his|their|the)\s+(?:\w+\s+)?record\b[^.\d]{0,30}$",
@@ -297,8 +297,8 @@ _PAST_RECORD = re.compile(
 # yield; so is "better than we thought 140 bpa".
 _EXP_DONE = re.compile(r"\b(?:than|as)\s+(?:expected|(?:\w+\s+)?thought)\W{0,3}$", re.I)
 # A "last year" right after a figure that opens its own clause belongs to the next
-# figure: in "estimate 231, fwiw last year silage estimate was 238", 238 is last
-# year's and 231 this year's; likewise "made 68, last year was 73".
+# figure: in "estimate 226, fwiw last year our silage estimate was 233", 233 is last
+# year's and 226 this year's; likewise "made 68, last year was 73".
 _LY_LEADS = re.compile(r"^[^\d.;]{0,30}?\b(?:was|were|at|of|made|did|went)\s+\d{2,3}", re.I)
 # "less/more than" marks a difference at any size ("40 to 60 bushel less than
 # last year"), unlike "better than", which also follows real yields.
@@ -447,7 +447,7 @@ def extract_yields(text):
         if m:
             exp.append(float(m.group(1)))
     # Several fields and a stated farm average: the average speaks for the report
-    # ("120 acres made 190 bpa ... Overall farm avg near 238 bpa" is 238).
+    # ("110 acres made 186 bpa ... Overall farm avg near 231 bpa" is 231).
     m = FARM_AVG_RE.search(text)
     if m and float(m.group(1)) in cur and not _other_place_between(text, m.start()):
         v = float(m.group(1))
@@ -460,13 +460,13 @@ _PLACE_MARK = re.compile(r"\b(?:%s)\b|\b(?:Co\.?|County|Parish)\b" % "|".join(so
 
 def _other_place_between(text, upto):
     """True when another place is named between the report's first yield and
-    `upto`: in "Sac County Iowa ... 220 bpa ... W TN whole farm average of 201",
-    the 201 is West Tennessee's, a second report run into the line."""
+    `upto`: in "Sac County Iowa ... 216 bpa ... W TN whole farm average of 194",
+    the 194 is West Tennessee's, a second report run into the line."""
     first = YIELD_RE.search(text)
     return bool(first and first.end() < upto and _PLACE_MARK.search(text, first.end(), upto))
 
 
-# "whole farm average 88", "Farm avg was 206", "Overall farm avg near 238": the
+# "whole farm average 88", "Farm avg was 206", "Overall farm avg near 231": the
 # words must sit together, so "whole farm non-irrigated average of 44 ... LY" (a
 # last-year figure) isn't taken; and the figure must already read as this year's.
 FARM_AVG_RE = re.compile(
@@ -498,7 +498,7 @@ def split_by_crop(text, default_crop=None):
     """{crop: its sentences} when a report gives yields for both crops, else None.
     Each sentence belongs to the crop it names (the first named, if both), or the
     one before it; leading sentences that name none go with the first crop. Only
-    a suggestion: "Corn last year. 75 bpa two years ago" in a bean report reads as
+    a suggestion: "Corn last year. 68 bpa two years ago" in a bean report reads as
     corn here, so a person confirms every split."""
     segs, cur = [], None
     for s in _sentences(text or ""):
@@ -527,8 +527,8 @@ def split_by_crop(text, default_crop=None):
 
 # APH: "APH 210", "APH of 250", "Aph on field is 235ish", "APH was 47 bpa",
 # "(205 APH)", "vs 180 aph". [^\d.] stops at a full stop, so in "better than
-# APH. Different producer making 240 bpa vs APH 220" the first APH (no value)
-# can't grab 240 — the second one gives 220.
+# APH. Another producer making 233 bpa vs APH 214" the first APH (no value)
+# can't grab 233 — the second one gives 214.
 # A figure before "APH" is the APH ("vs 60 bpa APH", "vs. 58.5bpa APH") unless "APH"
 # names its own: in "90 acres 228 bpa aph 205" 228 is the yield. "(205 APH) 2. 150
 # acres" is still 205: a list number or an acreage after it isn't an APH.
@@ -594,7 +594,7 @@ _ACRES_RE = re.compile(
     r"(?<![\d.,])\d{1,3}(?:,\d{3})*(?:\.\d+)?"
     r"(?:\s*(?:acres?|ac)\b|\s+[a-z]+\s+acres?\b|a\b|\s+a\b(?!\s+[a-z]))", re.I)
 # An acreage after its figure belongs to that figure's field: "Corn: 231 bpa on 80
-# acres. ... Corn: 205 bpa on 120 acres" (2026-10-21). The cut goes before the figure,
+# acres. ... Corn: 199 bpa on 110 acres" (2026-10-21). The cut goes before the figure,
 # not at the acreage, which split each yield from its own acres.
 _FIGURE_ON_ACRES = re.compile(
     r"(?<![\d.,/$])(\d{2,3}(?:\.\d+)?)\s*(?:bpa|bu(?:shels?)?|bushels?)?(?:\s*/\s*a(?:c(?:re)?)?)?"
@@ -1085,7 +1085,7 @@ _LOCATION_ONLY = re.compile(
 _LEAD_CROP = re.compile(r"^(corn|soybeans?|beans)\s*[-–:]\s*", re.I)
 _CROP_WORDS = {"corn", "soybeans", "soybean", "beans", "silage"}
 # A second report run into the same line:
-#   "... beans 82-84 bpa. Pleased. Brown Co IL (western) corn avg 238"
+#   "... beans 78-80 bpa. Pleased. Brown Co IL (western) corn avg 232"
 _MIDLINE_REPORT = re.compile(
     r"(?<=[.!?;])\s+(?=[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+)?\s+"
     r"(?:Co\.?|County|Parish)\b,?\s+(?:%s)\b)" % "|".join(ABBRS))
@@ -1229,7 +1229,7 @@ def parse_email(subject, body, crop_year, date_reported=None):
         r["crop"] = known or email_crop("", r["raw_text"]) or subject_crop
         r.update(extract_metrics(r["raw_text"], r["crop"]))
         if r["crop"] is None and (r.get("yield_bpa") or 0) > SOY_MAX:
-            # no crop named anywhere ("Lee Co IA - 245 bpa, same as last year"), but
+            # no crop named anywhere ("Lee Co IA - 238 bpa, same as last year"), but
             # only corn runs past 100 bpa: corn, and the row says why. At 100 or
             # under either crop is possible, so it waits on Review & edit.
             r["crop"] = "Corn"
