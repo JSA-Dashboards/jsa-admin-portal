@@ -1891,17 +1891,31 @@ def render_trends(api_key: str, as_of: date):
             st.warning(f"{commodity['label']}: {error}")
 
 
+def refresh_prices():
+    # Quotes only: settlement history is cached for hours on purpose and re-pulling it takes minutes.
+    for loader in (load_curve, _load_trend_prices):
+        loader.clear()
+
+
 def main():
     col_logo, col_title = st.columns([1, 6], vertical_alignment="center")
     with col_logo:
         st.image(asset(LOGO_FILE), width=150)
     with col_title:
         st.title("Grain Seasonal Futures & Spreads")
-    st.caption(
-        "Live CBOT grain futures, aligned across prior contract years to reveal seasonal "
-        "patterns in outright price and in calendar spreads. "
-        f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
-    )
+    asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+    with asof_col:
+        st.caption(
+            "Live CBOT grain futures, aligned across prior contract years to reveal seasonal "
+            "patterns in outright price and in calendar spreads. "
+            f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
+        )
+    with refresh_col:
+        if st.button("Refresh prices", icon=":material/refresh:", width="stretch",
+                     help="Re-read live quotes now instead of waiting out the 5-minute cache. "
+                          "Settlement-history charts are not re-pulled."):
+            refresh_prices()
+            st.toast("Fetching fresh prices…")
     st.caption(DATA_START_NOTE)
     st.caption(FND_NOTE)
 

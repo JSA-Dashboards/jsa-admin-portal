@@ -2880,18 +2880,32 @@ def render_builder(api_key: str, as_of: date, default_rate_pct: float):
     render_disclaimer_footer()
 
 
+def refresh_prices():
+    # Quotes only: settlement history is cached for hours on purpose and re-pulling it takes minutes.
+    for loader in (load_curve, load_crush_curve, load_ethanol_curve, load_fed_funds):
+        loader.clear()
+
+
 def main():
     col_logo, col_title = st.columns([1, 6], vertical_alignment="center")
     with col_logo:
         st.image(asset(LOGO_FILE), width=150)
     with col_title:
         st.title("Cost of Carry & Seasonal Spreads")
-    st.caption(
-        "Live CBOT & MGEX grain futures curves priced against full financial cost of carry "
-        "(storage + interest), every near month against every deferred month. "
-        "Spreads are calculated arithmetically and may deviate from board quotes. "
-        f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · {DELAYED_QUOTES_NOTE}"
-    )
+    asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+    with asof_col:
+        st.caption(
+            "Live CBOT & MGEX grain futures curves priced against full financial cost of carry "
+            "(storage + interest), every near month against every deferred month. "
+            "Spreads are calculated arithmetically and may deviate from board quotes. "
+            f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · {DELAYED_QUOTES_NOTE}"
+        )
+    with refresh_col:
+        if st.button("Refresh prices", icon=":material/refresh:", width="stretch",
+                     help="Re-read live quotes now instead of waiting out the 5-minute cache. "
+                          "Settlement-history charts are not re-pulled."):
+            refresh_prices()
+            st.toast("Fetching fresh prices…")
 
     api_key = get_api_key()
     if not api_key:
