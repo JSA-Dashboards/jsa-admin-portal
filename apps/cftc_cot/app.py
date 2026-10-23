@@ -273,6 +273,16 @@ asof_col.markdown(
     f'<b>{age} days old</b>. CFTC publishes once a week and never intraday, so this is the most '
     f'recent reading that exists &mdash; it is not a position held today.</div>', unsafe_allow_html=True)
 
+fresh = cc.freshness(latest_date)
+if fresh["overdue"]:
+    st.warning(
+        f"**The newest CFTC report on file is {fresh['weeks_behind']} week"
+        f"{'s' if fresh['weeks_behind'] != 1 else ''} behind.** The latest report here is "
+        f"{_us(latest_date)}; CFTC should have published {_us(pd.Timestamp(fresh['expected']))} on "
+        f"Friday {_us(pd.Timestamp(fresh['expected'] + pd.Timedelta(days=3)))}. Every figure below is "
+        "correctly computed and describes an older week. Holiday weeks slip to Monday; otherwise the "
+        "weekly load (`cftc-cot-etl` on the droplet) has not run or CFTC is late. Try **Refresh data**.")
+
 hero_cols = st.columns(len(HERO_MARKETS))
 for col, s in zip(hero_cols, HERO_MARKETS):
     g = fut[fut.series == s].sort_values("report_date")

@@ -6,6 +6,8 @@ contracts. Credentials come from st.secrets, then the environment, then a
 local .env (dev only). Key-pair auth is used when a key is supplied.
 """
 import os
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -85,31 +87,92 @@ _DISAGG_COLS = ("report_date, series, open_interest, open_interest_chg, "
                 "traders_total")
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading disaggregated positions…")
-def load_disagg(report_type: str) -> pd.DataFrame:
+CT = ZoneInfo("America/Chicago")
+
+# THE CACHE EXPIRES ON THE EVENT, NOT ON A TIMER. CFTC posts Friday ~2:30pm CT and the droplet
+# loads Snowflake on the schedule below (crontab "CFTC COT pull"). An hour's TTL alone could
+# serve the previous week for up to an hour after the new one landed, so every query is also
+# keyed on the most recent run that has finished: the minute the ETL has had time to run
+# (about 1 minute, +2 spare), the next page view re-reads Snowflake. KEEP IN STEP WITH THE
+# CRONTAB: Fri 14:35, 15:00, 15:30, 16:30, 18:00 and Mon 15:00 (weekday 4 = Friday, 0 = Monday).
+ETL_RUNS = ((4, time(14, 38)), (4, time(15, 3)), (4, time(15, 33)), (4, time(16, 33)),
+            (4, time(18, 3)), (0, time(15, 3)))
+
+
+def data_epoch(now: datetime | None = None) -> str:
+    """Changes right after each scheduled ETL run, so a cached read never outlives a load."""
+    now = (now or datetime.now(CT)).astimezone(CT)
+    best = None
+    for back in range(0, 9):
+        day = now.date() - timedelta(days=back)
+        for wd, t in ETL_RUNS:
+            if day.weekday() == wd:
+                stamp = datetime.combine(day, t, tzinfo=CT)
+                if stamp <= now and (best is None or stamp > best):
+                    best = stamp
+    return best.isoformat() if best else "none"
+
+
+def freshness(latest_report, now: datetime | None = None) -> dict:
+    """Is the newest report on file the one CFTC should have published by now?
+
+    A report dated Tuesday T is published the Friday after (T+3d, 2:30pm CT). `overdue` only
+    turns on after the last retry run of that day has had its chance (6:30pm CT), so the
+    ordinary Friday-afternoon gap never shows as a fault. Holiday weeks slip to Monday, which
+    is why the message says so rather than blaming the ETL outright."""
+    now = (now or datetime.now(CT)).astimezone(CT)
+    latest = latest_report.date()
+    tue = now.date() - timedelta(days=(now.weekday() - 1) % 7)   # most recent Tuesday on/before today
+    while True:
+        release = datetime.combine(tue + timedelta(days=3), time(18, 30), tzinfo=CT)
+        if release <= now:
+            break
+        tue -= timedelta(days=7)
+    behind = (tue - latest).days // 7
+    return {"expected": tue, "weeks_behind": max(behind, 0), "overdue": behind > 0,
+            "release": datetime.combine(tue + timedelta(days=3), time(14, 30), tzinfo=CT)}
+
+
+@st.cache_data(ttl=1800, show_spinner="Loading disaggregated positions…")
+def _disagg(report_type: str, epoch: str) -> pd.DataFrame:
     return _query(f"SELECT {_DISAGG_COLS} FROM COT_DISAGG "
                   "WHERE series IS NOT NULL AND report_type = %s ORDER BY series, report_date",
                   [report_type])
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading legacy history…")
-def load_legacy(report_type: str, series: str) -> pd.DataFrame:
+@st.cache_data(ttl=1800, show_spinner="Loading legacy history…")
+def _legacy(report_type: str, series: str, epoch: str) -> pd.DataFrame:
     return _query("SELECT report_date, open_interest, noncomm_long, noncomm_short, noncomm_net, "
                   "comm_long, comm_short, comm_net, nonrept_net "
                   "FROM COT_LEGACY WHERE series = %s AND report_type = %s ORDER BY report_date",
                   [series, report_type])
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading index-trader positions…")
-def load_cit() -> pd.DataFrame:
+@st.cache_data(ttl=1800, show_spinner="Loading index-trader positions…")
+def _cit(epoch: str) -> pd.DataFrame:
     return _query("SELECT report_date, series, open_interest, cit_long, cit_short, cit_net, "
                   "noncomm_net, comm_net, cit_long_chg, cit_short_chg, cit_long_pct_oi, "
                   "cit_short_pct_oi FROM COT_CIT WHERE series IS NOT NULL "
                   "ORDER BY series, report_date")
 
 
+# The public loaders ALWAYS pass the epoch: st.cache_data keys on the arguments actually
+# supplied (defaults are not part of the key), so a call site that forgot it would silently
+# keep the hour-long cache.
+def load_disagg(report_type: str) -> pd.DataFrame:
+    return _disagg(report_type, data_epoch())
+
+
+def load_legacy(report_type: str, series: str) -> pd.DataFrame:
+    return _legacy(report_type, series, data_epoch())
+
+
+def load_cit() -> pd.DataFrame:
+    return _cit(data_epoch())
+
+
 def clear_cache() -> None:
     """Drop every cached query so the next render re-reads Snowflake."""
-    load_disagg.clear()
-    load_legacy.clear()
-    load_cit.clear()
+    _disagg.clear()
+    _legacy.clear()
+    _cit.clear()
