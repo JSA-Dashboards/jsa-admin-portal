@@ -106,3 +106,10 @@ def load_cit() -> pd.DataFrame:
                   "noncomm_net, comm_net, cit_long_chg, cit_short_chg, cit_long_pct_oi, "
                   "cit_short_pct_oi FROM COT_CIT WHERE series IS NOT NULL "
                   "ORDER BY series, report_date")
+
+
+def clear_cache() -> None:
+    """Drop every cached query so the next render re-reads Snowflake."""
+    load_disagg.clear()
+    load_legacy.clear()
+    load_cit.clear()

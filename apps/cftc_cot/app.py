@@ -255,11 +255,20 @@ def pick_market(series, key: str) -> str:
 
 
 # -- as-of band and hero tiles (futures only, above the tabs) -------------------
+# The button is handled BEFORE the data loads, so a click clears the cache and this same run
+# re-reads Snowflake. The cache otherwise holds an hour, and the ETL lands Friday 3pm CT.
+asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+with refresh_col:
+    if st.button("Refresh data", icon=":material/refresh:", width="stretch",
+                 help="Re-read the latest positions from Snowflake now. Data is otherwise cached for an hour."):
+        cc.clear_cache()
+        st.toast("Reloaded from Snowflake.")
+
 fut = load_disagg_or_stop("FUT")
 latest_date = fut[fut.series == "CORN"].report_date.max()
 age = (date.today() - latest_date.date()).days
-st.markdown(
-    f'<div class="asof">Positions as they stood at the close on <b>Tuesday {_us(latest_date)}</b>, '
+asof_col.markdown(
+    f'<div class="asof" style="margin-bottom:0">Positions as they stood at the close on <b>Tuesday {_us(latest_date)}</b>, '
     f'published by CFTC on Friday {_us(latest_date + pd.Timedelta(days=3))}. These positions are '
     f'<b>{age} days old</b>. CFTC publishes once a week and never intraday, so this is the most '
     f'recent reading that exists &mdash; it is not a position held today.</div>', unsafe_allow_html=True)
