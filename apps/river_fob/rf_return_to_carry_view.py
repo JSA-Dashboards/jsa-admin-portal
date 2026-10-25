@@ -32,20 +32,30 @@ MONTH_FULL = ["January", "February", "March", "April", "May", "June", "July", "A
 
 
 def window_text(crop_year: int, window: tuple, dates_note: str = "") -> str:
-    """The weeks of a user-chosen harvest-basis window, in the user's numbering (week 1 = the first Wednesday of October, week 0 = the last Wednesday of
-    September) with the tracked crop year's dates: 'weeks 3 to 6 (Oct 21 – Nov 11)'; `dates_note` goes inside the brackets after the dates."""
+    """The weeks of a user-chosen harvest-basis window, in the user's numbering (week 0 = the first Wednesday of September) with the tracked crop
+    year's dates: 'weeks 7 to 10 (Oct 21 – Nov 11)'; `dates_note` goes inside the brackets after the dates."""
     w0, wn = window
-    first = rtc.first_wednesday(crop_year)
+    first = rtc.first_september_wednesday(crop_year)
     a, b = first + timedelta(days=7 * w0), first + timedelta(days=7 * (w0 + wn - 1))
     if wn == 1:
-        return f"week {w0 + 1} ({a.strftime('%b')} {a.day}{dates_note})"
-    return f"weeks {w0 + 1} to {w0 + wn} ({a.strftime('%b')} {a.day} – {b.strftime('%b')} {b.day}{dates_note})"
+        return f"week {w0} ({a.strftime('%b')} {a.day}{dates_note})"
+    return f"weeks {w0} to {w0 + wn - 1} ({a.strftime('%b')} {a.day} – {b.strftime('%b')} {b.day}{dates_note})"
 
 
 def _f(v, dec: int = 1, sign: bool = True) -> str:
     if v is None:
         return "—"
     return f"{v:+.{dec}f}" if sign else f"{v:.{dec}f}"
+
+
+def best_when(r: dict) -> str:
+    """When (and through which sale) a row's best return was there to lock: 'Oct 21' (that week's nearby bid) or 'Oct 19 · Jan ship' (a
+    forward month sold that day for January shipment; return_to_carry_data.lockable_bests)."""
+    if r.get("best_date") is None:
+        return "—"
+    if r.get("best_kind") == "forward" and r.get("best_ship"):
+        return f"{_md(r['best_date'])} · {MONTHS[r['best_ship'].month - 1]} ship"
+    return _md(r["best_date"])
 
 
 def _md(d) -> str:
@@ -100,7 +110,14 @@ def headline_html(rows: list[dict], measure: str = "net", spec: rtc.Spec = rtc.C
     state = "complete" if r["complete"] else f"{r['weeks']} week{'s' if r['weeks'] != 1 else ''} in"
     rk = rank_of_latest(rows)
     avg_best = _avg([x["best"] for x in completed(rows[:-1])])
-    best_sub = (f"{_md(r['best_date'])}" if r["best_date"] else "no weeks yet")
+    if not r["best_date"]:
+        best_sub = "no weeks yet"
+    elif r.get("best_kind") == "forward" and r.get("best_ship"):
+        best_sub = f"{MONTH_FULL[r['best_ship'].month - 1]} shipment sold ahead, locked {_md(r['best_date'])}"
+    elif r.get("lockable"):
+        best_sub = f"the nearby bid, {_md(r['best_date'])}"
+    else:
+        best_sub = _md(r["best_date"])
     if rk:
         best_sub += f" · #{rk[0]} of {rk[1]} years"
     last_sub = f"{_md(r['last_date'])}" if r["last_date"] else "—"
@@ -161,7 +178,8 @@ def _own_pill() -> str:
 def table_html(rows: list[dict], measure: str = "net", derived: dict | None = None) -> str:
     """A line per crop year, newest first. Harvest basis = the average of the first weekly bids; futures carry = the
     Dec->Jul roll spreads; summer basis = the best bid quoted off July; best return = the highest weekly return
-    on the chosen measure (and its week); 'end' = the return at the last week to July. `derived` = {crop year: 'derived' | 'part'}
+    on the chosen measure (and its week) — or, with lockable rows (summary_rows(lockable=)), the best of that and any forward month sold
+    ahead, shown as 'Oct 19 · Jan ship'; 'end' = the return at the last week to July. `derived` = {crop year: 'derived' | 'part'}
     (return_to_carry_data.derived_years): those years carry a DERIVED / PART DERIVED pill and a line under the table says what it means.
     A year measured from the user's own harvest basis (row['b0_own']) carries an OWN pill beside it."""
     if not rows:
@@ -190,7 +208,7 @@ def table_html(rows: list[dict], measure: str = "net", derived: dict | None = No
                  f'<td style="{td}{bg}">{_f(r["b0"])}{_own_pill() if r.get("b0_own") else ""}</td><td style="{td}{bg}">{_f(r["carry"])}</td>'
                  + (f'<td style="{td}{bg}">{_f(r["summer"], 0)}</td>' if show_summer else "")
                  + f'<td style="{td}{bcol}{bg}">{_f(r["best"])}</td>'
-                 f'<td style="{td};color:#64748b{bg}">{_md(r["best_date"])}</td><td style="{td}{end_col}{bg}">{_f(r["last"])}</td></tr>')
+                 f'<td style="{td};color:#64748b{bg}">{best_when(r)}</td><td style="{td}{end_col}{bg}">{_f(r["last"])}</td></tr>')
     done = completed(rows)
     foot = ""
     if len(done) >= 3:
@@ -210,10 +228,18 @@ def table_html(rows: list[dict], measure: str = "net", derived: dict | None = No
     if any(r.get("b0_own") for r in rows):
         legend += ('<div style="font-size:11px;color:#1f4e79;margin-top:4px">OWN = measured from the harvest basis you entered, in place of the '
                    'calculated average of the first weekly bids.</div>')
+    if any(r.get("lockable") for r in rows):
+        nofwd = [r for r in rows if r.get("best_forward") is None and r["best"] is not None]
+        legend += ('<div style="font-size:11px;color:#1f4e79;margin-top:4px">Best return = the most that could be LOCKED in that year, on any day: '
+                   'the nearby bid that week, or a forward month sold ahead (the forward bid less that day\'s break-even, the hedge rolled to its '
+                   'contract at that day\'s spread and interest to its shipment date). "Oct 19 · Jan ship" = sold Oct 19 for January shipment.'
+                   + (f' {len(nofwd)} year{"s have" if len(nofwd) != 1 else " has"} no forward bids in the archive, so '
+                      f'{"their" if len(nofwd) != 1 else "its"} best is the nearby bid\'s.' if nofwd else "") + '</div>')
     if rows[-1].get("b0_window"):
         legend += ('<div style="font-size:11px;color:#1f4e79;margin-top:4px">Harvest basis = the average of your window, '
                    + window_text(rows[-1]["crop_year"], rows[-1]["b0_window"], ", the tracked year's dates")
-                   + ": the same weeks in every crop year, in place of the report's first 7 weekly bids and its year-specific windows.</div>")
+                   + ": the same weeks, counted from the first Wednesday of September, in every crop year, in place of the report's first 7 weekly "
+                     "bids and its year-specific windows.</div>")
     lead = ""
     if limited:
         lead = (f'<div style="font-size:11px;color:#1f4e79;margin:2px 0 6px">Study ends at the end of {MONTH_FULL[limited.month - 1]}: each year\'s '
@@ -239,23 +265,16 @@ def derived_banner_html(location: str, dv: dict) -> str:
 
 
 # ── the user's own harvest basis: the note that says where it is used ────────────────────────────
-def own_basis_note_html(value: float, calc: float | None, label: str, spec: rtc.Spec = rtc.CORN, every_year: bool = False,
-                        in_history: bool = True) -> str:
-    """The blue note under the Harvest basis switch when the user's OWN number is in use: which crop year(s) it measures, what it replaces.
-    value / calc = their number and what the calculated method gives (None = not known yet); label = the tracked crop year ('2026-27');
-    every_year = the what-if that applies it to every crop year; in_history = the tracked year has weekly bids to draw (else the shipment table only)."""
+def own_basis_note_html(value: float, calc: float | None, label: str, spec: rtc.Spec = rtc.CORN, in_history: bool = True) -> str:
+    """The blue note under the harvest-basis controls when the user's OWN number is in use: the crop year it measures (only the tracked one),
+    what it replaces. value / calc = their number and what the calculated method gives (None = not known yet); label = the tracked crop year
+    ('2026-27'); in_history = the tracked year has weekly bids to draw (else the shipment table only)."""
     base = rtc.LETTER_NAME[spec.base]
-    if every_year:
-        body = (f"<b>What-if:</b> every crop year below is measured from your harvest basis of <b>{value:+.1f}¢</b> vs {base} instead of its own "
-                "calculated one (the average of its first weekly bids). Each year's returns move by the difference, the same for all its weeks, so the best "
-                "week stays where it was — this is what storing would have paid had the grain always been bought at that basis, not what the analyst's "
-                "workbooks computed.")
-    else:
-        where = ("the shipment table, the headline numbers, the orange line and bar, and the latest row of the table below" if in_history
-                 else "the shipment table (that year has no weekly bids to draw yet)")
-        calc_txt = "" if calc is None else f", in place of the calculated {calc:+.1f}¢"
-        body = (f"<b>Your own harvest basis, {value:+.1f}¢ vs {base}</b>{calc_txt}, measures {label}: {where}. Earlier years keep their calculated "
-                "harvest basis, so the comparison with history is still the analyst's method.")
+    where = ("the shipment table, the headline numbers, the orange line and bar, and the latest row of the table below" if in_history
+             else "the shipment table (that year has no weekly bids to draw yet)")
+    calc_txt = "" if calc is None else f", in place of the calculated {calc:+.1f}¢"
+    body = (f"<b>Your own harvest basis, {value:+.1f}¢ vs {base}</b>{calc_txt}, measures {label} only: {where}. Every other crop year keeps "
+            "its calculated harvest basis (the average of the harvest window above), so the comparison with history is unchanged.")
     return ('<div style="font-size:12px;color:#1f4e79;background:#eef5fc;border:1px solid #c5daf1;border-left:4px solid #4e79a7;border-radius:8px;'
             f'padding:8px 12px;margin:6px 0 10px;line-height:1.5">{body}</div>')
 
@@ -313,14 +332,17 @@ def how_it_works(spec: rtc.Spec = rtc.CORN) -> str:
         data = ("- **Data** — weekly corridor bids from the archive (true Wednesdays from Oct 2004, so history starts "
                 "2004-05); settlements from the futures archive, and for 2004-07 from the workbooks. Reproduces the "
                 "yearly workbooks to the cent in most weeks (tests/test_return_to_carry.py).")
-    harvest += (" The Harvest basis switch above can use your own number instead (the calculated average is the default): it measures the "
-                "crop year being tracked, or, as a what-if, every crop year. In the weekly history the interest is charged on each week's cash price, "
-                "not on the harvest basis, so a different harvest basis moves every week's return by the same amount; the shipment table's "
-                "break-even does charge interest on it (futures + harvest basis).")
-    harvest += (" The **Start week** and **Number of weeks** boxes change which weekly bids the calculated average takes (week 1 is the first Wednesday of "
-                "October; week 0, -1 ... are the September Wednesdays before it): a window you set is the same weeks in every crop year and replaces the "
-                "report's own year-specific windows, and the interest still starts at the report's " + ("fifth" if soy else "third") + " weekly bid whatever "
-                "the window." + ("" if soy else " A September bid quoted off September (CU) futures is rolled to Dec at the Dec - Sep spread on the last "
+    harvest += (" The switch for this year's harvest basis above can use your own number instead (the calculated average is the default): it "
+                "measures only the crop year being tracked; every other year keeps its calculated basis. In the weekly history the interest is charged "
+                "on each week's cash price, not on the harvest basis, so a different harvest basis moves every week's return by the same amount; the "
+                "shipment table's break-even does charge interest on it (futures + harvest basis).")
+    nth = "fifth" if soy else "third"
+    harvest += (" The **Start week** and **Number of weeks** boxes change which weekly bids the calculated average takes (week 0 is the first Wednesday of "
+                "September, week 1 the next; the report starts at the first Wednesday of October, week 4, or week 5 when September has five Wednesdays): "
+                "a window you set is the same weeks, counted from September, in every crop year and replaces the "
+                "report's own year-specific windows. A window that opens before the report's moves the purchase with it: the interest and the weekly "
+                "returns start at its own " + nth + " weekly bid, so the chart's lines can begin in September. A later window leaves the purchase "
+                "alone: the interest still starts at the report's " + nth + " weekly bid." + ("" if soy else " A September bid quoted off September (CU) futures is rolled to Dec at the Dec - Sep spread on the last "
                                  "trading day before that contract's first notice day (the last business day of August); a bid already quoted off Dec — "
                                  "every bid with no tag, and most locations' fall and new-crop bids — is left as it is."))
     interest = ("- **Interest** — the same rate as the rest of this tab: the effective fed funds rate on each date + 2.25% "
@@ -334,7 +356,16 @@ def how_it_works(spec: rtc.Spec = rtc.CORN) -> str:
                "return at the end and the futures carry banked (the roll spreads measured by then) are picked again from those weeks; the weekly "
                "returns themselves do not change, because no week's return depends on a later one. The shipment table keeps only the months up "
                "to it, so 'best' means the best of those.")
-    return "\n".join([shipment, harvest, weekly, carry, interest, ship_by, data])
+    best = ("- **Best return** — the most that could be LOCKED in at any time in the crop year, not only by shipping: the better of (a) the "
+            "weekly nearby bid's return (the report's own measure: sell for prompt shipment that week) and (b) any forward month sold ahead "
+            "on any day — that day's forward bid less that day's break-even (the harvest basis, less the futures spread from the base contract "
+            "to the month's contract, which the hedge is rolled into at that day's spread, plus the interest to the 20th of the shipment month). "
+            "Forward sales count from the first bid of the harvest window, and only while they are deferred — made before the shipment month "
+            "begins (a July bid sold in July is that week's nearby sale, already in (a)). The headline, the by-year table and the bars say which it was "
+            "('Oct 19 · Jan ship' = sold Oct 19 for January shipment). Forward bids are in the River FOB archive since 2006; elevators and rail "
+            "corridors only archived them from 2026, so their earlier years are the nearby bid's best. The season chart's open dots are this "
+            "year's forward curve: what each shipment month can lock today.")
+    return "\n".join([shipment, harvest, weekly, carry, interest, ship_by, best, data])
 
 
 # ── the report's page 1: shipment by month ───────────────────────────────────────────────────────
@@ -578,7 +609,7 @@ def best_bar_chart(rows: list[dict], measure: str = "net", height: int = 280, de
     src = {"derived": "derived", "part": "partly derived"}
     df = pd.DataFrame([{
         "Crop year": r["label"], "Best": float(r["best"]), "latest": r is rows[-1],
-        "When": _md(r["best_date"]), "Harvest basis": r["b0"], "Futures carry": r["carry"],
+        "When": best_when(r), "Harvest basis": r["b0"], "Futures carry": r["carry"],
         "Source": src.get((derived or {}).get(r["crop_year"]), "own bids")} for r in have])
     order = list(df["Crop year"])
     base = alt.Chart(df).encode(x=alt.X("Crop year:N", sort=order, title=None,
@@ -612,16 +643,15 @@ def best_bar_chart(rows: list[dict], measure: str = "net", height: int = 280, de
 
 # ── chart 2: the path through the crop year ───────────────────────────────────────────────────────
 def _month_ticks(results: list, weeks: int = 44, horizon: tuple | None = None, end_month: int | None = None) -> tuple[list[int], list[str]]:
-    """Week indexes (and month names) where each month first appears on the crop-year grid, Oct through Jul (soybeans: Sep).
-    `horizon` = (month, day) of the following year where the season ends: a week past it gets no tick (a year that starts
-    Oct 7 would otherwise label its week 43 'Aug', soybeans' week 52 'Oct'). `end_month` = a study told to stop at the end of
-    that month (Nov-Aug): the ticks stop there instead."""
+    """Weeks (and month names) where each month first appears on the chart's grid, Sep through Jul (soybeans: Sep): week 0 = the first
+    Wednesday of September, as in seasonal_points. `horizon` = (month, day) of the following year where the season ends: a week past it
+    gets no tick (it would otherwise label a week 'Aug', soybeans' 'Oct'). `end_month` = a study told to stop at the end of that month
+    (Nov-Aug): the ticks stop there instead."""
     from datetime import date, timedelta
-    from rf_return_to_carry import first_wednesday
     ref = next((cy for cy in reversed(results) if cy.weeks), None)
     if ref is None:
         return [], []
-    start = first_wednesday(ref.crop_year)
+    start = rtc.first_september_wednesday(ref.crop_year)
     end = rtc.study_end(ref.crop_year, end_month) if end_month else (date(ref.crop_year + 1, *horizon) if horizon else None)
     idx, names, seen = [], [], set()
     for k in range(0, weeks):
@@ -636,9 +666,14 @@ def _month_ticks(results: list, weeks: int = 44, horizon: tuple | None = None, e
 
 
 def seasonal_chart(results: list, measure: str = "net", height: int = 340, logo_uri: str | None = None,
-                   spec: rtc.Spec = rtc.CORN) -> alt.LayerChart | None:
+                   spec: rtc.Spec = rtc.CORN, forward: list | None = None, best: dict | None = None) -> alt.LayerChart | None:
     """Return by week of the crop year. Band = the middle 80% (p10-p90) and 50% (p25-p75) of the completed years,
-    dashed line = their median; the latest year is orange, the one before blue. A dot marks the latest year's best."""
+    dashed line = their median; the latest year is orange, the one before blue. A dot marks the latest year's best.
+
+    forward  the latest year's FORWARD curve: [{'ship': date, 'value': the return lockable today for that shipment, 'month'}] (the
+             shipment table's 'return today'), drawn as open orange dots on a dashed line at each shipment date (Kolten 2026-10-19).
+    best     the latest year's best LOCKABLE return (return_to_carry_data.lockable_bests): the dot goes on that week's nearby bid, or on
+             the forward month's shipment date; None = the weekly nearby bid's best (cy.best)."""
     from rf_return_to_carry_data import seasonal_points
     pts = seasonal_points(results, measure)
     if not pts:
@@ -649,12 +684,16 @@ def seasonal_chart(results: list, measure: str = "net", height: int = 340, logo_
     hist_labels = [cy.label for cy in results if cy.complete]
     hist = df[df["crop"].isin(hist_labels)]
     layers = []
-    full = 40 if spec.key == "corn" else 51                  # the season's last week (Jul 31 for corn, Sep 30 for soybeans)
+    sep0 = rtc.first_september_wednesday(results[-1].crop_year)
+    at_week = lambda d: (d - sep0).days / 7.0               # a date on the latest year's axis (a grid Wednesday lands on its whole week)
+    off = rtc.report_start_week(results[-1].crop_year)       # the x axis starts at week 0 = the first Wednesday of September (seasonal_points)
+    full = (40 if spec.key == "corn" else 51) + off          # the season's last week (Jul 31 for corn, Sep 30 for soybeans)
     stop = results[-1].window_end                            # a study told to ship by the end of a month (limit_history) stops there
     if stop is not None:
-        full = max(1, (stop - rtc.first_wednesday(results[-1].crop_year)).days // 7)
+        full = max(1, (stop - sep0).days // 7)
     ticks, names = _month_ticks(results, full + 4, spec.horizon, stop.month if stop is not None else None)
-    xmax = int(df["week"].max())
+    fwd = [f for f in (forward or []) if f.get("value") is not None and f.get("ship") is not None]
+    xmax = max([int(df["week"].max())] + [int(round(at_week(f["ship"]))) for f in fwd])
     x_enc = alt.X("week:Q", title=None, scale=alt.Scale(domain=[0, max(xmax, full) + 0.5]),
                   axis=alt.Axis(values=ticks, labelExpr=f"{json.dumps(names)}[indexof({json.dumps(ticks)}, datum.value)]",
                                 labelColor="#1f4e79", labelFontWeight="bold", labelAngle=0, grid=False, ticks=False))
@@ -685,10 +724,24 @@ def seasonal_chart(results: list, measure: str = "net", height: int = 340, logo_
         x=x_enc, y=alt.Y("value:Q", title=y_title, axis=alt.Axis(format=".0f", titleColor="#64748b", labelColor="#64748b")),
         color=color, size=alt.condition(f"datum.crop === '{latest}'", alt.value(3.5), alt.value(2)),
         tooltip=[alt.Tooltip("crop:N", title="Crop year"), alt.Tooltip("Date:N"), alt.Tooltip("value:Q", format="+.1f", title="Return ¢/bu")]))
-    best = results[-1].best.get(measure)
-    if best is not None:
-        v = best.net if measure == "net" else best.gross
-        pk = pd.DataFrame([{"week": best.idx, "value": float(v), "label": f"Best {v:+.1f}¢ · {_md(best.date)}"}])
+    if fwd:
+        fdf = pd.DataFrame([{"week": at_week(f["ship"]), "value": float(f["value"]), "Shipment": f"{_md(f['ship'])}"} for f in fwd])
+        layers.append(alt.Chart(fdf).mark_line(color=ORANGE, strokeDash=[4, 3], strokeWidth=2, opacity=0.85).encode(x=x_enc, y="value:Q"))
+        layers.append(alt.Chart(fdf).mark_point(shape="circle", filled=True, fill="white", size=70, color=ORANGE, strokeWidth=2.2, opacity=1).encode(
+            x=x_enc, y="value:Q", tooltip=[alt.Tooltip("Shipment:N", title=f"{latest} shipment"),
+                                           alt.Tooltip("value:Q", format="+.1f", title="Lockable today ¢/bu")]))
+    nb = results[-1].best.get(measure)
+    pick = None
+    if best is not None and best.get("value") is not None and best.get("date") is not None:
+        if best.get("kind") == "forward" and best.get("ship"):
+            pick = (at_week(best["ship"]), float(best["value"]), f"Best {best['value']:+.1f}¢ · {MONTHS[best['ship'].month - 1]} ship, locked {_md(best['date'])}")
+        else:
+            pick = (at_week(best["date"]), float(best["value"]), f"Best {best['value']:+.1f}¢ · {_md(best['date'])}")
+    elif nb is not None:
+        v = nb.net if measure == "net" else nb.gross
+        pick = (nb.idx + off, float(v), f"Best {v:+.1f}¢ · {_md(nb.date)}")
+    if pick is not None:
+        pk = pd.DataFrame([{"week": pick[0], "value": pick[1], "label": pick[2]}])
         layers.append(alt.Chart(pk).mark_point(shape="circle", filled=True, size=220, color=ORANGE, opacity=1, stroke=DARK_ORANGE, strokeWidth=2.5)
                       .encode(x="week:Q", y="value:Q"))
         layers.append(alt.Chart(pk).mark_text(baseline="bottom", dy=-14, fontSize=12, fontWeight="bold", color="white", stroke="white",
@@ -704,6 +757,8 @@ def seasonal_chart(results: list, measure: str = "net", height: int = 340, logo_
         sub += [f"shaded = the middle 50% and 80% of {n_hist} completed years", "dashed = their median"]
     if stop is not None:
         sub.append(f"weeks through the end of {MONTH_FULL[stop.month - 1]} — the ship-by limit")
+    if fwd:
+        sub.append(f"open dots = what {latest} can lock today, by shipment date")
     if sub:
         tkw.update(subtitle=sub, subtitleColor="#64748b", subtitleFontSize=alt.expr(f"{_NARROW} ? 10 : 11"))
     return (alt.layer(*layers).resolve_scale(y="shared")

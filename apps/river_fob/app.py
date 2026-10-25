@@ -40,6 +40,17 @@ import rf_delivery_period as DP
 import rf_fob_vessel as fob_vessel
 import rf_massive_futures as massive_futures
 import rf_barge_flows as BF
+from zoneinfo import ZoneInfo
+
+CT = ZoneInfo("America/Chicago")
+
+
+def _today():
+    """Today in Central time, the desk's day. Streamlit Cloud runs on UTC, so
+    the server's date.today() is already TOMORROW after 7 PM CT: on 2026-10-15
+    an 8:29 PM update was saved under 2026-10-16. Use this for any date the
+    user sees or saves."""
+    return dt.datetime.now(CT).date()
 
 # Net Carry tab: modules vendored unchanged from the basis tracker (sync_carry_modules.py there) plus this
 # portal's adapter + HTML. A failed import must not take the whole portal down - the tab says why instead.
@@ -703,7 +714,7 @@ def _init_state():
         # Default to the live front-month fed funds + 2.25% (same source and
         # convention as the cost-of-carry sheet); fall back to the static seed
         # if the live rate can't be read. Still editable below.
-        _ff = _live_fed_funds(dt.date.today().isoformat())
+        _ff = _live_fed_funds(_today().isoformat())
         st.session_state.interest_pct = _ff["rate"] if _ff else S.SEED_INTEREST_PCT
     if "editor_ver" not in st.session_state:
         st.session_state.editor_ver = 0
@@ -820,7 +831,7 @@ with st.sidebar:
             view_choice = None
             st.info("No archived dates yet.")
         as_of = (dt.date.fromisoformat(view_choice) if view_choice
-                 else dt.date.today())
+                 else _today())
         M.MONTHS = M.months_for(as_of)
         M.CONTRACTS = {c: M.contracts_for(c, as_of) for c in M.COMMODITIES}
         _init_state()
@@ -829,10 +840,10 @@ with st.sidebar:
     else:
         st.subheader("Snapshot")
         as_of = st.date_input(
-            "As-of date", value=dt.date.today(), key="as_of_input",
-            help="The date the inputs represent and will save under. Can be a "
-                 "future date when prepping the next sheet. Auto-set when you "
-                 "paste a dated freight table.")
+            "As-of date", value=_today(), key="as_of_input",
+            help="The date the inputs represent and will save under (today in "
+                 "Central time by default). Can be a future date when prepping the "
+                 "next sheet. A pasted freight table's date is shown, not applied.")
         # Roll the working delivery window + contracts to the chosen as-of month
         # (e.g. July drops June and adds February), then create/reindex inputs.
         M.MONTHS = M.months_for(as_of)
@@ -854,7 +865,7 @@ with st.sidebar:
             help="Used for % Full Carry; storage is per-commodity on the Inputs tab. "
                  "Defaults to live front-month fed funds + "
                  f"{massive_futures.FED_FUNDS_SPREAD_PCT:.2f}% (CME ZQ).")
-        _ff = _live_fed_funds(dt.date.today().isoformat())
+        _ff = _live_fed_funds(_today().isoformat())
         if _ff:
             st.caption(
                 f"Live fed funds **{_ff['ff']:.3f}%** + "
@@ -1233,7 +1244,10 @@ def render_block(commodity, as_of, cif_row, fut_row, freight_by_region,
                     M.cash_vs_delivery(commodity, grid[cfg["cash_loc"]], cash_c, months)))
     p_cash = prior.get("cash", {})
     cash_cells = "".join(_dir_td(cash[m], p_cash.get(m), "fob") for m in months)
-    rows.append(f'<tr class="strong"><td class="lbl">{cfg["cash_label"]}</td>'
+    # `snap-end` tags the last row of the sheet's top (header through % Full Carry):
+    # the toolbar's Summary PNG / Copy shoots only down to it.
+    end = "" if show_carry else " snap-end"
+    rows.append(f'<tr class="strong{end}"><td class="lbl">{cfg["cash_label"]}</td>'
                 f'{de_blank}{cash_cells}</tr>')
 
     # Spreads / Carry section (after Cash vs Delivery, before river reaches).
@@ -1258,7 +1272,7 @@ def render_block(commodity, as_of, cif_row, fut_row, freight_by_region,
             pos = pad + 2 * i + 1
             if pos < len(ccells):
                 ccells[pos] = _carry_pct_cell(carry[i])
-        rows.append('<tr class="spread"><td class="lbl">% Full Carry</td>'
+        rows.append('<tr class="spread snap-end"><td class="lbl">% Full Carry</td>'
                     + de_blank + "".join(ccells) + "</tr>")
 
     band = True
@@ -1320,6 +1334,27 @@ def _archived_carry(commodity, date_iso, loc, spreads):
     return M.top_carry(commodity, grid_d[loc], spreads)
 
 
+def _month_firsts(months, as_of):
+    """The first day of each window month, with its year ('Oct', 'Nov', 'Dec', 'Jan' on a 10/21/26 sheet -> Oct 1 2026 ... Jan 1
+    2027): a 'Spot' column is the as-of month. None for a label that names no month. Used to count actual days for interest."""
+    as_of = as_of or _today()
+    nums = [M.label_month_num(m) or (as_of.month if str(m).strip().lower() == "spot" else None) for m in months]
+    first = next((n for n in nums if n), None)
+    if first is None:
+        return [None] * len(months)
+    year = as_of.year + (1 if first < as_of.month and as_of.month - first > 6 else 0)
+    out, prev = [], first
+    for n in nums:
+        if n is None:
+            out.append(None)
+            continue
+        if n < prev:
+            year += 1
+        prev = n
+        out.append(dt.date(year, n, 1))
+    return out
+
+
 def render_carry_chart(commodity, grid, spreads, as_of=None, months=None,
                        contracts=None, cur_label=None, fut_row=None):
     """Top-of-carry (cash forward curve on spot futures) for a chosen location,
@@ -1346,8 +1381,9 @@ def render_carry_chart(commodity, grid, spreads, as_of=None, months=None,
     show_net = st.checkbox(
         "Net-of-interest carry", value=True, key=f"carry_net_{commodity}",
         help="Overlay the cash carry net of financing — gross carry minus "
-             "cumulative interest (spot futures × annual rate ÷ 12 per month), "
-             "anchored at the front month and again at October.")
+             "interest: spot futures × annual rate × actual days ÷ 360, from the "
+             "first of the front month (and again from October) to the first of "
+             "each delivery month, as in the Net Carry tab and the other carry calcs.")
 
     def _mdy(dd):
         return f"{dd.month}/{dd.day}/{dd.year % 100:02d}"
@@ -1361,24 +1397,31 @@ def render_carry_chart(commodity, grid, spreads, as_of=None, months=None,
         if v is not None and not pd.isna(v):
             rows.append({"Month": m, "Carry": float(v), "Series": cur_label})
 
-    # Net-of-interest carry: gross carry less cumulative financing, from two
-    # anchors — the front month and October. Monthly interest = spot futures ×
-    # annual rate ÷ 12; net(month) = gross(month) − (months held) × interest.
+    # Net-of-interest carry: gross carry less financing, from two anchors — the
+    # front month and October. Interest = spot futures × annual rate × actual
+    # days ÷ 360, from the first of the anchor month to the first of each delivery
+    # month: the Net Carry tab's convention (net_carry.py) and every other carry
+    # calc's (Kolten 2026-10-21: "switch it to days/360 to match the other carry
+    # calcs"; it was rate ÷ 12 per month held).
     net_series = []
     ref_price = (fut_row or {}).get(months[0]) if fut_row else None
     ipct = float(st.session_state.get("interest_pct", 0) or 0)
     if show_net and ref_price and ipct:
-        mo_int = ref_price * (ipct / 100.0) / 12.0
+        firsts = _month_firsts(months, as_of)
         anchors = [(0, f"Net of int (from {months[0]})")]
         if "Oct" in months and months.index("Oct") != 0:
             anchors.append((months.index("Oct"), "Net of int (from Oct)"))
         for a, lbl in anchors:
+            if firsts[a] is None:
+                continue
             net_series.append(lbl)
             for i in range(a, len(months)):
                 g = tc[i]
-                if g is None or pd.isna(g):
+                if g is None or pd.isna(g) or firsts[i] is None:
                     continue
-                rows.append({"Month": months[i], "Carry": float(g) - (i - a) * mo_int,
+                days = (firsts[i] - firsts[a]).days
+                rows.append({"Month": months[i],
+                             "Carry": float(g) - ref_price * (ipct / 100.0) * days / 360.0,
                              "Series": lbl})
 
     for d in cmp_dates:
@@ -1584,7 +1627,7 @@ def render_seasonal_tab():
                                  "enough for the 5-year lines and 10-year band. "
                                  "Enable this to add analog years further back.")
     since = None if full_hist else (
-        dt.date.today() - dt.timedelta(days=365 * 13 + 4)).isoformat()
+        _today() - dt.timedelta(days=365 * 13 + 4)).isoformat()
 
     dates = db.list_dates()
     sig = (len(dates), dates[0] if dates else "", since or "all")
@@ -2380,7 +2423,7 @@ def render_riverbids_tab():
                 "**BASIS_DATABASE_URL** secret to show them here.")
         return
 
-    today = dt.date.today()
+    today = _today()
     c1, c2 = st.columns([1, 1])
     with c2:
         days = st.slider("Include bid sheets from the last (days)", 7, 60, 30,
@@ -2745,10 +2788,22 @@ _SNAP_JS = """
   <button id="cp" style="font:600 13px system-ui,sans-serif;color:#0693e3;
     background:#fff;border:1.5px solid #0693e3;border-radius:6px;padding:6px 12px;
     cursor:pointer">\U0001F4CB Copy</button>
+  <span id="top" style="display:none;gap:6px;align-items:center;margin-left:4px;
+    padding-left:10px;border-left:1px solid #ddd">
+    <button id="dl2" title="Only the top of the sheet: header through % Full Carry"
+      style="font:600 13px system-ui,sans-serif;color:#fff;background:#0693e3;
+      border:none;border-radius:6px;padding:6px 12px;cursor:pointer">\U0001F4E5 Summary PNG</button>
+    <button id="cp2" title="Only the top of the sheet: header through % Full Carry"
+      style="font:600 13px system-ui,sans-serif;color:#0693e3;background:#fff;
+      border:1.5px solid #0693e3;border-radius:6px;padding:6px 12px;
+      cursor:pointer">\U0001F4CB Copy summary</button>
+  </span>
   <span id="msg" style="font:12px system-ui,sans-serif;color:#888"></span>
 </div>
 <script>
 const P=window.parent, PD=P.document, TARGET="__ID__", FN="__FN__";
+const CUT="__CUT__", FN2="__FN2__";
+if(CUT) document.getElementById("top").style.display="inline-flex";
 function ensureH2C(){
   if(P.html2canvas) return Promise.resolve();
   if(P.__h2c) return P.__h2c;
@@ -2772,30 +2827,53 @@ function target(){
   }
   return charts[0]||el;
 }
-async function shoot(){
+// `cut` (a selector inside the target) shoots only down to that row: the rows
+// after it are dropped from html2canvas's clone, never from the page. If the
+// image still comes back full height, it is cropped to the trimmed height.
+async function shoot(cut){
   await ensureH2C();
   const el=target(); if(!el) throw new Error("nothing to capture");
-  return await P.html2canvas(el,{scale:2,backgroundColor:"#ffffff",logging:false,useCORS:true});
+  const opts={scale:2,backgroundColor:"#ffffff",logging:false,useCORS:true};
+  let keepH=0;
+  if(cut){
+    if(!el.querySelector(cut)) throw new Error("no summary rows on this sheet");
+    opts.onclone=doc=>{
+      const c=doc.getElementById(TARGET), row=c&&c.querySelector(cut);
+      if(!row) return;
+      while(row.nextElementSibling) row.nextElementSibling.remove();
+      keepH=c.getBoundingClientRect().height;
+    };
+  }
+  const canvas=await P.html2canvas(el,opts);
+  const h=Math.round(keepH*opts.scale);
+  if(!keepH || canvas.height<=h+2) return canvas;
+  const out=PD.createElement("canvas"); out.width=canvas.width; out.height=h;
+  out.getContext("2d").drawImage(canvas,0,0);
+  return out;
 }
 const msg=t=>{const m=document.getElementById("msg"); m.textContent=t;
   if(t) setTimeout(()=>{m.textContent="";},2500);};
-document.getElementById("dl").onclick=async()=>{
-  msg("…"); try{ const c=await shoot(); const a=document.createElement("a");
-    a.download=FN+".png"; a.href=c.toDataURL("image/png"); a.click(); msg("✓ saved"); }
-  catch(e){ msg("⚠ "+e.message); }
-};
-// Promise-based ClipboardItem so the async html2canvas work keeps the click's
-// user-gesture (a plain await before clipboard.write would drop it).
-document.getElementById("cp").onclick=async()=>{
-  msg("…");
-  try{
-    await navigator.clipboard.write([new ClipboardItem({"image/png":(async()=>{
-      const c=await shoot();
-      return await new Promise(r=>c.toBlob(r,"image/png"));
-    })()})]);
-    msg("✓ copied");
-  }catch(e){ msg("⚠ "+(e.name||e.message)); }
-};
+function bind(dl,cp,cut,fn){
+  document.getElementById(dl).onclick=async()=>{
+    msg("…"); try{ const c=await shoot(cut); const a=document.createElement("a");
+      a.download=fn+".png"; a.href=c.toDataURL("image/png"); a.click(); msg("✓ saved"); }
+    catch(e){ msg("⚠ "+e.message); }
+  };
+  // Promise-based ClipboardItem so the async html2canvas work keeps the click's
+  // user-gesture (a plain await before clipboard.write would drop it).
+  document.getElementById(cp).onclick=async()=>{
+    msg("…");
+    try{
+      await navigator.clipboard.write([new ClipboardItem({"image/png":(async()=>{
+        const c=await shoot(cut);
+        return await new Promise(r=>c.toBlob(r,"image/png"));
+      })()})]);
+      msg("✓ copied");
+    }catch(e){ msg("⚠ "+(e.name||e.message)); }
+  };
+}
+bind("dl","cp","",FN);
+if(CUT) bind("dl2","cp2",CUT,FN2);
 </script>
 """
 
@@ -2807,15 +2885,19 @@ def _snap_anchor(snap_id):
                 unsafe_allow_html=True)
 
 
-def _snap_toolbar(snap_id, filename, height=44):
+def _snap_toolbar(snap_id, filename, height=44, summary=None):
     """📥 PNG + 📋 Copy that screenshot the actual on-screen element (styled sheet
     or rendered chart) client-side via html2canvas — a true snapshot, not a
     server-rebuilt image. Main app only. `snap_id` is a wrapper div's id (tables)
-    or a _snap_anchor placed just before a chart."""
+    or a _snap_anchor placed just before a chart. `summary` (a filename) adds
+    📥 Summary PNG + 📋 Copy summary, which shoot only the top of a FOB sheet:
+    down to the row render_block tags `snap-end` (% Full Carry)."""
     if VIEW_ONLY:
         return
     components.html(
-        _SNAP_JS.replace("__ID__", snap_id).replace("__FN__", _safe_filename(filename)),
+        _SNAP_JS.replace("__ID__", snap_id).replace("__FN__", _safe_filename(filename))
+        .replace("__CUT__", "tr.snap-end" if summary else "")
+        .replace("__FN2__", _safe_filename(summary) if summary else ""),
         height=height)
 
 
@@ -3611,16 +3693,23 @@ def apply_pasted_tables(cif_text, frt_text, fut_text=""):
             errs.append("Freight: " + err)
         else:
             fdf = st.session_state.freight
-            n = 0
+            n = cleared = 0
             for region, mv in res["freight"].items():
                 if region not in M.FREIGHT_REGIONS:
                     continue
                 for m, v in mv.items():
                     if m in M.MONTHS:
-                        fdf.loc[region, m] = v
-                        n += 1
+                        fdf.loc[region, m] = v           # None = a blank cell in the pasted table: closed / not quoted
+                        n += v is not None
+                        cleared += v is None
             st.session_state.freight = fdf
-            msgs.append(f"Freight — filled {n} values across {len(res['freight'])} reaches.")
+            if res.get("format") == "ceres":
+                msgs.append(f"Freight (Ceres table, bids) — filled {n} values across {len(res['freight'])} reaches"
+                            + (f"; {cleared} month{'s' if cleared != 1 else ''} left blank where the table has no quote "
+                               "(closed / not quoted)" if cleared else "")
+                            + ". St. Louis 14' = STL, Ohio Jeff/Cincy = Ohio; St. Louis 12' and Ohio Lower are not used.")
+            else:
+                msgs.append(f"Freight — filled {n} values across {len(res['freight'])} reaches.")
             if res.get("date"):
                 # Don't move the As-of date — barge-freight tables are usually
                 # dated the prior session, which kept bumping Save back a day.
@@ -3679,22 +3768,58 @@ def apply_pasted_tables(cif_text, frt_text, fut_text=""):
     return msgs, errs
 
 
-def _pull_massive_futures():
-    """Fill the working CBOT row for every commodity from live Massive settlements
-    and recompute spreads (same fill path as the futures paste). Returns
-    (n_filled, [commodities], error_or_None)."""
+def _uses_live_board(as_of):
+    """True when the live Massive board IS the as-of date's market: the date is
+    today (CT) before the 7 PM reopen (after the 1:20 close that's the close), or
+    a future date being prepped. A past date, or today after the reopen (when the
+    live board is the NEXT session's overnight trade), takes that date's own
+    settlement from Massive's daily session bars instead, the source the Bid
+    Sheet import uses for the same case (bidsheet._closing_board)."""
+    now = dt.datetime.now(CT)
+    return as_of > now.date() or (as_of == now.date() and now.hour < 19)
+
+
+def _cbot_board_for(commodity, as_of, active):
+    """{month letter: $/bu} to fill a commodity's CBOT row for `as_of` (see
+    _uses_live_board)."""
+    if _uses_live_board(as_of):
+        return massive_futures.cbot_curve(commodity)
+    import rf_bidsheet as bidsheet
+    syms = {bidsheet.close_symbol(commodity, code, as_of): code      # a code that is not a contract ('C103' from an old CIF
+            for code in dict.fromkeys(active)                        # paste) is skipped, not allowed to stop the whole pull
+            if code and str(code)[-1].upper() in "FGHJKMNQUVXZ"}
+    closes = bidsheet._closing_board(as_of, set(syms))
+    return {code[-1]: closes[s] for s, code in syms.items() if s in closes}
+
+
+def _bad_contract_codes(active):
+    """The working sheet's contract codes that are not contracts (their last character is not a month letter): 'C103', left by a
+    CIF paste with no letter column (the 10/20 sheet was SAVED that way, so every later working sheet started with them and the
+    Massive pull failed with "'3'" until it was repaired on 2026-10-21)."""
+    return [c for c in dict.fromkeys(active) if c and str(c)[-1].upper() not in "FGHJKMNQUVXZ"]
+
+
+def _pull_massive_futures(as_of):
+    """Fill the working CBOT row for every commodity from Massive (the live board,
+    or the as-of date's own settlement; see _uses_live_board) and recompute
+    spreads (same fill path as the futures paste). Returns
+    (n_filled, [commodities], error_or_None). A commodity whose contract codes are
+    not contracts is reported as the error, after the others are filled."""
     if not massive_futures.configured():
         return 0, [], "MASSIVE_API_KEY is not configured for this deployment."
-    filled, done = 0, []
+    filled, done, bad_all = 0, [], []
     for commodity in M.COMMODITIES:
+        active = (st.session_state.get(f"contracts_{commodity}")
+                  or list(M.CONTRACTS[commodity]))
+        bad = _bad_contract_codes(active)
+        if bad:
+            bad_all.append(f"{commodity} ({', '.join(bad)})")
         try:
-            curve = massive_futures.cbot_curve(commodity)      # {letter: $/bu}
+            curve = _cbot_board_for(commodity, as_of, active)   # {letter: $/bu}
         except Exception as e:
             return filled, done, f"Massive API error: {e}"
         if not curve:
             continue
-        active = (st.session_state.get(f"contracts_{commodity}")
-                  or list(M.CONTRACTS[commodity]))
         cur = st.session_state[f"cif_{commodity}"]
         for i, mth in enumerate(M.MONTHS):
             if i >= len(active):
@@ -3717,6 +3842,10 @@ def _pull_massive_futures():
             st.session_state[f"carry_{commodity}"] = pd.DataFrame(
                 {lbl: [v] for lbl, v in vals.items()}, index=["Spread"])
         done.append(commodity)
+    if bad_all:
+        return filled, done, ("these contract codes are not contracts, so their months were not priced: "
+                              + "; ".join(bad_all) + ". They come from a CIF paste without its letter column — re-paste "
+                              "the CIF table with its contract letters, or use ↺ Reset inputs to seed, then pull again.")
     return filled, done, None
 
 
@@ -3750,17 +3879,35 @@ def _futures_issues(as_of):
     clicked (not on every render, so the page never waits on Massive): months with
     no price, and (for today's sheet only, since the live board says nothing about
     an older date) contracts more than STALE_FUTURES_PCT from the Massive board.
-    No Massive key or no answer means only the missing-month check."""
-    from zoneinfo import ZoneInfo
-    today = dt.datetime.now(ZoneInfo("America/Chicago")).date()
+    No Massive key or no answer means only the missing-month check.
+
+    Also flags a CBOT row IDENTICAL to the previous archived sheet's. The working
+    sheet starts from the last saved day, so a row nobody re-pulled is yesterday's
+    prices: on 2026-10-15 a sheet went in with 10/14's futures. That is only a day's
+    move, too small for the stale check."""
+    today = _today()
     board = (_live_cbot_board()
              if as_of == today and massive_futures.configured() else {})
+    prev = max((d for d in (str(x)[:10] for x in db.list_dates())
+                if d < as_of.isoformat()), default=None)
+    prev_fut = (db.load_extras(prev)[0] or {}) if prev else {}
     issues = []
     for commodity in M.COMMODITIES:
         df = st.session_state[f"cif_{commodity}"]
         active = (st.session_state.get(f"contracts_{commodity}")
                   or list(M.CONTRACTS[commodity]))
         curve = board.get(commodity) or {}
+        bad = _bad_contract_codes(active)
+        if bad:
+            issues.append(f"{commodity}: contract codes {', '.join(bad)} are not contracts (a CIF paste without its letter column) — "
+                          "re-paste the CIF table with its contract letters, or ↺ Reset inputs to seed")
+        before = prev_fut.get(commodity) or {}
+        priced = {m: _safe(df.loc[m, "Futures"]) for m in M.MONTHS}
+        priced = {m: v for m, v in priced.items() if v is not None}
+        if priced and before and all(m in before and abs(before[m] - v) < 1e-9
+                                     for m, v in priced.items()):
+            issues.append(f"{commodity}: CBOT row is the same as the {prev} sheet's "
+                          "(carried over, not pulled for this date)")
         missing, stale, checked = [], [], set()
         for i, mth in enumerate(M.MONTHS):
             v = _safe(df.loc[mth, "Futures"])
@@ -3790,9 +3937,10 @@ def render_inputs_tab(as_of):
             for e in pr[1]:
                 st.error(e)
         st.caption("Copy each table from your daily source and paste below "
-                   "(headers included). MILO, TW and NW rows are ignored; the "
-                   "freight date auto-sets the as-of date. Futures come live from "
-                   "Massive — use the 🔄 button below.")
+                   "(headers included). MILO, TW and NW rows are ignored. The "
+                   "freight table's date is shown, not applied: the sheet saves under "
+                   "the sidebar's As-of date. Futures come from Massive — use the 🔄 "
+                   "button below.")
         pc1, pc2 = st.columns(2)
         with pc1:
             cif_text = st.text_area("CIF NOLA table", height=220, key="paste_cif")
@@ -3808,16 +3956,20 @@ def render_inputs_tab(as_of):
         (st.success if pm[0] == "ok" else st.error)(pm[1])
     if massive_futures.configured():
         if st.button("🔄 Pull live CBOT futures (Massive)",
-                     help="Fill the CBOT row for corn/soy/wheat from live Massive "
-                          "settlements and recompute spreads — no Barchart add-in "
-                          "needed. Save to archive it."):
-            with st.spinner("Fetching live CBOT settlements…"):
-                n, done, err = _pull_massive_futures()
+                     help="Fill the CBOT row for corn/soy/wheat from Massive and "
+                          "recompute spreads. For today before 7 PM CT that's the live "
+                          "board (the close, after 1:20). For an earlier As-of date, or "
+                          "after the 7 PM reopen, it's that date's own settlement, never "
+                          "the overnight session. Save to archive it."):
+            live = _uses_live_board(as_of)
+            with st.spinner("Fetching the live CBOT board…" if live
+                            else f"Fetching CBOT settlements for {as_of:%m/%d}…"):
+                n, done, err = _pull_massive_futures(as_of)
+            src = "the live board" if live else f"{as_of:%m/%d}'s settlement"
             st.session_state["massive_pull_msg"] = (
-                ("error", f"Massive pull failed: {err}") if err else
-                ("ok", f"✓ Filled {n} live CBOT values ({', '.join(done)}). "
-                       "Review and Save to archive."))
-            if not err:
+                ("error", (f"Filled {n} CBOT values from {src}, but " if n else "Massive pull failed: ") + err) if err else
+                ("ok", f"✓ Filled {n} CBOT values ({', '.join(done)}) from {src}. Review and Save to archive."))
+            if n:                                   # show whatever did fill, even when part of the pull could not
                 st.session_state.pop("save_futures_issues", None)
                 _bump_editors()
             st.rerun()
@@ -4047,7 +4199,8 @@ def _render_archived_commodity(commodity):
                                contracts=contracts, months=months, prior=prior)
                 + '</div>', unsafe_allow_html=True)
     _snap_toolbar(f"snap_fob_{commodity}",
-                  f"{commodity} FOB Sheet {view_date:%m-%d-%y}")
+                  f"{commodity} FOB Sheet {view_date:%m-%d-%y}",
+                  summary=f"{commodity} FOB Summary {view_date:%m-%d-%y}")
     st.markdown("##### 📈 Top of Carry")
     render_carry_chart(commodity, grid, spreads, as_of=view_date, months=months,
                        contracts=contracts, cur_label=f"{view_date:%m/%d/%y}",
@@ -4335,104 +4488,83 @@ def render_netcarry_tab():
                    "Try another commodity, location or date.")
 
 
+@_fragment
+def render_vessel_lineup_tab():
+    """🛳 Vessel Lineup: the Vessel Line-up dashboard's Summary page, mirrored (Kolten 2026-10-24: "add a tab ... just mirroring
+    the summary tab of the vessel line up dashboard"). The page is vessel_mirror/, GENERATED from JSA-Dashboards/
+    jsa-vessel-lineup-dashboard by corn-exporter-dashboard's `sync_vessel_summary.py --target ../river-fob-portal` (never edit it
+    here); vessel_tab.py is the wrapper, the same file as the Global Export Dashboard's. Imported only when the tab is opened (the
+    tabs are lazy), so it costs nothing until then. A fragment: its own toggles rerun only this tab. Never raises."""
+    try:
+        import rf_vessel_tab as vessel_tab
+        vessel_tab.render()
+    except Exception as e:
+        st.error(f"Vessel Lineup tab error: {e}")
+
+
+VESSEL_LINEUP_TAB = "🛳 Vessel Lineup"
+
+
+def _lazy(tab, render, *args, **kwargs):
+    """Draw a tab's content only while it is the open one (the tabs are st.tabs(on_change="rerun"))."""
+    with tab:
+        if tab.open:
+            render(*args, **kwargs)
+
+
+# Tabs are looked up by NAME, not position: inserting one (🛳 Vessel Lineup, 2026-10-24) used to mean renumbering every
+# tabs[-n] after it, in three layouts.
 if VIEW_ONLY:
     if not HIST_DATE or hist_cif is None:
         st.info("No archived data available to view yet.")
     else:
-        tabs = st.tabs(["📊 Changes"] + list(M.COMMODITIES)
-                       + ["💵 Net Carry", "📈 Seasonal", "💵 Cash vs Del", "🛥 River Bids",
-                          "🚢 FOB Vessel", "⚓ Barge Data"], on_change="rerun")
-        with tabs[0]:
-            if tabs[0].open:
-                render_changes_tab(view_date, cur=(hist_cif, hist_frt),
-                                   allow_download=False)
-        for tab, commodity in zip(tabs[1:1 + len(M.COMMODITIES)], M.COMMODITIES):
-            with tab:
-                if tab.open:
-                    _render_archived_commodity(commodity)
-        with tabs[1 + len(M.COMMODITIES)]:          # 💵 Net Carry sits right after the commodity sheets
-            if tabs[1 + len(M.COMMODITIES)].open:
-                render_netcarry_tab()
-        with tabs[-5]:
-            if tabs[-5].open:
-                render_seasonal_tab()
-        with tabs[-4]:
-            if tabs[-4].open:
-                render_cashdel_tab()
-        with tabs[-3]:
-            if tabs[-3].open:
-                render_riverbids_tab()
-        with tabs[-2]:
-            if tabs[-2].open:
-                render_fob_vessel_tab()
-        with tabs[-1]:
-            if tabs[-1].open:
-                render_barge_dashboard_tab(view_date, cur=(hist_cif, hist_frt),
-                                           allow_download=False)
+        _names = (["📊 Changes"] + list(M.COMMODITIES)
+                  + ["💵 Net Carry", "📈 Seasonal", "💵 Cash vs Del", "🛥 River Bids",
+                     "🚢 FOB Vessel", VESSEL_LINEUP_TAB, "⚓ Barge Data"])
+        T = dict(zip(_names, st.tabs(_names, on_change="rerun")))
+        _lazy(T["📊 Changes"], render_changes_tab, view_date, cur=(hist_cif, hist_frt), allow_download=False)
+        for commodity in M.COMMODITIES:
+            _lazy(T[commodity], _render_archived_commodity, commodity)
+        _lazy(T["💵 Net Carry"], render_netcarry_tab)          # 💵 Net Carry sits right after the commodity sheets
+        _lazy(T["📈 Seasonal"], render_seasonal_tab)
+        _lazy(T["💵 Cash vs Del"], render_cashdel_tab)
+        _lazy(T["🛥 River Bids"], render_riverbids_tab)
+        _lazy(T["🚢 FOB Vessel"], render_fob_vessel_tab)
+        _lazy(T[VESSEL_LINEUP_TAB], render_vessel_lineup_tab)
+        _lazy(T["⚓ Barge Data"], render_barge_dashboard_tab, view_date, cur=(hist_cif, hist_frt), allow_download=False)
 elif HIST_DATE:
-    tabs = st.tabs(["📊 Changes"] + list(M.COMMODITIES)
-                   + ["💵 Net Carry", "📈 Seasonal", "💵 Cash vs Del", "🛥 River Bids",
-                      "🚢 FOB Vessel", "📤 Export", "⚓ Barge Data"], on_change="rerun")
-    with tabs[0]:
-        if tabs[0].open:
-            render_changes_tab(view_date, cur=(hist_cif, hist_frt))
-    with tabs[1 + len(M.COMMODITIES)]:              # 💵 Net Carry sits right after the commodity sheets
-        if tabs[1 + len(M.COMMODITIES)].open:
-            render_netcarry_tab()
-    with tabs[-6]:
-        if tabs[-6].open:
-            render_seasonal_tab()
-    with tabs[-5]:
-        if tabs[-5].open:
-            render_cashdel_tab()
-    with tabs[-4]:
-        if tabs[-4].open:
-            render_riverbids_tab()
-    with tabs[-3]:
-        if tabs[-3].open:
-            render_fob_vessel_tab()
-    with tabs[-2]:
-        if tabs[-2].open:
-            render_export_tab()
-    with tabs[-1]:
-        if tabs[-1].open:
-            render_barge_dashboard_tab(view_date, cur=(hist_cif, hist_frt))
-    for tab, commodity in zip(tabs[1:1 + len(M.COMMODITIES)], M.COMMODITIES):
-        with tab:
-            if tab.open:
-                _render_archived_commodity(commodity)
+    _names = (["📊 Changes"] + list(M.COMMODITIES)
+              + ["💵 Net Carry", "📈 Seasonal", "💵 Cash vs Del", "🛥 River Bids",
+                 "🚢 FOB Vessel", VESSEL_LINEUP_TAB, "📤 Export", "⚓ Barge Data"])
+    T = dict(zip(_names, st.tabs(_names, on_change="rerun")))
+    _lazy(T["📊 Changes"], render_changes_tab, view_date, cur=(hist_cif, hist_frt))
+    _lazy(T["💵 Net Carry"], render_netcarry_tab)              # 💵 Net Carry sits right after the commodity sheets
+    _lazy(T["📈 Seasonal"], render_seasonal_tab)
+    _lazy(T["💵 Cash vs Del"], render_cashdel_tab)
+    _lazy(T["🛥 River Bids"], render_riverbids_tab)
+    _lazy(T["🚢 FOB Vessel"], render_fob_vessel_tab)
+    _lazy(T[VESSEL_LINEUP_TAB], render_vessel_lineup_tab)
+    _lazy(T["📤 Export"], render_export_tab)
+    _lazy(T["⚓ Barge Data"], render_barge_dashboard_tab, view_date, cur=(hist_cif, hist_frt))
+    for commodity in M.COMMODITIES:
+        _lazy(T[commodity], _render_archived_commodity, commodity)
 else:
-    tabs = st.tabs(["📊 Changes", "📝 Inputs"] + M.COMMODITIES
-                   + ["💵 Net Carry", "📈 Seasonal", "💵 Cash vs Del", "🛥 River Bids",
-                      "🚢 FOB Vessel", "📤 Export", "⚓ Barge Data"], on_change="rerun")
-    with tabs[0]:
-        if tabs[0].open:
-            render_changes_tab(as_of)
-    with tabs[1]:
-        if tabs[1].open:
-            render_inputs_tab(as_of)
-    with tabs[2 + len(M.COMMODITIES)]:              # 💵 Net Carry sits right after the commodity sheets
-        if tabs[2 + len(M.COMMODITIES)].open:
-            render_netcarry_tab()
-    with tabs[-6]:
-        if tabs[-6].open:
-            render_seasonal_tab()
-    with tabs[-5]:
-        if tabs[-5].open:
-            render_cashdel_tab()
-    with tabs[-4]:
-        if tabs[-4].open:
-            render_riverbids_tab()
-    with tabs[-3]:
-        if tabs[-3].open:
-            render_fob_vessel_tab()
-    with tabs[-2]:
-        if tabs[-2].open:
-            render_export_tab()
-    with tabs[-1]:
-        if tabs[-1].open:
-            render_barge_dashboard_tab(as_of)
-    for tab, commodity in zip(tabs[2:2 + len(M.COMMODITIES)], M.COMMODITIES):
+    _names = (["📊 Changes", "📝 Inputs"] + list(M.COMMODITIES)
+              + ["💵 Net Carry", "📈 Seasonal", "💵 Cash vs Del", "🛥 River Bids",
+                 "🚢 FOB Vessel", VESSEL_LINEUP_TAB, "📤 Export", "⚓ Barge Data"])
+    T = dict(zip(_names, st.tabs(_names, on_change="rerun")))
+    _lazy(T["📊 Changes"], render_changes_tab, as_of)
+    _lazy(T["📝 Inputs"], render_inputs_tab, as_of)
+    _lazy(T["💵 Net Carry"], render_netcarry_tab)              # 💵 Net Carry sits right after the commodity sheets
+    _lazy(T["📈 Seasonal"], render_seasonal_tab)
+    _lazy(T["💵 Cash vs Del"], render_cashdel_tab)
+    _lazy(T["🛥 River Bids"], render_riverbids_tab)
+    _lazy(T["🚢 FOB Vessel"], render_fob_vessel_tab)
+    _lazy(T[VESSEL_LINEUP_TAB], render_vessel_lineup_tab)
+    _lazy(T["📤 Export"], render_export_tab)
+    _lazy(T["⚓ Barge Data"], render_barge_dashboard_tab, as_of)
+    for commodity in M.COMMODITIES:
+        tab = T[commodity]
         with tab:
             if tab.open:
                 df = st.session_state[f"cif_{commodity}"]
@@ -4454,7 +4586,8 @@ else:
                                            contracts=st.session_state.get(f"contracts_{commodity}"))
                             + '</div>', unsafe_allow_html=True)
                 _snap_toolbar(f"snap_fob_{commodity}",
-                              f"{commodity} FOB Sheet {as_of:%m-%d-%y}")
+                              f"{commodity} FOB Sheet {as_of:%m-%d-%y}",
+                              summary=f"{commodity} FOB Summary {as_of:%m-%d-%y}")
                 st.markdown("##### 📈 Top of Carry")
                 render_carry_chart(commodity, M.compute_fob_grid(commodity, cif_row, fbr),
                                    spreads, as_of=as_of, fut_row=fut_row)
@@ -4478,7 +4611,7 @@ _DISCLAIMER = (
     "basis for investment decisions. Past performance is not indicative of future "
     "results. This message may contain confidential or proprietary information "
     "intended solely for the use of the designated recipient. "
-    f"&copy; John Stewart &amp; Associates, Inc. {dt.date.today().year}")
+    f"&copy; John Stewart &amp; Associates, Inc. {_today().year}")
 st.markdown(
     '<div style="font-family:inherit;margin-top:1.5rem;padding-top:0.7rem;border-top:1px solid #e0e0e0;'
     'font-size:inherit;line-height:1.4;color:#8a9199;text-align:justify;">'
