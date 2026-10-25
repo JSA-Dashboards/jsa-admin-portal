@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "0ce2173dcc4b9b80b57166034689018fd8cd4204",
+ "commit": "d864541fd0a0e70566488b3aeee214674d25f6e2",
  "files": {
-  "app.py": "1586a1fd37278ad8027efcb9e3166bc8fd57769bbede2b00e568f2f025a1fb59",
+  "app.py": "a0fc6d5feb8a63b3581d381c3a92a2fb8251bb6feb8dae148cf205bc8149a7d4",
   "assets/jsa_50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/jsa_mark.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
@@ -24,6 +24,7 @@
   "rf_check_db_url.py": "2a3da6095d33f1fae2358f8ed33ec1d59ec52eb7757279e048c356343a8e2366",
   "rf_daily_fob_import.py": "6c65ea8c96a788b2d6606a810c0154b50b344be5512e74c17a48bf91800a85f2",
   "rf_db.py": "52c457a1085f39141ddff1526286c63f68cce8132d57b4c9f5ce2dcd3b6822cd",
+  "rf_deliverable_stocks.py": "b57f9e22fbd52780f2941e42cc203e78e66353a2392341a0d6600e5284266343",
   "rf_delivery_period.py": "2786db029e276605ea04789f4dc2c700a08ef836c4fbc29d53755686d3c13ebf",
   "rf_fastmarkets.py": "a049c94a8ef9bd7d603df59e3e04daa8c2c892fcf4b81e554ca3964ad48804a9",
   "rf_fetch_bidsheet_email.py": "02895ae4eb36b7340f49c9ba7813d3bb0470121fe9bd5a4da9c9b855b63af2d9",
@@ -35,6 +36,7 @@
   "rf_fob_vessel.py": "a160ca38c94c76efdd35342bd2a7462bf3fc60b979444d3a0f20192d4b69fccc",
   "rf_fob_vessel_import.py": "3f4ffe0af6c0dfce4664d4eec5773280f093571e4dc4ea6721a9f33f8dff8720",
   "rf_import_cgb_history.py": "91ab25261ffed1d2b3cff63509cadc3a754a7bb64d2cd2caf100d2b6eae53f33",
+  "rf_import_deliverable_stocks.py": "81317ed28db6ed2d529dc364cc78c3075a640d5a4bb18adba897cc30da55dbe8",
   "rf_import_fob_master.py": "c7aab1db190e6efc7b68f504f5331b7ed79357e76e75830a698a89bfb47e38c8",
   "rf_import_history.py": "ffc8cd70d64bbeaa2421fe12fd6c6b3d0e80594d68b6bb355ff5019f844776d7",
   "rf_massive_api.py": "489633f8d3f4d787d3ba5563e78d02272e3ffa72f170f6d40d1ce34521e32651",
