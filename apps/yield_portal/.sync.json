@@ -1,10 +1,10 @@
 {
  "branch": "master",
- "commit": "f697af6f7f96e4626d34c9a1e814194b2a2e2486",
+ "commit": "af5ab2b70fa6b12c515b7c28e3350d30284f7ba8",
  "files": {
   "app.py": "0e30258f7a77515a11cc7be68e1746a864f960e8d59d297f268a11ec66bd92c1",
   "app_pages/add.py": "9606b5593e572b5375307e19e485fc14d2026a482a6d0ee9c8ad951575719be3",
-  "app_pages/explore.py": "1b7ef6e11af4345f6d5b413a90719d7bdba84bf2d0049239547741a335ed39ba",
+  "app_pages/explore.py": "40f6474265f524e6b83127aff7b518b1833fa0be1203d6c98b876aa243fd7dd7",
   "app_pages/field_issues.py": "f72dbb7422652617261b742e4a46ae5a4ac0386f51223ef53cb76492d1558d5b",
   "app_pages/import_pdf.py": "0fffe5008507b24d20c0621aff6ae2d569bbc0410430bbcf2c8eb048b6016630",
   "app_pages/normal.py": "19233c3e30b17c21074c9acd9ac4ba0a9eca2d1f41c01a5bf4d776b70e75a7a0",
@@ -36,6 +36,7 @@
   "yp_reimport_pdfs.py": "9d813ecb33fc92c6b2191ad6ed341504b22b809b4a0e3e451f717a7bafba43a5",
   "yp_report_text.py": "211486c2811f3f3e47fa36c005f3e2d16db42390ead8d7772d668f4c65cec4d8",
   "yp_trials.py": "4b9598a09bdda48b5b6a3f20ec9aef3897de0ef2dddab5a5315fcbf9f7ea04c5",
+  "yp_variety_watch.py": "14f9b6d754aa00cdb6f91e2c6b09db426cb7fa88c0cdda680f410b33a5f55028",
   "yp_weekly_email.py": "ff8306f63ef73bd8515fb8a128f554ba7a684b822741ab8bcd51c841de2f61c2"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
