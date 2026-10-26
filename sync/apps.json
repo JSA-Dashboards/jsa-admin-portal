@@ -277,6 +277,10 @@
   },
   {
    "repo": "JSA-Dashboards/livestock-portal",
+   "path": "portal_view.py"
+  },
+  {
+   "repo": "JSA-Dashboards/livestock-portal",
    "path": "assets/agmarket-net.png"
   },
   {

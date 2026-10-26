@@ -14,7 +14,8 @@ which left 13 of 16 bundled apps behind their source by October 2026.
 - `status` shows drift per app, `plan <name>` the files and any NEW secrets the
   app now reads, `diff <name>` the diff. `check` finds module-name collisions and
   cwd-relative paths (no network). `python sync/smoke.py` loads every page once in
-  one process, like the portal does.
+  one process, like the portal does. A page whose import can't resolve (a module the
+  portal doesn't ship) FAILS it; missing secrets or runtime data files only warn.
 - The sync copies the source and applies three idempotent patches, never touching
   logic: it removes `st.set_page_config` (`Home.py` makes the one call allowed per
   run), adds a `sys.path` shim so sibling imports resolve to the app's folder, and
@@ -34,7 +35,13 @@ which left 13 of 16 bundled apps behind their source by October 2026.
   Its data files (`*.db`, `*.xlsx`) are not mirrored: on Cloud the app downloads
   them from the public repo at runtime (`data_sync.py`, because `/mount/src`).
 - `.github/workflows/sync-apps.yml` runs the sync daily and opens one pull request.
-  Merging it is the update; the push deploys itself.
+  Merging it is the update; the push deploys itself. A source that can't be cloned (the `SYNC_TOKEN` PAT
+  can't read a private repo, a repo was renamed or deleted) is **skipped, not failed**: its mirror stays as
+  it was, the run goes on with the other apps, and the skip shows as a warning annotation and on the run's
+  summary page. If every source is skipped, or anything other than a clone goes wrong, `apply` still fails.
+  (Before 2026-10-26 one unreadable private repo, `cftc_cot`, failed the whole run, so no sync PR opened
+  from 10-11 on.) A skipped app goes stale quietly apart from that warning, so glance at the run summary
+  now and then, or fix the token. `python -m pytest sync/test_sync_apps.py` covers the skip behaviour.
 
 ## Home page: Grain Apps / Livestock Apps tabs (2026-10-15)
 
@@ -43,7 +50,10 @@ over `LIVE_DASHBOARDS`: **Livestock Apps** is every tile with `"category": "Live
 everything else. The 15 livestock dashboards are generated mirrors of `JSA-Dashboards/livestock-portal`
 (`subdir` entries in `sync/apps.json`: cme_feeder_cattle, livestock_seasonal, cot_report, cash_trade,
 beef_cutout, mexican_feeder_imports, canadian_feeder_cattle, beef_trimmings, beef_trade, beef_weight,
-us_cow_herd, cattle_on_feed, livestock_inventory, fed_cattle_crush, backgrounding_crush). The livestock
+us_cow_herd, cattle_on_feed, livestock_inventory, fed_cattle_crush, backgrounding_crush). Since 2026-10-23 most
+of those pages `import portal_view` (the livestock repo's client-vs-staff switch, a repo-root module), so
+`root_files` ships it to the portal root like `wasde.py`; it stays in staff mode here because `Client.py`, which
+would flip it, is not mirrored. The livestock
 portal's two staff tools (JSA Daily Cattle Reports = `weekly_reports`, Cattle Market Board = `market_board`)
 are mirrors too, but they reach into the livestock repo's layout: its root `letter/` package, `portal_auth.py`,
 `assets/agmarket-net.png` and sibling apps by file path. So `sync/apps.json` `root_files` also carries those (a

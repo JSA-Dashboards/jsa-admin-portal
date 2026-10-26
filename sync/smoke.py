@@ -28,6 +28,17 @@ HARD = re.compile(r"(ModuleNotFoundError|ImportError|NameError|SyntaxError|FileN
                   r"StreamlitAPIException|DuplicateWidget|StreamlitDuplicate)")
 
 
+IMPORT_ERRORS = {"ModuleNotFoundError", "ImportError"}
+
+
+def described(e) -> str:
+    """AppTest's exception element holds only the bare message ("No module named 'x'"), so an import that cannot
+    resolve never matched HARD above: a page importing a module the portal doesn't ship passed as a warning.
+    Put the class name back for those (other messages stay as they were, e.g. a data file fetched at runtime)."""
+    kind = getattr(getattr(e, "proto", None), "type", "")
+    return f"{kind}: {e.value}" if kind in IMPORT_ERRORS else e.value
+
+
 def pages(names):
     apps = ROOT / "apps"
     allp = sorted(p.name for p in apps.iterdir() if (p / "app.py").exists())
@@ -42,7 +53,7 @@ def main():
         t0 = time.time()
         try:
             at = AppTest.from_file(str(f), default_timeout=int(os.environ.get("SMOKE_TIMEOUT", "25"))).run()
-            excs = [e.value for e in at.exception]
+            excs = [described(e) for e in at.exception]
             errs = [e.value for e in at.error]
         except Exception as e:  # the script blew up before AppTest could capture it
             excs, errs = [f"{type(e).__name__}: {e}"], []
