@@ -516,7 +516,7 @@ bar.markdown(f'<div class="asof">Updated <b>{latest:%B %d, %Y}</b> &middot; USDA
              f'{commodity.lower()} {stage.lower()} (% of acreage)</div>', unsafe_allow_html=True)
 if btn.button("Refresh data", icon=":material/refresh:", width="stretch",
               help="Re-reads the shared NASS cache now instead of waiting out the 30-minute page cache. "
-                   "New USDA reports land in that cache from the scheduled pull (Mondays ~4-7 pm CT)."):
+                   "New USDA reports land in that cache from the scheduled pull (Mondays ~3-7 pm CT)."):
     load_progress.clear()
     load_area.clear()
     st.rerun()
