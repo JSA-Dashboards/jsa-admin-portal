@@ -74,7 +74,7 @@ def _query(sql: str, params: list | None = None) -> pd.DataFrame:
     if "report_date" in df.columns:
         df["report_date"] = pd.to_datetime(df["report_date"])
     for c in df.columns:
-        if c not in ("report_date", "series", "report_type"):
+        if c not in ("report_date", "series", "report_type", "date", "product_code", "month"):
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
@@ -171,8 +171,23 @@ def load_cit() -> pd.DataFrame:
     return _cit(data_epoch())
 
 
+@st.cache_data(ttl=1800, show_spinner="Loading futures settlements…")
+def load_settlements(since: str) -> pd.DataFrame:
+    """Daily settles for the markets on the price-move chart, from `since` (YYYY-MM-DD) on.
+
+    JSA.COST_OF_CARRY.FUTURES_SETTLEMENTS is filled each weekday at 4:30pm CT by the droplet, so
+    the newest row is the previous trading day until then."""
+    df = _query("SELECT product_code, month, year, date, settle "
+                "FROM JSA.COST_OF_CARRY.FUTURES_SETTLEMENTS "
+                "WHERE product_code IN ('ZC','ZS','ZM','ZL','ZW','KE','HRS') AND date >= %s "
+                "ORDER BY product_code, year, month, date", [since])
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
 def clear_cache() -> None:
     """Drop every cached query so the next render re-reads Snowflake."""
     _disagg.clear()
     _legacy.clear()
     _cit.clear()
+    load_settlements.clear()

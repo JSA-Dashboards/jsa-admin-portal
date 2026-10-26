@@ -14,7 +14,7 @@ import sys as _sys  # portal-sync: sibling imports resolve to this folder
 from pathlib import Path as _Path  # portal-sync
 _sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import base64
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +22,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import cot_client as cc
+import futures_move as fm
 
 pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
 
@@ -257,7 +258,7 @@ def pick_market(series, key: str) -> str:
 # -- as-of band and hero tiles (futures only, above the tabs) -------------------
 # The button is handled BEFORE the data loads, so a click clears the cache and this same run
 # re-reads Snowflake. The cache otherwise holds an hour, and the ETL lands Friday 3pm CT.
-asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+asof_col, refresh_col = st.columns([5, 1.3], vertical_alignment="center")
 with refresh_col:
     if st.button("Refresh data", icon=":material/refresh:", width="stretch",
                  help="Re-read the latest positions from Snowflake now. Data is otherwise cached for an hour."):
@@ -318,8 +319,54 @@ def tint_index(v):
     return "background-color: #e8f5e9" if v >= 80 else ("background-color: #ffebee" if v <= 20 else "")
 
 
+def price_move_figure(m: pd.DataFrame) -> go.Figure:
+    """Bars of settle-to-settle change since the COT Tuesday, one per market (cents/bu, $/ton, cents/lb)."""
+    txt = [("" if pd.isna(v) else f"{v:,.2f}".rstrip("0").rstrip(".")) for v in m.change]
+    fig = go.Figure(go.Bar(
+        x=m.market, y=m.change, text=txt, textposition="outside", cliponaxis=False,
+        marker_color="#165f80", customdata=m[["contract", "unit"]].values,
+        hovertemplate="%{x} (%{customdata[0]})<br>%{y:+,.2f} %{customdata[1]}<extra></extra>"))
+    fig.add_hline(y=0, line_width=1.2, line_color=DM_MUTED)
+    style_fig(fig, 380, "price movement (cents/bu & dollars/ton)", legend=False)
+    fig.update_layout(hovermode="closest",
+                      yaxis={**AXIS, "title": "price movement (cents/bu & dollars/ton)", "side": "right"},
+                      xaxis={**AXIS, "showgrid": False, "tickfont": dict(color=DM_TEXT, size=13)})
+    return fig
+
+
+@st.fragment
+def price_moves_section():
+    cot_date = latest_date.date()
+    today = datetime.now(cc.CT).date()
+    try:
+        settles = cc.load_settlements((cot_date - timedelta(days=21)).isoformat())
+    except Exception as e:
+        st.info(f"Futures settlements could not be read, so the price-move chart is unavailable. `{e}`")
+        return
+    m = fm.price_moves(settles, cot_date, today)
+    sec("Commodity price movement since the last COT")
+    if m.empty or m.change.isna().all():
+        st.info(f"No futures settles after Tuesday {_us(latest_date)} yet.")
+        return
+    st.plotly_chart(price_move_figure(m), width="stretch", key="price_move")
+    last = m.latest_date.max()
+    st.caption(
+        f"Front-month settle on {last:%a %b %d} less its settle on the COT Tuesday, {_us(latest_date)}. The "
+        "front month rolls to the next contract once the date passes a contract's first notice day, and "
+        "both ends of each bar are the same contract. Cents per bushel for corn, soybeans and wheat, "
+        "dollars per ton for meal, cents per pound for oil.")
+    with st.expander("Contracts and settles"):
+        t = m.assign(Contract=m.market + " " + m.contract, **{"First notice": m.fnd.map(_us),
+                     f"Settle {_us(latest_date)}": m.cot_settle, "Latest settle": m.latest_settle,
+                     "Change": m.change, "Unit": m.unit})
+        with st.container(key="tablewrap_price_moves"):
+            st.dataframe(t[["Contract", "First notice", f"Settle {_us(latest_date)}", "Latest settle",
+                            "Change", "Unit"]], width="stretch", hide_index=True)
+
+
 @st.fragment
 def tab_snapshot():
+    price_moves_section()
     sec("Every market, managed money")
     rt_label = st.segmented_control("Report", list(REPORT_TYPES), default="Futures only",
                                     key="snap_rt", label_visibility="collapsed")
