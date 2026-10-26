@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "d88b7a1746646cb5e511a3a5b3f28a499254809f",
+ "commit": "b37dfaf1d1052de00ead28de193ea5b83b38d38f",
  "files": {
   "app.py": "0e30258f7a77515a11cc7be68e1746a864f960e8d59d297f268a11ec66bd92c1",
   "app_pages/add.py": "9606b5593e572b5375307e19e485fc14d2026a482a6d0ee9c8ad951575719be3",
@@ -37,7 +37,7 @@
   "yp_report_text.py": "211486c2811f3f3e47fa36c005f3e2d16db42390ead8d7772d668f4c65cec4d8",
   "yp_trials.py": "4b9598a09bdda48b5b6a3f20ec9aef3897de0ef2dddab5a5315fcbf9f7ea04c5",
   "yp_variety_watch.py": "14f9b6d754aa00cdb6f91e2c6b09db426cb7fa88c0cdda680f410b33a5f55028",
-  "yp_weekly_email.py": "ff8306f63ef73bd8515fb8a128f554ba7a684b822741ab8bcd51c841de2f61c2"
+  "yp_weekly_email.py": "4407a26163076448e489a7f28e906fe7ae0b8c50c1ab072332535725770f856a"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/yield-portal",
