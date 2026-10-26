@@ -1,10 +1,10 @@
 {
  "branch": "master",
- "commit": "b37dfaf1d1052de00ead28de193ea5b83b38d38f",
+ "commit": "f5163922def2349e269598885bb725eb63dfe4d9",
  "files": {
   "app.py": "0e30258f7a77515a11cc7be68e1746a864f960e8d59d297f268a11ec66bd92c1",
   "app_pages/add.py": "9606b5593e572b5375307e19e485fc14d2026a482a6d0ee9c8ad951575719be3",
-  "app_pages/explore.py": "3a2429a9c1b86b0ef10ab49b405ab9289a3646a21dbeb7f7f53231288633bc01",
+  "app_pages/explore.py": "3b82c18a0a91862fd6bc8e2a0e52560e1b4f24d942595437e71ca1c5a96d3781",
   "app_pages/field_issues.py": "f72dbb7422652617261b742e4a46ae5a4ac0386f51223ef53cb76492d1558d5b",
   "app_pages/import_pdf.py": "0fffe5008507b24d20c0621aff6ae2d569bbc0410430bbcf2c8eb048b6016630",
   "app_pages/normal.py": "19233c3e30b17c21074c9acd9ac4ba0a9eca2d1f41c01a5bf4d776b70e75a7a0",
@@ -16,7 +16,7 @@
   "yp_analysis.py": "399facaf0f34cf32e185a116665cb9772e4d2dcc5b8d4874fa47a910984af562",
   "yp_baselines.py": "b2b70e04df775e4bb5553faf372e3fe1baf6822d24f0191027593595097956f3",
   "yp_checks.py": "7b9fe6d59843d6f066ac40887a52f5863e9185793a4f6ef7a72e7df0988339a4",
-  "yp_data.py": "e30aa18d9669d54de13def754669c989bb35a8a17f3e43139a1c9cf65c91549c",
+  "yp_data.py": "0fe188a58ff89db400e3670b14de2def75f21fa9fab7404f3a72062b31cab3f8",
   "yp_db.py": "2428e6ac51d47505a0ca24d7bba7ba41ff8dbc29ffd4d397274e495997b4e23e",
   "yp_field_issues.py": "06959558e64d558c94a17c2394a12afed4fcf47b5f41b6add1c39f7daeb4e24e",
   "yp_field_signal.py": "345a1021af79f2df1d7f1eb91d918d6d6f633a87d556b9f91b3702155f57acb9",
@@ -37,7 +37,7 @@
   "yp_report_text.py": "211486c2811f3f3e47fa36c005f3e2d16db42390ead8d7772d668f4c65cec4d8",
   "yp_trials.py": "4b9598a09bdda48b5b6a3f20ec9aef3897de0ef2dddab5a5315fcbf9f7ea04c5",
   "yp_variety_watch.py": "14f9b6d754aa00cdb6f91e2c6b09db426cb7fa88c0cdda680f410b33a5f55028",
-  "yp_weekly_email.py": "4407a26163076448e489a7f28e906fe7ae0b8c50c1ab072332535725770f856a"
+  "yp_weekly_email.py": "9ebf2415350fd73fa03bf3c5ca0b84caab15849352d3bcefa28811a7e2d5ca8e"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/yield-portal",
