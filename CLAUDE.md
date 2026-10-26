@@ -99,12 +99,18 @@ instead of calling `st.switch_page`.
 
 A synced mirror of `JSA-Dashboards/cso-risk-analyzer` (branch `main`; **public since 2026-10-15**, made
 public "for now"), tile under "Futures, Options & Spreads". CME calendar spread options priced as one
-option on the nearby-minus-deferred spread (Bachelier), with quote-implied skew and hedged-vs-unhedged
-analysis. Unlike the Risk Analyzer it needs nothing from the portal: no Snowflake, no secrets, no grant,
-no new package (scipy and altair were already here), so merging or pushing it is the whole deploy. Its
-entry `app.py` is the source's own (no wrapper: single page, no `st.navigation`); session and widget keys
-are `cso_`-prefixed because every bundled app shares one session; tabs use the lazy `on_change="rerun"`
-pattern.
+option on the nearby-minus-deferred spread (Bachelier), with quote-implied skew, hedged-vs-unhedged
+analysis and, as its first tab (added 2026-10-26), a **Strategy builder**: a bought put or call laid over a
+spread position, with the payoff shaded green where it gains and red where it loses, and the spread's full
+carry and 12-month range beside it. Unlike the Risk Analyzer it needs no Snowflake, no grant and no new
+package (scipy, altair and requests were already here), so merging or pushing it is the whole deploy. Its one
+secret is the optional root-level `MASSIVE_API_KEY`, which this portal already holds (`Home.py` bridges it):
+it powers *Fetch futures prices* and the Strategy builder's fed-funds rate and settlement history (the history
+calls take about 7 s each on the first open, then are cached for 6 hours). `sync_apps.py plan` lists it as a
+"new secret"; it is not. Its entry `app.py` is the source's own (no wrapper: single page, no `st.navigation`);
+session and widget keys are `cso_`-prefixed because every bundled app shares one session; tabs use the lazy
+`on_change="rerun"` pattern. The app also reloads its own `cso/*` modules when a push changes them, alongside
+`drop_changed_modules()`.
 
 - **Password:** the standalone app sits behind a shared-password gate (`cso/auth.py`, keyed on
   `st.session_state["_authed"]`). `"preauth": true` in `sync/apps.json` makes the sync pre-set that key, so
