@@ -185,9 +185,21 @@ def load_settlements(since: str) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=1800, show_spinner="Loading livestock futures…")
+def load_livestock_settles(since: str, as_of: str) -> pd.DataFrame:
+    """Live cattle, feeder cattle and lean hogs: next two contracts' settles from Massive.
+    Empty (not an error) when MASSIVE_API_KEY is not configured, so the grain bars still draw."""
+    key = _secret("MASSIVE_API_KEY")
+    if not key:
+        return pd.DataFrame()
+    import cot_massive
+    return cot_massive.livestock_settles(key, pd.Timestamp(as_of).date(), pd.Timestamp(since).date())
+
+
 def clear_cache() -> None:
     """Drop every cached query so the next render re-reads Snowflake."""
     _disagg.clear()
     _legacy.clear()
     _cit.clear()
     load_settlements.clear()
+    load_livestock_settles.clear()

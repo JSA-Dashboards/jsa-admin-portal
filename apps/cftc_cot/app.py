@@ -327,9 +327,9 @@ def price_move_figure(m: pd.DataFrame) -> go.Figure:
         marker_color="#165f80", customdata=m[["contract", "unit"]].values,
         hovertemplate="%{x} (%{customdata[0]})<br>%{y:+,.2f} %{customdata[1]}<extra></extra>"))
     fig.add_hline(y=0, line_width=1.2, line_color=DM_MUTED)
-    style_fig(fig, 380, "price movement (cents/bu & dollars/ton)", legend=False)
+    style_fig(fig, 380, "price movement (cents/bu, $/ton, cents/lb)", legend=False)
     fig.update_layout(hovermode="closest",
-                      yaxis={**AXIS, "title": "price movement (cents/bu & dollars/ton)", "side": "right"},
+                      yaxis={**AXIS, "title": "price movement (cents/bu, $/ton, cents/lb)", "side": "right"},
                       xaxis={**AXIS, "showgrid": False, "tickfont": dict(color=DM_TEXT, size=13)})
     return fig
 
@@ -343,24 +343,40 @@ def price_moves_section():
     except Exception as e:
         st.info(f"Futures settlements could not be read, so the price-move chart is unavailable. `{e}`")
         return
+    since = (cot_date - timedelta(days=21)).isoformat()
+    livestock_note = ""
+    try:
+        ls = cc.load_livestock_settles(since, today.isoformat())
+        if ls.empty:
+            livestock_note = " Livestock is not shown: no Massive API key is configured here."
+        else:
+            settles = pd.concat([settles, ls], ignore_index=True)
+    except Exception as e:  # noqa: BLE001 -- grains must still draw
+        livestock_note = f" Livestock could not be loaded ({e})."
     m = fm.price_moves(settles, cot_date, today)
     sec("Commodity price movement since the last COT")
     if m.empty or m.change.isna().all():
         st.info(f"No futures settles after Tuesday {_us(latest_date)} yet.")
         return
     st.plotly_chart(price_move_figure(m), width="stretch", key="price_move")
-    last = m.latest_date.max()
+    # Each market is measured through its OWN newest settle, and the grain bank trails Massive by
+    # a day until the 4:30pm CT load, so say which date each group runs to.
+    through = {}
+    for r in m.itertuples():
+        through.setdefault(pd.Timestamp(r.latest_date).strftime("%a %b %d").replace(" 0", " "), []).append(r.market)
+    through_txt = "; ".join(f"{', '.join(v)} through {k}" for k, v in through.items())
     st.caption(
-        f"Front-month settle on {last:%a %b %d} less its settle on the COT Tuesday, {_us(latest_date)}. The "
+        f"Front-month settle less its settle on the COT Tuesday, {_us(latest_date)} ({through_txt}). The "
         "front month rolls to the next contract once the date passes a contract's first notice day, and "
         "both ends of each bar are the same contract. Cents per bushel for corn, soybeans and wheat, "
-        "dollars per ton for meal, cents per pound for oil.")
+        "dollars per ton for meal, cents per pound for oil and livestock. Livestock futures are cash-settled "
+        "and have no notice day, so their front month rolls after the last trading day." + livestock_note)
     with st.expander("Contracts and settles"):
-        t = m.assign(Contract=m.market + " " + m.contract, **{"First notice": m.fnd.map(_us),
-                     f"Settle {_us(latest_date)}": m.cot_settle, "Latest settle": m.latest_settle,
+        t = m.assign(Contract=m.market + " " + m.contract, **{"Roll date": m.fnd.map(_us), "Rolls after": m.roll_kind,
+                     f"Settle {_us(latest_date)}": m.cot_settle, "Latest settle": m.latest_settle, "Through": m.latest_date.map(_us),
                      "Change": m.change, "Unit": m.unit})
         with st.container(key="tablewrap_price_moves"):
-            st.dataframe(t[["Contract", "First notice", f"Settle {_us(latest_date)}", "Latest settle",
+            st.dataframe(t[["Contract", "Roll date", "Rolls after", f"Settle {_us(latest_date)}", "Latest settle", "Through",
                             "Change", "Unit"]], width="stretch", hide_index=True)
 
 

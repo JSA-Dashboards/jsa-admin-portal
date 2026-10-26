@@ -32,7 +32,13 @@ MARKETS = {
     "ZW": ("SRW", "cents/bu"),
     "KE": ("HRW", "cents/bu"),
     "HRS": ("HRS", "cents/bu"),
+    "LE": ("Live cattle", "cents/lb"),
+    "GF": ("Feeder cattle", "cents/lb"),
+    "HE": ("Lean hogs", "cents/lb"),
 }
+
+# Cash-settled: no notice day, so the front month runs to the last trading day instead.
+CASH_SETTLED = {"LE", "GF", "HE"}
 
 
 def first_notice_day(year: int, month_code: str) -> date:
@@ -56,6 +62,8 @@ def price_moves(settles: pd.DataFrame, cot_date: date, today: date) -> pd.DataFr
     a guess."""
     settles = settles.copy()
     settles["date"] = pd.to_datetime(settles["date"]).dt.date
+    if "expiry" not in settles:
+        settles["expiry"] = None
     rows = []
     for code, (name, unit) in MARKETS.items():
         d = settles[settles.product_code == code]
@@ -64,7 +72,14 @@ def price_moves(settles: pd.DataFrame, cot_date: date, today: date) -> pd.DataFr
         latest_day = d["date"].max()
         # Contracts that actually traded on the latest day, so a stale tail is never chosen.
         live = d[d["date"] == latest_day]
-        front = front_month(list(zip(live.year.astype(int), live.month)), today)
+        if code in CASH_SETTLED:
+            ex = {(int(r.year), r.month): pd.to_datetime(r.expiry).date() for r in live.itertuples()}
+            ahead = [k for k, v in ex.items() if v >= today]
+            front = min(ahead, key=lambda k: ex[k]) if ahead else None
+            roll = ex.get(front)
+        else:
+            front = front_month(list(zip(live.year.astype(int), live.month)), today)
+            roll = first_notice_day(*front) if front else None
         if front is None:
             continue
         y, m = front
@@ -73,7 +88,7 @@ def price_moves(settles: pd.DataFrame, cot_date: date, today: date) -> pd.DataFr
         last = c.get(latest_day)
         rows.append({
             "code": code, "market": name, "unit": unit, "contract": f"{m}{str(y)[2:]}",
-            "year": y, "month": m, "fnd": first_notice_day(y, m),
+            "year": y, "month": m, "fnd": roll, "roll_kind": "last trade" if code in CASH_SETTLED else "first notice",
             "cot_date": cot_date, "cot_settle": tue, "latest_date": latest_day, "latest_settle": last,
             "change": (last - tue) if tue is not None and last is not None and latest_day > cot_date
             else float("nan"),
