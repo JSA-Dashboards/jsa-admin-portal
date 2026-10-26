@@ -224,6 +224,16 @@
    "branch": "main",
    "preauth": true
   },
+  "farmer_selling_survey": {
+   "repo": "JSA-Dashboards/farmer-selling-survey",
+   "branch": "main",
+   "prefix_modules": "fs_",
+   "exclude": [
+    "*.sql",
+    "seed_snowflake.py",
+    "build_data.py"
+   ]
+  },
   "weekly_reports": {
    "repo": "JSA-Dashboards/livestock-portal",
    "subdir": "apps/weekly_reports"

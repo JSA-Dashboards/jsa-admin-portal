@@ -229,6 +229,9 @@ LIVE_DASHBOARDS = [
     {"title": "Teams Broadcast", "category": "Admin",
      "desc": "Send a message to Teams chats or WhatsApp groups in one shot.",
      "page": "apps/teams_broadcast/app.py", "url_path": "teams-broadcast"},
+    {"title": "Farmer Selling Survey", "category": "Admin",
+     "desc": "Share of the crop farmers report sold, by crop year: corn, soybeans and HRW / SRW / HRS wheat, with monthly entry.",
+     "page": "apps/farmer_selling_survey/app.py", "url_path": "farmer-selling-survey"},
     # Hand-written status page (not a synced mirror, so it lives in admin_pages/, outside apps/).
     {"title": "Grain Marketing Desk", "category": "Admin",
      "desc": "Status of the broker grain marketing app: live link, what is done, what is still open.",

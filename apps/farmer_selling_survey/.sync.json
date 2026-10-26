@@ -1,0 +1,13 @@
+{
+ "branch": "main",
+ "commit": "5fee6301ac4466edd0b347f04b7ae66816a1bd89",
+ "files": {
+  "app.py": "8580223be4317a06a7ecb33a08865df6ece617ddc8267652bc2b790e05c1e942",
+  "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
+  "fs_db.py": "7c0341f80abaeb63ffadce8ba810d33928fe86119ed27e667d124089b837109f",
+  "fs_loader.py": "cc303b29ae6139b57c6ec92f0e8f656b07bc0780844bc5a27eab9c2efcbf8c6c"
+ },
+ "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
+ "repo": "JSA-Dashboards/farmer-selling-survey",
+ "subdir": null
+}
