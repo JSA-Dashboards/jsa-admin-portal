@@ -511,8 +511,15 @@ ref_ts = we[week]
 table = comparison_table(d, series, map_year, week, ref_ts)
 
 latest = d["week_ending"].max()
-st.markdown(f'<div class="asof">Updated <b>{latest:%B %d, %Y}</b> &middot; USDA NASS Crop Progress, '
-            f'{commodity.lower()} {stage.lower()} (% of acreage)</div>', unsafe_allow_html=True)
+bar, btn = st.columns([6, 1.3], vertical_alignment="top")
+bar.markdown(f'<div class="asof">Updated <b>{latest:%B %d, %Y}</b> &middot; USDA NASS Crop Progress, '
+             f'{commodity.lower()} {stage.lower()} (% of acreage)</div>', unsafe_allow_html=True)
+if btn.button("Refresh data", icon=":material/refresh:", width="stretch",
+              help="Re-reads the shared NASS cache now instead of waiting out the 30-minute page cache. "
+                   "New USDA reports land in that cache from the scheduled pull (Mondays ~4-7 pm CT)."):
+    load_progress.clear()
+    load_area.clear()
+    st.rerun()
 
 # ---- KPI cards for the US row ----
 if "US" in table.index:
