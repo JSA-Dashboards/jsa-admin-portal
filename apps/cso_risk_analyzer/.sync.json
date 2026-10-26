@@ -1,17 +1,19 @@
 {
  "branch": "main",
- "commit": "6bb05b9faec731ed1ad162e14a69acd13b5853f0",
+ "commit": "a60c26e47ab93848a63f488ff1051a5cd79b6736",
  "files": {
-  "app.py": "871b3b02a59a0220234aa8186dcf1c80a5ad6f96f2d5ab9693928b53aef83be5",
+  "app.py": "5d746f85500798a6eb175bbc03dd3c339f43bafebd6466c148b73a57ae279434",
   "assets/jsa_logo.png": "988a051c0e5acefd01184e3f5462531a3d5a1fcbb573821e2ee3baee6dc0c4c6",
   "cso/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "cso/auth.py": "6aa16e4d333060e11e51cef52480b2ffef28dd933f19206c28389bc8290e9955",
   "cso/book.py": "8e68ffa9fc4040c25732df1ce746c25f756dd3c25669efd5eaa6955ee1b40229",
   "cso/carry.py": "28ec85386be39ce82c985a7b3926d6b7d4b4dbfc15d36606e6c1ca8764fc6f17",
   "cso/disclosure.py": "7c45e80e32354a26d4347efc2eddf246f1ff4bab45d333e20aea5fd7c37defb6",
-  "cso/massive.py": "886b5ac30538d04158c5d05da2e673964c636344a66bcb7367d1505f4ae0fea8",
-  "cso/payoff_chart.py": "abd83605b91a764a869a3f5b58bdd0b0d1ce608f88ef0d60668dacfbea12317c",
+  "cso/massive.py": "4ff32399a74f051b5c2faa53a6e8c09080cea2bf31f0de3a533578af7f7d6324",
+  "cso/payoff_chart.py": "f52d6808af019ad5e55fd210adae71a94c6499b7c3338f2a797393e48e688904",
   "cso/pricing.py": "4f1f5d44f51e22d73eb124ba49c0a8fb917aba8bd90204523ffbc3edca4fed84",
+  "cso/seasonal.py": "cf7b57806525b3c677088abf524e96d614d687457cb5520371e367e33c2b1c84",
+  "cso/seasonal_chart.py": "0e6e01b9776d01a77141b1511429a3a8157f50674acc99e545a73e31b860b5bc",
   "cso/strategy.py": "093c2272d11bc1a17062dab4297d37b1a9f3600a8e7ecd4ba436af3c34b1a8c5"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",

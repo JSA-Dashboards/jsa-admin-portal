@@ -112,12 +112,15 @@ public "for now"), tile under "Futures, Options & Spreads". CME calendar spread 
 option on the nearby-minus-deferred spread (Bachelier), with quote-implied skew, hedged-vs-unhedged
 analysis and, as its first tab (added 2026-10-26), a **Strategy builder**: a bought put or call laid over a
 spread position, with the payoff shaded green where it gains and red where it loses, and the spread's full
-carry and 12-month range beside it. Unlike the Risk Analyzer it needs no Snowflake, no grant and no new
-package (scipy, altair and requests were already here), so merging or pushing it is the whole deploy. Its one
-secret is the optional root-level `MASSIVE_API_KEY`, which this portal already holds (`Home.py` bridges it):
-it powers *Fetch futures prices* and the Strategy builder's fed-funds rate and settlement history (the history
-calls take about 7 s each on the first open, then are cached for 6 hours). `sync_apps.py plan` lists it as a
-"new secret"; it is not. Its entry `app.py` is the source's own (no wrapper: single page, no `st.navigation`);
+carry and 12-month range beside it. On 2026-10-26 it gained a **leg picker** (*Spread from → Live curve*: pick
+the near and far contract from the feed's current curve) and a **seasonal overlay** (the same pair in up to five
+earlier years, plus a replay of each year's move as dots on the payoff chart). Unlike the Risk Analyzer it needs
+no Snowflake, no grant and no new package (scipy, altair and requests were already here), so merging or pushing
+it is the whole deploy. Its one secret is the optional root-level `MASSIVE_API_KEY`, which this portal already
+holds (`Home.py` bridges it): it powers *Fetch futures prices* and the Strategy builder's fed-funds rate,
+contract list and settlement history (the history calls take about 5-7 s each on the first open, then are cached
+for 6 hours; the seasonal overlay reads about ten of them in parallel, so its first load takes about 20 s, and
+it is off until switched on). `sync_apps.py plan` lists it as a "new secret"; it is not. Its entry `app.py` is the source's own (no wrapper: single page, no `st.navigation`);
 session and widget keys are `cso_`-prefixed because every bundled app shares one session; tabs use the lazy
 `on_change="rerun"` pattern. The app also reloads its own `cso/*` modules when a push changes them, alongside
 `drop_changed_modules()`.
@@ -128,8 +131,9 @@ session and widget keys are `cso_`-prefixed because every bundled app shares one
 - **Source visibility:** it is public, so CI clones it without a token. If it goes private again, put
   `"private": true` back in `sync/apps.json` and make sure the `SYNC_TOKEN` PAT (as for `cftc_cot` and
   `crop_conditions`) can read it. A fine-grained PAT limited to selected repos would otherwise make `apply`
-  fail on this app and stop the day's sync PR from opening. This portal repo is public, so every mirrored
-  app's code is readable here whatever its source repo's visibility.
+  skip this app (the tile stays at its last synced version, with a warning on the run) until the token can
+  read it. This portal repo is public, so every mirrored app's code is readable here whatever its source
+  repo's visibility.
 - Locally, `sync/smoke.py` times a page out at 25 s and a cold scipy import alone can take that long on a
   slow disk: run `SMOKE_TIMEOUT=200 python sync/smoke.py cso_risk_analyzer`.
 
