@@ -234,6 +234,20 @@
     "build_data.py"
    ]
   },
+  "china_soybeans": {
+   "repo": "JSA-Dashboards/china-soybean-tracker",
+   "branch": "main",
+   "prefix_modules": "cn_",
+   "exclude": [
+    "streamlit_app.py",
+    "conftest.py",
+    "tests_fixtures",
+    "ingest.py",
+    "flash_archive.py",
+    "update_tracker.py",
+    "tracker_data.json"
+   ]
+  },
   "weekly_reports": {
    "repo": "JSA-Dashboards/livestock-portal",
    "subdir": "apps/weekly_reports"

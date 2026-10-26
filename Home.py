@@ -170,6 +170,11 @@ LIVE_DASHBOARDS = [
     {"title": "Vessel Lineup", "category": "Grain Flows",
      "desc": "Export vessel lineup by region — USG, PNW, TXG — and commodity.",
      "page": "apps/vessel_lineup/app.py", "url_path": "vessel-lineup"},
+    # Mirror of china-soybean-tracker (live data read from its repo; Admin saves are GitHub commits,
+    # needs CHINA_TRACKER_GITHUB_TOKEN [+ FAS_API_KEY] in this app's Secrets).
+    {"title": "China Soybean Purchases", "category": "Grain Flows",
+     "desc": "Progress toward China's 25 MMT soybean commitment: USDA-confirmed, unknown-destination and trade-intel sales, with the flash-sale review queue in Admin.",
+     "page": "apps/china_soybeans/app.py", "url_path": "china-soybeans"},
 
     {"title": "CME Feeder Cattle Index", "category": "Livestock",
      "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location.",
