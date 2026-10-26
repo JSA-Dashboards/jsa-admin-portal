@@ -29,7 +29,9 @@ jobs:
         run: python sync/sync_apps.py apply
         env:
           # Optional: a fine-grained PAT with read access to the private source repos
-          # (crop-conditions-dashboard, cftc-cot-dashboard). Without it those are skipped.
+          # (crop-conditions-dashboard, cftc-cot-dashboard). A repo the token cannot read (or
+          # without a token at all) is SKIPPED: its mirror stays as it was and the run summary
+          # lists it. Only if every source is skipped does this step fail.
           SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
       - run: python sync/sync_apps.py check
       - name: Load every page once (code-level errors fail the run)
@@ -49,3 +51,6 @@ jobs:
             the portal redeploys itself within about a minute.
 
             New secrets an app now reads are listed by `python sync/sync_apps.py plan`.
+
+            A source that could not be cloned is skipped and its mirror left as it was: look for
+            the warnings and the "Skipped by the sync" summary on the workflow run that opened this.

@@ -13,6 +13,12 @@ the same code runs as a page inside the portal's one shared process.
 Patches (see PATCHES below) never touch upstream logic: they remove
 st.set_page_config (Home.py makes the one call allowed per run) and add a
 sys.path shim so sibling imports resolve to the app's own folder.
+
+A source that cannot be cloned (a private repo the SYNC_TOKEN has no access to, a repo that was
+renamed or deleted, a network blip) is SKIPPED, not failed: its mirror is left exactly as it was, the
+run goes on with the other apps, and the skip is announced where a human will see it (a ::warning::
+annotation and the run summary in GitHub Actions). `apply` still exits non-zero if EVERY source was
+skipped (nothing synced at all) or if anything other than a clone goes wrong.
 """
 from __future__ import annotations
 
@@ -53,17 +59,49 @@ def _url(repo: str) -> str:
             else f"https://github.com/{repo}.git")
 
 
+class FetchError(RuntimeError):
+    """A source repo could not be cloned or refreshed: no access for the token, renamed or deleted, network."""
+
+
+SKIPPED: list[tuple[str, str]] = []     # (what, why), filled during a run
+
+
 def fetch(spec: dict) -> tuple[Path, str]:
     """Shallow-clone (or refresh) the source repo; return (checkout, commit)."""
     dest = CACHE / spec["repo"].replace("/", "__")
     branch = spec["branch"]
-    if (dest / ".git").exists():
-        _git("fetch", "--depth", "1", "origin", branch, cwd=dest)
-        _git("checkout", "-q", "--force", "FETCH_HEAD", cwd=dest)
-    else:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _git("clone", "-q", "--depth", "1", "--branch", branch, _url(spec["repo"]), str(dest))
-    return dest, _git("rev-parse", "HEAD", cwd=dest)
+    try:
+        if (dest / ".git").exists():
+            _git("fetch", "--depth", "1", "origin", branch, cwd=dest)
+            _git("checkout", "-q", "--force", "FETCH_HEAD", cwd=dest)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _git("clone", "-q", "--depth", "1", "--branch", branch, _url(spec["repo"]), str(dest))
+        return dest, _git("rev-parse", "HEAD", cwd=dest)
+    except RuntimeError as e:      # _git raises RuntimeError on any non-zero git exit (its message never holds the URL)
+        raise FetchError(f"{spec['repo']}: {e}") from None
+
+
+def _skip(what: str, why) -> None:
+    """Leave `what`'s mirror exactly as it was, and say so where a human will see it."""
+    why = " ".join(str(why).split())[:220]
+    SKIPPED.append((what, why))
+    print(f"SKIPPED {what}: {why}  (mirror left unchanged)")
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::warning title=Sync skipped {what}::{why}")
+
+
+def write_step_summary() -> None:
+    """List what was skipped on the GitHub Actions run page (does nothing anywhere else)."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path or not SKIPPED:
+        return
+    lines = ["### Skipped by the sync", "", "These sources could not be cloned, so their mirrors were left as they were:", ""]
+    lines += [f"- **{what}**: {why}" for what, why in SKIPPED]
+    lines += ["", "Usually the `SYNC_TOKEN` PAT has no access to a private repo (add it to the token's repositories) "
+                  "or the repo was renamed or deleted. Until then that app stays at its last synced version."]
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
 
 
 # ── patches ─────────────────────────────────────────────────────────────────
@@ -388,6 +426,9 @@ def sync_root_files(write: bool) -> int:
         try:
             src, commit = fetch(r)
             files = _root_entry_files(src, r)
+        except FetchError as e:
+            _skip(f"root file {label}", e)
+            continue
         except Exception as e:
             failed += 1
             print(f"FAILED  root file {label}: {str(e)[:160]}")
@@ -426,7 +467,11 @@ def cmd_status(names):
 
 def cmd_plan(names):
     for n, s in specs(names).items():
-        want, commit = desired_tree(n, s)
+        try:
+            want, commit = desired_tree(n, s)
+        except FetchError as e:
+            _skip(n, e)
+            continue
         c = compare(want, current_tree(n))
         print(f"== {n}  ({s['repo']} @ {commit[:8]})")
         for k in ("added", "changed", "portal_only"):
@@ -441,7 +486,11 @@ def cmd_plan(names):
 
 def cmd_diff(names):
     for n, s in specs(names).items():
-        want, _ = desired_tree(n, s)
+        try:
+            want, _ = desired_tree(n, s)
+        except FetchError as e:
+            _skip(n, e)
+            continue
         have = current_tree(n)
         c = compare(want, have)
         for f in c["changed"]:
@@ -454,13 +503,16 @@ def cmd_diff(names):
 
 
 def cmd_apply(names):
-    failed = 0
+    failed = synced = 0
     for n, s in specs(names).items():
         if s.get("private") and not os.environ.get("SYNC_TOKEN") and os.environ.get("CI"):
-            print(f"skipped {n}: private repo and no SYNC_TOKEN in CI")
+            _skip(n, "private repo and no SYNC_TOKEN in CI")
             continue
         try:
             want, commit = desired_tree(n, s)
+        except FetchError as e:
+            _skip(n, e)
+            continue
         except Exception as e:
             failed += 1
             print(f"FAILED  {n}: {str(e)[:160]}")
@@ -486,8 +538,13 @@ def cmd_apply(names):
             "files": {k: hashlib.sha256(norm(v)).hexdigest() for k, v in want.items()},  # line-ending neutral
         }, indent=1, sort_keys=True).encode("utf-8"))
         print(f"synced {n} @ {commit[:8]} ({len(want)} files)")
+        synced += 1
     if not names:
         failed += sync_root_files(write=True)
+    if SKIPPED and not synced:      # every source was skipped: the run did nothing, which is a failure, not a quiet success
+        failed += 1
+        print("FAILED  nothing synced: every source was skipped")
+    write_step_summary()
     return failed
 
 
