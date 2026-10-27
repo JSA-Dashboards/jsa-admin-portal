@@ -94,3 +94,42 @@ def price_moves(settles: pd.DataFrame, cot_date: date, today: date) -> pd.DataFr
             else float("nan"),
         })
     return pd.DataFrame(rows)
+
+
+def continuous_front(settles: pd.DataFrame, code: str) -> pd.Series:
+    """Daily front-month settle for one product, rolling as the bar chart does: a contract is the
+    front month through its roll date (first notice day, or last trade for cash-settled products)
+    and the next contract takes over the day after. Indexed by trading date.
+
+    UNADJUSTED: at a roll the series steps from one contract to the next, so a carry or inverse
+    shows as a step. THE FRONT CONTRACT IS CHOSEN FROM THE CALENDAR, NOT FROM WHAT HAS A PRICE that
+    day: if the front contract has no settle on a date (a hole in the bank), the date is a gap, not
+    a quiet switch to the next contract's price, which would look like a spike.
+
+    `settles`: product_code, month, year, date, settle, and `expiry` for cash-settled products."""
+    d = settles[settles.product_code == code].copy()
+    if d.empty:
+        return pd.Series(dtype=float)
+    d["date"] = pd.to_datetime(d["date"]).dt.date
+    cash = code in CASH_SETTLED
+    rolls = {}
+    for (y, m), g in d.groupby(["year", "month"]):
+        y = int(y)
+        if cash:
+            ex = g["expiry"].dropna() if "expiry" in g else pd.Series(dtype=object)
+            rolls[(y, m)] = pd.to_datetime(ex.iloc[0]).date() if len(ex) else g["date"].max()
+        else:
+            rolls[(y, m)] = first_notice_day(y, m)
+    order = sorted(rolls, key=lambda k: rolls[k])
+    roll_dates = [rolls[k] for k in order]
+    px = {k: g.set_index("date")["settle"] for k, g in d.groupby(["year", "month"])}
+    out = {}
+    import bisect
+    for day in sorted(d["date"].unique()):
+        i = bisect.bisect_left(roll_dates, day)        # first contract whose roll date is on/after day
+        if i >= len(order):
+            continue
+        v = px[order[i]].get(day)
+        if v is not None:
+            out[day] = float(v)
+    return pd.Series(out, dtype=float).sort_index()

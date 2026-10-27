@@ -1,12 +1,12 @@
 {
  "branch": "main",
- "commit": "bb39d331e829e4f233fb78b3ad97d5ffac8b8888",
+ "commit": "122e4482bcc2e5e80c808b810c78ddc89e5c233e",
  "files": {
-  "app.py": "ff57c050fd62256c33627a11d7a4ca08d41b25dae027e32029c303f5401596df",
+  "app.py": "c34394d1b44390163a8cfe0f3856c1a2ac48af8b135414452aa173027ea9a2f8",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
-  "cot_client.py": "29b4d95f4d5d8c0a672b6d912e0798bfd0ba501610cbef35c20f3b50207f2a9c",
-  "cot_massive.py": "db05a7db042c5fd8bfef0c328cd2ded89598315d7a5d1ee17548a159965480a3",
-  "futures_move.py": "ffc3a7b0bd944681d8d64281d7918450b2a747368f6d19527f84053ec6b2c4da"
+  "cot_client.py": "929f19d6ee6af61e7a1a0dea63eae373cf3e85f31183386760777bcb24f5ff80",
+  "cot_massive.py": "f3a31b90f9e7e9bf83e9b95ac47c74d7ff58d72909567ec65b9039ae40a3ff93",
+  "futures_move.py": "7c3cdc5324dd817e2b45e240efd3598aa7c0c990103c315a95478032f58df860"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/cftc-cot-dashboard",

@@ -12,7 +12,8 @@ all quoted in cents/lb. They are cash-settled, so there is no first notice day: 
 front month until its last trading day.
 """
 import re
-from datetime import date
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -77,5 +78,41 @@ def livestock_settles(api_key: str, as_of: date, since: date, products=("LE", "G
             frames.append(pd.DataFrame({"product_code": p, "month": c["month"], "year": c["year"],
                                         "date": pd.to_datetime(list(s.index)), "settle": s.values,
                                         "expiry": c["expiry"]}))
+    cols = ["product_code", "month", "year", "date", "settle", "expiry"]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=cols)
+
+
+MONTH_NUM = dict(zip("FGHJKMNQUVXZ", range(1, 13)))
+LIVESTOCK_MONTHS = {"LE": "GJMQVZ", "GF": "FHJKQUVX", "HE": "GJKMNQVZ"}
+
+
+def livestock_history(product: str, api_key: str, since: date, today: date) -> pd.DataFrame:
+    """Every contract of `product` that traded since `since`, as bank-shaped rows plus `expiry`,
+    for building a continuous front-month series. Tickers are built, not looked up: the one-digit
+    year is unambiguous from 2021 on (Massive's history floor), and a contract that does not
+    exist simply returns no bars. A contract that has expired has its last settle as its expiry,
+    which is exact for these cash-settled contracts; live ones take the real date from /contracts."""
+    live = {c["ticker"]: c["expiry"] for c in nearest_contracts(product, api_key, today, n=40)}
+    # Each call costs about a second (Massive's throughput does not scale with workers), so only ask for
+    # contracts that can be the front month inside the window: from ~2 months before `since`, to ~3 after today.
+    lo, hi = since - timedelta(days=70), today + timedelta(days=100)
+    tickers = [(f"{product}{m}{str(y)[-1]}", m, y)
+               for y in range(max(since.year, 2021), today.year + 2) for m in LIVESTOCK_MONTHS[product]
+               if lo <= date(y, MONTH_NUM[m], 1) <= hi]
+
+    def one(t):
+        tk, m, y = t
+        try:
+            s = settled_history(tk, api_key, since)
+        except MassiveError:
+            return None
+        if s.empty:
+            return None
+        exp = live.get(tk) or s.index.max()
+        return pd.DataFrame({"product_code": product, "month": m, "year": y,
+                             "date": pd.to_datetime(list(s.index)), "settle": s.values, "expiry": exp})
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        frames = [f for f in ex.map(one, tickers) if f is not None]
     cols = ["product_code", "month", "year", "date", "settle", "expiry"]
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=cols)

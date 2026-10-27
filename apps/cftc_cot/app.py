@@ -225,8 +225,10 @@ def style_fig(fig: go.Figure, height=340, yaxis_title="contracts", legend=True) 
     return fig
 
 
-def net_figure(w: pd.DataFrame, col: str, color: str, as_share=False) -> go.Figure:
-    """Net over time, filled to zero and split at the zero line (green long, red short)."""
+def net_figure(w: pd.DataFrame, col: str, color: str, as_share=False, price: pd.Series | None = None,
+               price_name: str = "", price_unit: str = "") -> go.Figure:
+    """Net over time, filled to zero and split at the zero line (green long, red short).
+    `price`, if given, is drawn as a line on a second (right-hand) axis, daily, over the weekly net."""
     y = (w[col] / w["open_interest"] * 100) if as_share else w[col]
     fig = go.Figure()
     for clip, c, rgba, nm in ((dict(lower=0), COL_POS, "rgba(22,163,74,0.20)", "net long"),
@@ -238,7 +240,22 @@ def net_figure(w: pd.DataFrame, col: str, color: str, as_share=False) -> go.Figu
     fig.add_trace(go.Scatter(x=w.report_date, y=y, mode="lines", line=dict(width=1.6, color=color),
                              name="net", hoverinfo="skip"))
     fig.add_hline(y=0, line_width=1.2, line_color=DM_MUTED)
-    return style_fig(fig, 340, "% of open interest" if as_share else "contracts", legend=False)
+    has_price = price is not None and len(price) > 0
+    if has_price:
+        fig.add_trace(go.Scatter(x=list(price.index), y=price.values, yaxis="y2", mode="lines",
+                                 name=price_name, line=dict(width=1.3, color=DM_TEXT),
+                                 hovertemplate="%{x|%b %d, %Y}<br>price %{y:,.2f}<extra></extra>"))
+    style_fig(fig, 380 if has_price else 340, "% of open interest" if as_share else "contracts",
+              legend=has_price)
+    if has_price:
+        fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, zeroline=False,
+                                      linecolor=DM_BORDER, tickfont=dict(color=DM_MUTED, size=11),
+                                      title=dict(text=f"price ({price_unit})", font=dict(color=DM_MUTED, size=11))))
+        # the legend would repeat the green/red split, so keep only the two lines that matter
+        for tr in fig.data:
+            if tr.name in ("net long", "net short"):
+                tr.showlegend = False
+    return fig
 
 
 def load_disagg_or_stop(rt: str) -> pd.DataFrame:
@@ -467,12 +484,44 @@ def tab_detail():
     with l:
         lb = st.segmented_control("Window", list(LOOKBACKS), default="3Y", key="det_lb",
                                   label_visibility="collapsed") or "3Y"
+    code = cc.PRICE_PRODUCT.get(s)
     with r:
         share = st.toggle("Show as a share of open interest", key="det_share",
                           help="Open interest changes a lot over time, so a contract count is not "
                                "comparable across the full history. The share is.")
+        show_price = st.toggle("Overlay front-month futures price", value=True, key="det_price",
+                               disabled=code is None,
+                               help="Daily settle of the front-month contract, on the right-hand axis. "
+                                    "Rolls to the next contract after first notice day (last trade day for "
+                                    "livestock).")
     w = trim(g, lb)
-    st.plotly_chart(net_figure(w, "mm_net", color, share), width="stretch", key="det_net")
+    price, price_note = None, ""
+    if code is None:
+        price_note = f"No futures price source is wired for {label(s)} yet."
+    elif show_price:
+        try:
+            since = (w.report_date.min() - pd.Timedelta(days=45)).date().isoformat()
+            hist = cc.load_price_history(code, since, datetime.now(cc.CT).date().isoformat())
+            if hist.empty:
+                price_note = (" Livestock prices need a Massive API key, which is not configured here."
+                              if code in ("LE", "GF", "HE") else " No futures prices were found.")
+            else:
+                price = fm.continuous_front(hist, code)
+                price = price[price.index >= w.report_date.min().date()]
+                if len(price) and (price.index.min() - w.report_date.min().date()).days > 21:
+                    price_note = (f" Futures prices for {label(s)} only start {price.index.min():%b %Y}; "
+                                  "earlier history is not stored.")
+        except Exception as e:  # noqa: BLE001 -- the net chart must still draw
+            price_note = f" Futures prices could not be loaded ({e})."
+    st.plotly_chart(net_figure(w, "mm_net", color, share, price,
+                               f"{label(s)} front-month settle", fm.MARKETS[code][1] if code else ""),
+                    width="stretch", key="det_net")
+    if price is not None and len(price):
+        st.caption("Price is the daily front-month settle, shown on the right-hand axis. It rolls to the next "
+                   "contract after first notice day (last trade day for livestock) and is not adjusted, so a roll "
+                   "shows as a step between contracts." + price_note)
+    elif price_note:
+        st.caption(price_note.strip())
 
     sec("The net taken apart — gross long, gross short and spreading")
     fig = go.Figure()

@@ -196,6 +196,46 @@ def load_livestock_settles(since: str, as_of: str) -> pd.DataFrame:
     return cot_massive.livestock_settles(key, pd.Timestamp(as_of).date(), pd.Timestamp(since).date())
 
 
+# COT series name -> futures product code. Everything on the Market detail tab that has a settle source.
+PRICE_PRODUCT = {"CORN": "ZC", "SOYBEANS": "ZS", "SOYBEAN_MEAL": "ZM", "SOYBEAN_OIL": "ZL",
+                 "WHEAT_SRW": "ZW", "WHEAT_HRW": "KE", "WHEAT_HRS": "HRS",
+                 "LIVE_CATTLE": "LE", "FEEDER_CATTLE": "GF", "LEAN_HOGS": "HE"}
+
+
+def load_price_history(code: str, since: str, as_of: str) -> pd.DataFrame:
+    """Livestock history is a few dozen Massive calls and only changes daily, so it is cached for 3 hours;
+    the grain bank is one query and is cached for 30 minutes."""
+    if code in ("LE", "GF", "HE"):
+        return _livestock_history(code, since, as_of)
+    return _bank_history(code, since, as_of)
+
+
+@st.cache_data(ttl=10800, show_spinner="Loading livestock futures history (about 30 seconds the first time)…")
+def _livestock_history(code: str, since: str, as_of: str) -> pd.DataFrame:
+    key = _secret("MASSIVE_API_KEY")
+    if not key:
+        return pd.DataFrame()
+    import cot_massive
+    return cot_massive.livestock_history(code, key, pd.Timestamp(since).date(), pd.Timestamp(as_of).date())
+
+
+@st.cache_data(ttl=1800, show_spinner="Loading futures price history…")
+def _bank_history(code: str, since: str, as_of: str) -> pd.DataFrame:
+    """Per-contract daily settles for one product from `since` on (bank-shaped, plus `expiry` for
+    livestock). Grains: the Cost of Carry settlement bank (2021-10 on) and, for corn and soybeans,
+    the older archive (2006/2007 on, identical where they overlap; the bank wins). Livestock: Massive,
+    empty when no key is configured."""
+    bank = _query("SELECT product_code, month, year, date, settle FROM JSA.COST_OF_CARRY.FUTURES_SETTLEMENTS "
+                  "WHERE product_code = %s AND date >= %s", [code, since])
+    if code in ("ZC", "ZS"):
+        old = _query("SELECT product_code, month, year, date, price AS settle "
+                     "FROM JSA.COST_OF_CARRY.FUTURES_HISTORY_ARCHIVE WHERE product_code = %s AND date >= %s",
+                     [code, since])
+        bank = pd.concat([bank, old], ignore_index=True)
+    bank["date"] = pd.to_datetime(bank["date"])
+    return bank.drop_duplicates(["product_code", "month", "year", "date"], keep="first")
+
+
 def clear_cache() -> None:
     """Drop every cached query so the next render re-reads Snowflake."""
     _disagg.clear()
@@ -203,3 +243,5 @@ def clear_cache() -> None:
     _cit.clear()
     load_settlements.clear()
     load_livestock_settles.clear()
+    _livestock_history.clear()
+    _bank_history.clear()
