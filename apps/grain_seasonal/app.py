@@ -1941,43 +1941,64 @@ def load_brazil_histories(code: str, api_key: str, as_of: date,
     return histories
 
 
+BRAZIL_REAL = "Brazilian real"
+BRAZIL_VIEWS = ["All"] + [m.name for m in brazil_board.MARKETS.values()] + [BRAZIL_REAL]
+
+
 def render_brazil(api_key: str, as_of: date):
     st.markdown("##### Brazil")
     st.caption(
         "CBOT front-month futures valued in Brazilian reais: the Chicago price times USD/BRL, which "
-        "is the price a Brazilian farmer sees. Weekly closes since January 2025, to the last "
-        "completed session."
+        "is the price a Brazilian farmer sees; and the real against the dollar on its own. Weekly "
+        "closes since January 2025, to the last completed session."
     )
+    view = st.segmented_control("Show", BRAZIL_VIEWS, default="All", key="brazil_view") or "All"
+    markets = [m for m in brazil_board.MARKETS.values() if view in ("All", m.name)]
     iso = as_of.isoformat()
+    bank: dict = {}
     with st.spinner("Loading the Brazil charts…"):
-        bank = load_settlement_bank(iso)
         try:
             usd_brl = load_usd_brl(api_key, iso)
         except MassiveApiError as e:
             st.error(f"Couldn't load USD/BRL: {e}")
             return
         weekly = {}
-        for code in brazil_board.MARKETS:
-            histories = load_brazil_histories(code, api_key, as_of, bank)
-            front = brazil_board.front_month(code, histories, brazil_board.START, as_of)
-            weekly[code] = brazil_board.weekly_points(front, usd_brl, before=as_of)
+        if markets:                      # the real on its own needs no futures history
+            bank = load_settlement_bank(iso)
+            for market in markets:
+                histories = load_brazil_histories(market.code, api_key, as_of, bank)
+                front = brazil_board.front_month(market.code, histories, brazil_board.START, as_of)
+                weekly[market.code] = brazil_board.weekly_points(front, usd_brl, before=as_of)
+
+    # (key, card spec, table for Copy / CSV, file name) for each chart to show, in order.
+    cards = []
+    for market in markets:
+        summary = brazil_board.summarize(weekly[market.code], market)
+        if summary is None:
+            st.warning(f"{market.name}: not enough settlements and exchange rates on file to draw the chart.")
+            continue
+        cards.append((market.code, brazil_card.commodity_spec(weekly[market.code], summary),
+                      brazil_board.export_frame(weekly[market.code]),
+                      f"jsa_brazil_{market.crop}_reais_{summary.latest_date:%Y%m%d}"))
+    if view in ("All", BRAZIL_REAL):
+        rates = brazil_board.weekly_rates(usd_brl, before=as_of)
+        rate_summary = brazil_board.summarize_rates(rates)
+        if rate_summary is None:
+            st.warning("Brazilian real: not enough exchange rates on file to draw the chart.")
+        else:
+            cards.append(("FX", brazil_card.rate_spec(rates, rate_summary), brazil_board.rate_export_frame(rates),
+                          f"jsa_brazil_real_usdbrl_{rate_summary.latest_date:%Y%m%d}"))
 
     logo = watermark_uri(asset(BRAZIL_LOGO_FILE))
     mark = watermark_path()
     mark_uri = watermark_uri(mark) if mark else None
-    for code, market in brazil_board.MARKETS.items():
-        summary = brazil_board.summarize(weekly[code], market)
-        if summary is None:
-            st.warning(f"{market.name}: not enough settlements and exchange rates on file to draw the chart.")
-            continue
-        card_html, hover = brazil_card.build_card(
-            weekly[code], summary, logo_uri=logo, watermark_uri=mark_uri,
-            source=brazil_board.source_note(market), year=as_of.year)
-        brazil_card.show_card(card_html, hover, key=code)
-        filename = f"jsa_brazil_{market.crop}_reais_{summary.latest_date:%Y%m%d}"
-        export_row(brazil_board.export_frame(weekly[code]), filename, key=f"brazil_{code}",
-                   extra=lambda: brazil_card.png_button(card_html, filename, code))
-    st.caption(history_source_note(bank))
+    for key, spec, frame, filename in cards:
+        card_html, hover = brazil_card.build_card(spec, logo_uri=logo, watermark_uri=mark_uri, year=as_of.year)
+        brazil_card.show_card(card_html, hover, key=key)
+        export_row(frame, filename, key=f"brazil_{key}",
+                   extra=lambda: brazil_card.png_button(card_html, filename, key))
+    if markets:
+        st.caption(history_source_note(bank))
 
 
 def refresh_prices():

@@ -1,14 +1,14 @@
 {
  "branch": "master",
- "commit": "80f8b819d8c49276125b6cb27a9c44a914f1c1c7",
+ "commit": "fc313f99ebca4e395557997aff276de43a4d2d35",
  "files": {
   "ai_chat.py": "ce709346974c7de8b116e5b7cf707cbd56f5043c9fb1cda5cd36e09b8e171957",
-  "app.py": "403d9d95384036d465bebe2257353a58024e683b625264cb476d67f6dccc4533",
+  "app.py": "53cc2114c9da86743b91014de5e99a7086ad75599ed7fa71c4a8f80a3c7dec25",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/logo-wordmark.png": "0526e74e473fdead254dfe4c72315b4c62faa93bfcc6f90f8654828efbddb705",
-  "brazil_board.py": "1f346f29bc75aae618824ddafc3bac6942f03b52eea0bdfc2a6d0661a5132393",
-  "brazil_card.py": "3b3e2d9c366b9712593057e96f772faa276375f8448036ab981991468c982b7e",
+  "brazil_board.py": "35a9b751b55c3164547e8512bbcc393b3bcdcf8cc2a5ce4ad1d33d447efd47db",
+  "brazil_card.py": "ed9b594b9a73ff9b244bd087927df0a5aea345f5069ced73c566f0898c23cdb2",
   "data/High Low Model.xlsx": "8e7996dc969d8e0495da9ed667bb68c109e9503ace5616c7227916f147dd3c73",
   "hl_model.py": "6c99f5f5b7d70167a1d18e829ce77e6c8443762312f7450981ac30c21e50b873",
   "legacy_futures_history.csv": "b9edcebe4aa92440a60925794563f50362c2c3558ccda0cbbf23108ef299b55e",

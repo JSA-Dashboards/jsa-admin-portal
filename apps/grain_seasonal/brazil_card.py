@@ -1,6 +1,10 @@
-"""The Brazil section's graphic: a JSA Research card with four figures, a weekly line and a note.
+"""The Brazil section's graphics: a JSA Research card with four figures, a weekly line and a note.
 
-The card is one self-contained block of HTML with an inline SVG chart, drawn here rather than by
+Three cards share one layout: corn and soybeans valued in reais, and the real against the dollar
+on its own. Each is described by a CardSpec (the words, the four figures, the weekly values and
+how to print them) and drawn the same way.
+
+A card is one self-contained block of HTML with an inline SVG chart, drawn here rather than by
 Plotly, for two reasons. What is on screen is then exactly what the PNG button saves, because
 both come from the same string; and the PNG is made in the browser (html2canvas, loaded from
 jsDelivr on the first click) so nothing is rendered on the server, where Cloud's kaleido is
@@ -15,6 +19,8 @@ from __future__ import annotations
 
 import html
 import math
+from dataclasses import dataclass
+from typing import Callable
 
 import pandas as pd
 import streamlit as st
@@ -33,7 +39,8 @@ UP, DOWN, GRID, AXIS_TEXT = "#2F6B34", "#A32A2A", "#E6E8EC", "#606573"
 SANS = "Gill Sans MT, Gill Sans, Calibri, Segoe UI, Helvetica, Arial, sans-serif"
 SERIF = "Georgia, Times New Roman, serif"
 
-NICE_STEPS = (10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000)
+COMMODITY_STEPS = (10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000)   # centavos
+RATE_STEPS = (0.01, 0.02, 0.025, 0.05, 0.1, 0.2, 0.25, 0.5, 1.0)                 # reais per dollar
 
 DISCLAIMER = (
     "Futures and options trading involves substantial risk of loss and is not suitable for all "
@@ -49,20 +56,41 @@ HTML2CANVAS_ESM = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm"
 
 # ── The card ─────────────────────────────────────────────────────────────────
 
-def nice_axis(low: float, high: float) -> tuple[float, float, int]:
+@dataclass(frozen=True)
+class CardSpec:
+    kicker: str                                    # "JSA Research · Soybeans · Brazil"
+    title: str
+    subtitle: str
+    tiles: tuple[tuple[str, str, str, str], ...]   # (label, figure, note under it, tone)
+    dates: tuple                                   # one Timestamp per weekly point
+    values: tuple[float, ...]
+    axis_title: str
+    steps: tuple[float, ...]                       # round tick spacings the axis may use
+    tick: Callable[[float], str]                   # how an axis value prints
+    end_label: Callable[[float], str]              # how the newest value prints beside its dot
+    readout: tuple[tuple[str, ...], ...]           # per point, the hover lines (the first is the date)
+    why: str
+    source: str
+
+
+def nice_axis(low: float, high: float, steps: tuple[float, ...]) -> tuple[float, float, float]:
     """(axis bottom, axis top, tick step) with a tenth of the range spare above and below,
     snapped to round numbers so the gridlines land on them."""
-    span = max(high - low, 1.0)
+    span = max(high - low, steps[0])
     lo, hi = low - 0.1 * span, high + 0.1 * span
-    step = next((s for s in NICE_STEPS if (hi - lo) / s <= 7.5), NICE_STEPS[-1])
+    for step in steps:
+        bottom, top = math.floor(lo / step) * step, math.ceil(hi / step) * step
+        if round((top - bottom) / step) <= 8:      # at most nine gridlines
+            return bottom, top, step
+    step = steps[-1]
     return math.floor(lo / step) * step, math.ceil(hi / step) * step, step
 
 
-def _chart_svg(weekly: pd.DataFrame, summary: bb.Summary) -> tuple[str, list[dict]]:
-    """The line chart as an SVG string, plus each week's position for the hover readout."""
-    values = [float(v) for v in weekly["centavos"]]
+def _chart_svg(spec: CardSpec) -> tuple[str, list[dict]]:
+    """The line chart as an SVG string, plus each week's position and readout for the hover."""
+    values = list(spec.values)
     n = len(values)
-    axis_lo, axis_hi, step = nice_axis(min(values), max(values))
+    axis_lo, axis_hi, step = nice_axis(min(values), max(values), spec.steps)
     plot_w = SVG_W - PLOT_LEFT - PLOT_RIGHT
     plot_h = SVG_H - PLOT_TOP - PLOT_BOTTOM
 
@@ -74,17 +102,16 @@ def _chart_svg(weekly: pd.DataFrame, summary: bb.Summary) -> tuple[str, list[dic
 
     parts = [f'<svg class="jb-svg" xmlns="http://www.w3.org/2000/svg" width="{SVG_W}" height="{SVG_H}" '
              f'viewBox="0 0 {SVG_W} {SVG_H}">']
-    tick = axis_lo
-    while tick <= axis_hi + 1e-9:
+    for i in range(round((axis_hi - axis_lo) / step) + 1):
+        tick = axis_lo + i * step
         y = y_of(tick)
         parts.append(f'<line x1="{PLOT_LEFT}" x2="{SVG_W - PLOT_RIGHT}" y1="{y:.1f}" y2="{y:.1f}" '
                      f'stroke="{GRID}" stroke-width="1.3"/>')
         parts.append(f'<text x="{PLOT_LEFT - 12}" y="{y + 5:.1f}" text-anchor="end" font-family="{SANS}" '
-                     f'font-size="16" fill="{AXIS_TEXT}">{tick:,.0f}</text>')
-        tick += step
+                     f'font-size="16" fill="{AXIS_TEXT}">{spec.tick(tick)}</text>')
     parts.append(f'<text transform="rotate(-90)" x="{-(PLOT_TOP + plot_h / 2):.1f}" y="22" '
                  f'text-anchor="middle" font-family="{SANS}" font-size="15" fill="{AXIS_TEXT}">'
-                 f'Reais/bu (centavos)</text>')
+                 f'{html.escape(spec.axis_title)}</text>')
 
     every = max(1, math.ceil(n / X_LABELS))
     for i in range(0, n, every):
@@ -92,7 +119,7 @@ def _chart_svg(weekly: pd.DataFrame, summary: bb.Summary) -> tuple[str, list[dic
         anchor = "end" if x > SVG_W - 46 else "middle"
         parts.append(f'<text x="{x:.1f}" y="{SVG_H - PLOT_BOTTOM + 30}" text-anchor="{anchor}" '
                      f'font-family="{SANS}" font-size="16" fill="{AXIS_TEXT}">'
-                     f'{bb.fmt_date(weekly.index[i].date())}</text>')
+                     f'{bb.fmt_date(spec.dates[i].date())}</text>')
 
     points = " ".join(f"{x_of(i):.1f},{y_of(v):.1f}" for i, v in enumerate(values))
     parts.append(f'<polyline points="{points}" fill="none" stroke="{NAVY}" stroke-width="3.4" '
@@ -101,20 +128,14 @@ def _chart_svg(weekly: pd.DataFrame, summary: bb.Summary) -> tuple[str, list[dic
     parts.append(f'<circle cx="{end_x:.1f}" cy="{end_y:.1f}" r="7" fill="{NAVY}"/>')
     label_y = end_y - 16 if end_y - 16 > PLOT_TOP + 16 else end_y + 30
     parts.append(f'<text x="{end_x - 14:.1f}" y="{label_y:.1f}" text-anchor="end" font-family="{SERIF}" '
-                 f'font-weight="700" font-size="24" fill="{NAVY}">{bb.fmt_centavos(values[-1])}</text>')
+                 f'font-weight="700" font-size="24" fill="{NAVY}">{spec.end_label(values[-1])}</text>')
     parts.append(f'<rect class="jb-capture" x="{PLOT_LEFT}" y="{PLOT_TOP}" width="{plot_w}" '
                  f'height="{plot_h}" fill="#ffffff" fill-opacity="0"/>')
     parts.append("</svg>")
 
-    hover = []
-    for i, (day, row) in enumerate(weekly.iterrows()):
-        hover.append({
-            "x": round(x_of(i), 1), "y": round(y_of(values[i]), 1),
-            "date": f"{day:%a} {bb.fmt_date(day.date())}",
-            "reais": bb.fmt_reais(values[i]),
-            "centavos": bb.fmt_centavos(values[i]),
-            "cbot": f"{row['cbot']:,.2f}", "fx": f"{row['usdbrl']:.4f}", "contract": row["contract"],
-        })
+    hover = [{"x": round(x_of(i), 1), "y": round(y_of(v), 1),
+              "lines": [html.escape(line) for line in spec.readout[i]]}
+             for i, v in enumerate(values)]
     return "".join(parts), hover
 
 
@@ -130,26 +151,11 @@ def _tone(value: float | None) -> str:
     return "up" if value > 0 else "down"
 
 
-def build_card(weekly: pd.DataFrame, summary: bb.Summary, *, logo_uri: str,
-               watermark_uri: str | None, source: str, year: int) -> tuple[str, list[dict]]:
-    """(card HTML, hover points) for one market."""
-    m = summary.market
-    svg, hover = _chart_svg(weekly, summary)
-
-    if summary.year_ago_pct is None:
-        year_tile = _tile("vs. year ago", "n/a", "less than a year of data")
-    else:
-        year_tile = _tile("vs. year ago", bb.fmt_pct(summary.year_ago_pct),
-                          f"from {bb.fmt_centavos(summary.year_ago)} on {bb.fmt_date(summary.year_ago_date)}",
-                          _tone(summary.year_ago_pct))
-    tiles = "".join([
-        _tile(f"Latest ({bb.fmt_date(summary.latest_date)})", bb.fmt_centavos(summary.latest),
-              bb.fmt_reais(summary.latest)),
-        _tile("Week change", f"{summary.week_change:+,}", bb.week_tile_note(summary),
-              _tone(summary.week_change)),
-        _tile("Period high", bb.fmt_centavos(summary.high), bb.fmt_date(summary.high_date)),
-        year_tile,
-    ])
+def build_card(spec: CardSpec, *, logo_uri: str, watermark_uri: str | None,
+               year: int) -> tuple[str, list[dict]]:
+    """(card HTML, hover points) for one spec."""
+    svg, hover = _chart_svg(spec)
+    tiles = "".join(_tile(*tile) for tile in spec.tiles)
 
     watermark = ""
     if watermark_uri:
@@ -162,20 +168,77 @@ def build_card(weekly: pd.DataFrame, summary: bb.Summary, *, logo_uri: str,
     card = (
         f'<div class="jb-card">'
         f'<div class="jb-head"><div>'
-        f'<div class="jb-kicker">JSA Research · {html.escape(m.name)} · Brazil</div>'
-        f'<div class="jb-title">Spot CBOT {html.escape(m.name)} Valued in Brazilian Reais</div>'
-        f'<div class="jb-subtitle">{html.escape(bb.subtitle(summary))}</div>'
+        f'<div class="jb-kicker">{html.escape(spec.kicker)}</div>'
+        f'<div class="jb-title">{html.escape(spec.title)}</div>'
+        f'<div class="jb-subtitle">{html.escape(spec.subtitle)}</div>'
         f'</div><img class="jb-logo" src="{logo_uri}" alt="John Stewart and Associates"></div>'
         f'<div class="jb-rule"></div>'
         f'<div class="jb-tiles">{tiles}</div>'
         f'<div class="jb-chart">{watermark}{svg}</div>'
-        f'<div class="jb-why"><b>Why it matters:</b> {html.escape(bb.why_it_matters(summary))}'
-        f'<br>Source: {html.escape(source)}</div>'
+        f'<div class="jb-why"><b>Why it matters:</b> {html.escape(spec.why)}'
+        f'<br>Source: {html.escape(spec.source)}</div>'
         f'<div class="jb-disc"><b>IMPORTANT DISCLAIMER:</b> {html.escape(DISCLAIMER)} '
         f'© {year} John Stewart and Associates.</div>'
         f'</div>'
     )
     return card, hover
+
+
+def _year_tile(pct: float | None, year_ago: float | None, when, fmt: Callable[[float], str]):
+    if pct is None:
+        return ("vs. year ago", "n/a", "less than a year of data", "")
+    return ("vs. year ago", bb.fmt_pct(pct), f"from {fmt(year_ago)} on {bb.fmt_date(when)}",
+            _tone(round(pct, 3)))      # a move that prints as 0.0% gets no colour
+
+
+def commodity_spec(weekly: pd.DataFrame, summary: bb.Summary) -> CardSpec:
+    """Corn or soybeans valued in reais."""
+    m = summary.market
+    tiles = (
+        (f"Latest ({bb.fmt_date(summary.latest_date)})", bb.fmt_centavos(summary.latest),
+         bb.fmt_reais(summary.latest), ""),
+        ("Week change", f"{summary.week_change:+,}", bb.week_tile_note(summary), _tone(summary.week_change)),
+        ("Period high", bb.fmt_centavos(summary.high), bb.fmt_date(summary.high_date), ""),
+        _year_tile(summary.year_ago_pct, summary.year_ago, summary.year_ago_date, bb.fmt_centavos),
+    )
+    readout = tuple(
+        (f"{day:%a} {bb.fmt_date(day.date())}",
+         f"{bb.fmt_reais(row['centavos'])} · {bb.fmt_centavos(row['centavos'])} centavos",
+         f"CBOT {row['cbot']:,.2f}¢ ({row['contract']}) × {row['usdbrl']:.4f} BRL/USD")
+        for day, row in weekly.iterrows())
+    return CardSpec(
+        kicker=f"JSA Research · {m.name} · Brazil",
+        title=f"Spot CBOT {m.name} Valued in Brazilian Reais",
+        subtitle=bb.subtitle(summary), tiles=tiles,
+        dates=tuple(weekly.index), values=tuple(float(v) for v in weekly["centavos"]),
+        axis_title="Reais/bu (centavos)", steps=COMMODITY_STEPS,
+        tick=lambda v: f"{v:,.0f}", end_label=bb.fmt_centavos, readout=readout,
+        why=bb.why_it_matters(summary), source=bb.source_note(m))
+
+
+def rate_spec(weekly: pd.DataFrame, summary: bb.RateSummary) -> CardSpec:
+    """The real against the dollar, on its own."""
+    tiles = (
+        (f"Latest ({bb.fmt_date(summary.latest_date)})", bb.fmt_rate(summary.latest),
+         "reais per U.S. dollar", ""),
+        ("Week change", f"{summary.week_change:+.4f}", bb.rate_week_note(summary),
+         _tone(round(summary.week_change, 4))),
+        ("Period high", bb.fmt_rate(summary.high), f"{bb.fmt_date(summary.high_date)} · weakest real", ""),
+        _year_tile(summary.year_ago_pct, summary.year_ago, summary.year_ago_date, bb.fmt_rate),
+    )
+    readout = tuple(
+        (f"{day:%a} {bb.fmt_date(day.date())}",
+         f"US$1 = R${row['usdbrl']:.4f}",
+         f"R$1 = US${1 / row['usdbrl']:.4f}")
+        for day, row in weekly.iterrows())
+    return CardSpec(
+        kicker="JSA Research · Currency · Brazil",
+        title="Brazilian Real vs. the U.S. Dollar",
+        subtitle=bb.rate_subtitle(summary), tiles=tiles,
+        dates=tuple(weekly.index), values=tuple(float(v) for v in weekly["usdbrl"]),
+        axis_title="Reais per U.S. dollar", steps=RATE_STEPS,
+        tick=lambda v: f"{v:.2f}", end_label=bb.fmt_rate, readout=readout,
+        why=bb.rate_why_it_matters(summary), source=bb.rate_source_note())
 
 
 # ── Streamlit components ─────────────────────────────────────────────────────
@@ -282,8 +345,7 @@ export default function (component) {
       guide.setAttribute("y1", 14); guide.setAttribute("y2", data.svgH - 48);
       dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y);
       guide.style.display = ""; dot.style.display = "";
-      tip.innerHTML = "<b>" + p.date + "</b><br>" + p.reais + " &middot; " + p.centavos + " centavos<br>CBOT "
-        + p.cbot + "&cent; (" + p.contract + ") &times; " + p.fx + " BRL/USD";
+      tip.innerHTML = p.lines.map((line, i) => (i === 0 ? "<b>" + line + "</b>" : line)).join("<br>");
       tip.style.display = "block";
       const wide = tip.offsetWidth;
       const left = p.x + 16 + wide > data.svgW ? p.x - 16 - wide : p.x + 16;

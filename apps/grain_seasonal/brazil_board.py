@@ -164,6 +164,31 @@ def weekly_points(front: pd.DataFrame, fx: pd.Series, first_day: date = START,
     return frame.sort_index()
 
 
+def weekly_rates(fx: pd.Series, first_day: date = START, before: date | None = None) -> pd.DataFrame:
+    """The dollar rate on its own, weekly, counting back from its newest close (column `usdbrl`).
+    Same spacing and cut-off as weekly_points, for the chart of the real by itself."""
+    rates = trend_board.clean(fx)
+    if before is not None:
+        rates = rates[rates.index < pd.Timestamp(before)]
+    if not len(rates):
+        return pd.DataFrame(columns=["usdbrl"])
+    rows = []
+    day = rates.index[-1]
+    while day.date() >= first_day:
+        pos = _position_on_or_before(rates.index, day)
+        if pos is not None:
+            rows.append((day, float(rates.iloc[pos])))
+        day -= pd.Timedelta(days=STEP_DAYS)
+    return pd.DataFrame(rows, columns=["date", "usdbrl"]).set_index("date").sort_index()
+
+
+def _year_ago_position(index: pd.DatetimeIndex) -> int | None:
+    """Position of the weekly point a year (52 weeks) before the newest, if there is one."""
+    target = index[-1] - pd.Timedelta(days=YEAR_DAYS)
+    hit = index.get_indexer([target], method="nearest", tolerance=pd.Timedelta(days=3))[0]
+    return int(hit) if hit >= 0 and index[hit] < index[-1] else None
+
+
 # ── Reading it ───────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -198,11 +223,8 @@ def summarize(weekly: pd.DataFrame, market: Market) -> Summary | None:
     high_at, low_at = weekly["centavos"].idxmax(), weekly["centavos"].idxmin()
     high, low = float(weekly["centavos"].max()), float(weekly["centavos"].min())
     span = high - low
-    year = None
-    target = weekly.index[-1] - pd.Timedelta(days=YEAR_DAYS)
-    hit = weekly.index.get_indexer([target], method="nearest", tolerance=pd.Timedelta(days=3))[0]
-    if hit >= 0 and weekly.index[hit] < weekly.index[-1]:
-        year = weekly.iloc[hit]
+    hit = _year_ago_position(weekly.index)
+    year = None if hit is None else weekly.iloc[hit]
     return Summary(
         market=market,
         first_date=weekly.index[0].date(),
@@ -237,6 +259,8 @@ def fmt_date(day: date) -> str:
 
 
 def fmt_pct(fraction: float, signed: bool = True) -> str:
+    if round(fraction * 100, 1) == 0:          # no "-0.0%"
+        return "0.0%"
     return f"{fraction:+.1%}" if signed else f"{abs(fraction):.1%}"
 
 
@@ -361,3 +385,110 @@ def export_frame(weekly: pd.DataFrame) -> pd.DataFrame:
     out["usd_brl"] = out["usd_brl"].round(4)
     out["reais_centavos_per_bu"] = out["reais_centavos_per_bu"].round(1)
     return out.reset_index()
+
+
+# ── The real on its own ──────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class RateSummary:
+    """The same four readings for the dollar rate: reais per U.S. dollar, so a higher number is a
+    weaker real."""
+    first_date: date
+    latest_date: date
+    latest: float
+    prev: float | None
+    week_change: float | None
+    week_pct: float | None
+    high: float              # the weakest the real got in the period
+    high_date: date
+    low: float               # and the strongest
+    low_date: date
+    position: float          # where the latest sits between the low (0) and the high (1)
+    year_ago: float | None
+    year_ago_date: date | None
+    year_ago_pct: float | None
+    points: int
+
+
+def summarize_rates(weekly: pd.DataFrame) -> RateSummary | None:
+    """None if fewer than two weeks."""
+    if len(weekly) < 2:
+        return None
+    series = weekly["usdbrl"]
+    last, prev = float(series.iloc[-1]), float(series.iloc[-2])
+    high, low = float(series.max()), float(series.min())
+    hit = _year_ago_position(weekly.index)
+    return RateSummary(
+        first_date=weekly.index[0].date(),
+        latest_date=weekly.index[-1].date(),
+        latest=last, prev=prev, week_change=last - prev, week_pct=last / prev - 1,
+        high=high, high_date=series.idxmax().date(), low=low, low_date=series.idxmin().date(),
+        position=0.5 if high <= low else (last - low) / (high - low),
+        year_ago=None if hit is None else float(series.iloc[hit]),
+        year_ago_date=None if hit is None else weekly.index[hit].date(),
+        year_ago_pct=None if hit is None else last / float(series.iloc[hit]) - 1,
+        points=len(weekly),
+    )
+
+
+def fmt_rate(value: float) -> str:
+    return f"{value:.4f}"
+
+
+def rate_subtitle(summary: RateSummary) -> str:
+    return (f"USD/BRL — reais per U.S. dollar (higher means a weaker real), weekly, "
+            f"{summary.first_date:%b %Y} to {summary.latest_date:%b} {summary.latest_date.day}, "
+            f"{summary.latest_date.year}")
+
+
+def rate_week_note(summary: RateSummary) -> str:
+    """The line under the week-change figure: "+6.7%, a weaker real"."""
+    if summary.week_pct is None:
+        return ""
+    pct = fmt_pct(summary.week_pct)
+    if abs(summary.week_pct) < LITTLE_CHANGED:
+        return f"{pct}, little changed"
+    return f"{pct}, a {'weaker' if summary.week_pct > 0 else 'stronger'} real"
+
+
+def rate_why_it_matters(summary: RateSummary) -> str:
+    """Where the real sits in its range and what that does to dollar-priced grain in reais,
+    then the latest week's move and its effect with the futures held still."""
+    since = f"{summary.first_date:%B %Y}"
+    if summary.position >= TOP_OF_RANGE:
+        first = (f"The real is near its weakest level since {since}, which lifts what dollar-priced "
+                 "soybeans and corn are worth in reais and encourages Brazilian farmers to sell and "
+                 "to expand acreage.")
+    elif summary.position <= BOTTOM_OF_RANGE:
+        first = (f"The real is near its strongest level since {since}, which trims what dollar-priced "
+                 "soybeans and corn are worth in reais and discourages Brazilian farmers from selling "
+                 "and from adding acreage.")
+    else:
+        first = (f"The real is in the middle of its range since {since}, so the currency is neither "
+                 "adding much to nor taking much from what dollar-priced soybeans and corn are worth "
+                 "in reais.")
+    move = summary.week_pct
+    if move is None:
+        return first
+    rates = f"USD/BRL {fmt_rate(summary.prev)} to {fmt_rate(summary.latest)}"
+    if abs(move) < LITTLE_CHANGED:
+        second = f"The real was little changed in the latest week ({rates})."
+    else:
+        word, effect = ("weakened", "lift") if move > 0 else ("strengthened", "cut")
+        second = (f"In the latest week the real {word} about {fmt_pct(move, signed=False)} against the "
+                  f"dollar ({rates}), which with CBOT prices unchanged would {effect} soybeans and corn "
+                  f"in reais by the same {fmt_pct(move, signed=False)}.")
+    return f"{first} {second}"
+
+
+def rate_source_note() -> str:
+    return "USD/BRL daily closes via Massive; JSA calculations."
+
+
+def rate_export_frame(weekly: pd.DataFrame) -> pd.DataFrame:
+    """The weekly rates as a plain table for CSV / copy."""
+    out = weekly.copy()
+    out.index = [d.date() for d in out.index]
+    out.index.name = "week"
+    out["usdbrl"] = out["usdbrl"].round(4)
+    return out.rename(columns={"usdbrl": "usd_brl"}).reset_index()
