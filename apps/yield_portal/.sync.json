@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "f5163922def2349e269598885bb725eb63dfe4d9",
+ "commit": "06dea87fe86a9f5980c335e7bf5155637120f54c",
  "files": {
   "app.py": "0e30258f7a77515a11cc7be68e1746a864f960e8d59d297f268a11ec66bd92c1",
   "app_pages/add.py": "9606b5593e572b5375307e19e485fc14d2026a482a6d0ee9c8ad951575719be3",
@@ -8,7 +8,7 @@
   "app_pages/field_issues.py": "f72dbb7422652617261b742e4a46ae5a4ac0386f51223ef53cb76492d1558d5b",
   "app_pages/import_pdf.py": "0fffe5008507b24d20c0621aff6ae2d569bbc0410430bbcf2c8eb048b6016630",
   "app_pages/normal.py": "19233c3e30b17c21074c9acd9ac4ba0a9eca2d1f41c01a5bf4d776b70e75a7a0",
-  "app_pages/report_text.py": "83d9eee8d01d7b54af70fb24182956b8331bcacb877f23f4fa455d88cea6688d",
+  "app_pages/report_text.py": "44d4ab06efc86a3a20fc0e635c8c8188b23ca45f985edd416d37d30e67f65f9f",
   "app_pages/review.py": "170304c1ec3aca2ade79a23fd282553d28326e843cd86e1e831fd9b9895736bc",
   "app_pages/strip_trials.py": "956fc31444427d89816c277b76e05fb254d71671be7c7a1a170dc226804e6522",
   "app_pages/trials.py": "16e4f45854950de6f8c9137b728560af127289eb1de970e3d1b3e5d69b414f6c",
@@ -34,10 +34,11 @@
   "yp_places.py": "c8e0ad16edb3146ed44c1a1b7291c77dee6a23a439d49c644426ea132cdf7972",
   "yp_plots.py": "dfd96923f66a2925b83a807d4a1eb154b4994c673da37a95db13f25b2ef5b190",
   "yp_reimport_pdfs.py": "9d813ecb33fc92c6b2191ad6ed341504b22b809b4a0e3e451f717a7bafba43a5",
-  "yp_report_text.py": "211486c2811f3f3e47fa36c005f3e2d16db42390ead8d7772d668f4c65cec4d8",
+  "yp_report_text.py": "ae589e545771b899ccdb87742d71439aebccfd9324d0d52861280bcdeee95ed7",
+  "yp_summary.py": "8372f4299c1fd15521b4c81cb066c8e3bf9db8d4c6d4768d361781f9f9383ea5",
   "yp_trials.py": "4b9598a09bdda48b5b6a3f20ec9aef3897de0ef2dddab5a5315fcbf9f7ea04c5",
   "yp_variety_watch.py": "14f9b6d754aa00cdb6f91e2c6b09db426cb7fa88c0cdda680f410b33a5f55028",
-  "yp_weekly_email.py": "9ebf2415350fd73fa03bf3c5ca0b84caab15849352d3bcefa28811a7e2d5ca8e"
+  "yp_weekly_email.py": "730019833ad5659dd28d1134aaca3b5c371346e7e719901863e057bcd0502f8c"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/yield-portal",
