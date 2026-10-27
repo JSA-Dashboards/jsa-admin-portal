@@ -209,7 +209,7 @@ COMMODITIES = {
                      stages=["PLANTED", "EMERGED", "BLOOMING", "SETTING PODS",
                              "DROPPING LEAVES", "HARVESTED"]),
     "Winter wheat": dict(desc="WHEAT", cls="WINTER", area_cls="WINTER",
-                         stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"], fall=("PLANTED", "EMERGED")),
+                         stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
     "Spring wheat": dict(desc="WHEAT", cls="SPRING, (EXCL", area_cls="SPRING, (EXCL DURUM)",
                          stages=["PLANTED", "EMERGED", "HEADED", "HARVESTED"]),
     "Sorghum": dict(desc="SORGHUM", cls=None, area_cls="ALL CLASSES",
@@ -299,6 +299,9 @@ def load_progress(desc: str) -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     df = df[df["unit_desc"].str.startswith("PCT ", na=False)].copy()
+    # NASS also publishes silage progress (state-level PCT HARVESTED for corn, which finishes
+    # early: Indiana read 100% in late Oct vs 61% for grain). Keep only grain / all-use rows.
+    df = df[df["util_practice_desc"].isin(["GRAIN", "ALL UTILIZATION PRACTICES"])].copy()
     df["value"] = pd.to_numeric(df["Value"].astype(str).str.replace(",", ""), errors="coerce")
     df = df.dropna(subset=["value"])
     df["week"] = pd.to_numeric(df["reference_period_desc"].str.extract(r"WEEK #(\d+)")[0],
@@ -309,7 +312,9 @@ def load_progress(desc: str) -> pd.DataFrame:
     df["stage"] = df["unit_desc"].str[4:]
     df["state"] = np.where(df["state_name"] == "US TOTAL", "US", df["state_alpha"])
     df["week_ending"] = pd.to_datetime(df["week_ending"], errors="coerce")
-    return df[["year", "week", "week_ending", "state", "class_desc", "stage", "value"]] \
+    df["load_time"] = pd.to_datetime(df["load_time"], errors="coerce")
+    # the history pull and the current-season pull overlap; keep the most recently loaded row
+    return df.sort_values("load_time")[["year", "week", "week_ending", "state", "class_desc", "stage", "value"]] \
         .drop_duplicates(["year", "week", "state", "class_desc", "stage"], keep="last")
 
 
@@ -356,13 +361,22 @@ def acre_basis(meta: dict, stage: str, target_year: int):
 
 
 def select(df: pd.DataFrame, meta: dict, stage: str) -> pd.DataFrame:
-    """One commodity/class/stage with a crop-year column (fall-planted winter wheat -> next year)."""
+    """One commodity/class/stage. NASS `year` is already the crop year, including for fall-planted
+    winter wheat (fall 2026 planting is filed under 2027), so no shifting is needed."""
     d = df[df["stage"] == stage]
     if meta["cls"]:
         d = d[d["class_desc"].str.startswith(meta["cls"], na=False)] if meta["cls"] != "WINTER" \
             else d[d["class_desc"] == "WINTER"]
     d = d.copy()
-    d["crop_year"] = d["year"] + (1 if stage in meta.get("fall", ()) else 0)
+    d["crop_year"] = d["year"]
+    # NASS files a state's leftover late-season rows from the prior crop under the same year
+    # (e.g. ND corn 96% harvested, then the new season restarting at 0%). A fall of 30+ points
+    # is a restart, not a revision: keep only the final run so old tails never join the new line.
+    d = d.sort_values(["state", "crop_year", "week_ending"])
+    grp = [d["state"], d["crop_year"]]
+    restart = (d.groupby(grp)["value"].diff() <= -30).astype(int)
+    run = restart.groupby(grp).cumsum()
+    d = d[run == run.groupby(grp).transform("max")]
     return d
 
 
