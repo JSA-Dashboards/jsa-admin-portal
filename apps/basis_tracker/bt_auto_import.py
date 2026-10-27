@@ -83,6 +83,8 @@ from bt_andersons_scraper import fetch_andersons_bids
 from parsers.andersons_parser import parse_andersons_location
 from bt_bunge_scraper import fetch_bunge_bids
 from parsers.bunge_parser import parse_bunge_location
+from bt_ncga_scraper import fetch_ncga_bids
+from parsers.ncga_parser import parse_ncga_location
 from bt_scoular_scraper import fetch_scoular_bids
 from parsers.scoular_parser import parse_scoular_location
 from bt_agp_scraper import fetch_agp_bids
@@ -124,6 +126,7 @@ from bt_vistacomm_scraper import fetch_vistacomm
 from bt_dtn_playwright_scraper import fetch_dtn_playwright
 from bt_dtn_http_scraper import fetch_dtn_http
 from bt_dtn_content_scraper import fetch_dtn_content
+from bt_stonex_scraper import fetch_stonex
 from bt_fse_scraper import fetch_fse
 from bt_cpi_scraper import fetch_cpi
 from bt_bushel_powered_scraper import fetch_bushel_powered
@@ -132,6 +135,8 @@ from bt_hec_scraper import fetch_hec
 from bt_georges_scraper import fetch_georges
 from bt_agricharts_md_scraper import fetch_agricharts_md
 from bt_agrex_scraper import fetch_agrex_bids
+from bt_hfgrain_scraper import fetch_hfgrain_bids
+from parsers.hfgrain_parser import parse_hfgrain_location
 from bt_wpe_scraper import fetch_wpe_bids
 from parsers.wpe_parser import parse_wpe_location
 from bt_adm_names import adm_state_from_name
@@ -523,7 +528,8 @@ def run_agricharts_tenants() -> int:
         snaps, metas = by_prov[req.provider]
         snaps.append(req)
         metas.append({"location": req.location, "state": loc.get("state"),
-                      "facility_type": loc.get("facility_type")})
+                      "facility_type": loc.get("facility_type"),
+                      "lat": loc.get("lat"), "lon": loc.get("lon")})     # pins only for tenants that opt in (Alcivia); None keeps what is stored
         total += len(req.rows)
         log.info("  ✓  %-12s %-24s %d row(s)", req.provider, req.location, len(req.rows))
     for prov, (snaps, metas) in by_prov.items():
@@ -666,6 +672,42 @@ def run_dtn_content() -> int:
         rows += len(r.rows)
         log.info("  ✓  %-30s %d row(s)", f"{r.provider} · {r.location}", len(r.rows))
     log.info("DTN-content done: %d location(s)  |  %d row(s)  (bulk)", len(reqs), rows)
+    return rows
+
+
+def run_stonex() -> int:
+    """Scrape the StoneX Stonehedge bids component that River Valley Cooperative embeds on its website. Only the co-op's own elevators are filed (its board also quotes
+    direct-ship destination points - ADM, Cargill, CHS ... - which are not those buyers' own bids). Locations carry the pins and states from the co-op's own map."""
+    log.info("=" * 60)
+    log.info("StoneX scrape starting…")
+    log.info("=" * 60)
+    try:
+        reqs, metas = fetch_stonex()
+    except Exception as exc:
+        log.error("StoneX scrape failed: %s", exc)
+        return 0
+    if not reqs:
+        log.warning("StoneX scrape returned no data.")
+        return 0
+    try:
+        upsert_snapshots([r.model_dump() for r in reqs])
+    except Exception as exc:
+        log.error("StoneX bulk snapshot upsert failed: %s", exc)
+    by_prov: dict[str, list] = {}
+    for m in metas:
+        by_prov.setdefault(m["provider"], []).append(
+            {"location": m["location"], "state": m.get("state"), "facility_type": m.get("facility_type"),
+             "lat": m.get("lat"), "lon": m.get("lon")})
+    for prov, items in by_prov.items():
+        try:
+            upsert_location_metas(prov, items)
+        except Exception as exc:
+            log.error("StoneX meta upsert failed for %s: %s", prov, exc)
+    rows = 0
+    for r in reqs:
+        rows += len(r.rows)
+        log.info("  ✓  %-30s %d row(s)", f"{r.provider} · {r.location}", len(r.rows))
+    log.info("StoneX done: %d location(s)  |  %d row(s)  (bulk)", len(reqs), rows)
     return rows
 
 
@@ -1418,6 +1460,116 @@ def run_bunge() -> int:
     return total_rows
 
 
+def run_ncga() -> int:
+    """
+    File Bunge Altona and Cargill West Fargo canola bids from the Northern Canola Growers Association's cash table (ncga_scraper.py) — the two
+    buyers with no usable feed of their own (the other three on that page are scraped directly). The rows go in under NCGA's own 'Last Updated'
+    date, so a page that has not been updated repeats an existing snapshot and adds nothing. Returns the number of bid rows read.
+    """
+    log.info("=" * 60)
+    log.info("NCGA (Northern Canola) scrape starting…")
+    log.info("=" * 60)
+    try:
+        locs = fetch_ncga_bids()
+    except Exception as exc:
+        log.error("NCGA scrape failed: %s", exc)
+        return 0
+    if not locs:
+        log.warning("NCGA returned no bids.")
+        return 0
+
+    _snaps, _metas, total_rows, errors = [], {}, 0, 0
+    for loc in locs:
+        try:
+            snap_req = parse_ncga_location(loc)
+            if snap_req is None:
+                continue
+            _snaps.append(snap_req)
+            _metas.setdefault(snap_req.provider, []).append({"location": snap_req.location, **(loc.get("meta") or {})})
+            total_rows += len(snap_req.rows)
+            log.info("  ✓  %-8s %-24s  as of %s  %d row(s)", snap_req.provider, snap_req.location, snap_req.timestamp[:10], len(snap_req.rows))
+        except Exception as exc:
+            errors += 1
+            log.error("  ✗  NCGA %s: %s", loc.get("location", "?"), exc)
+
+    try:
+        upsert_snapshots([s.model_dump() for s in _snaps])
+    except Exception as exc:
+        log.error("NCGA bulk snapshot upsert failed: %s", exc)
+    for _prov, _items in _metas.items():
+        try:
+            upsert_location_metas(_prov, _items)
+        except Exception as exc:
+            log.error("NCGA %s location-meta failed: %s", _prov, exc)
+
+    log.info("-" * 60)
+    log.info("NCGA done: %d location(s)  |  %d row(s)  |  %d error(s)  (bulk upsert)", len(_snaps), total_rows, errors)
+    return total_rows
+
+
+def run_hfgrain() -> int:
+    """
+    File the four buyers wanted from Hollander & Feuerhaken's daily bid PDF (hfgrain_scraper.py): Ingredion, South Bend Ethanol and Lakeside Grain as locations of their own, and
+    Incobrasa FOLDED INTO the existing INCO / Gilman, IL series (inco_bids.fold_hf: H&F's Oct-Dec replace the same months of the day, the later months stay as the last Inco sheet had
+    them). Every row is checked against the sheet's own settlement panel before it is kept, and the rows go in under the SHEET's date, so a page that has not been updated yet repeats
+    an existing snapshot and adds nothing. Skips cleanly where pdfplumber is missing (Cloud). Returns the number of bid rows read.
+    """
+    log.info("=" * 60)
+    log.info("HFGrain (Hollander & Feuerhaken bid PDF) scrape starting…")
+    log.info("=" * 60)
+    try:
+        locs = fetch_hfgrain_bids()
+    except Exception as exc:
+        log.error("HFGrain scrape failed: %s", exc)
+        return 0
+    if not locs:
+        log.warning("HFGrain returned no bids.")
+        return 0
+
+    folds = [l for l in locs if l.get("merge") == "inco"]      # Incobrasa: folded into the existing INCO / Gilman, IL series (inco_bids.fold_hf), not filed beside it
+    locs = [l for l in locs if l.get("merge") != "inco"]
+    _snaps, _metas, total_rows, errors = [], {}, 0, 0
+    for loc in locs:
+        try:
+            snap_req = parse_hfgrain_location(loc)
+            if snap_req is None:
+                continue
+            _snaps.append(snap_req)
+            _metas.setdefault(snap_req.provider, []).append({"location": snap_req.location, **(loc.get("meta") or {})})
+            total_rows += len(snap_req.rows)
+            log.info("  ✓  %-20s %-28s  sheet of %s  %d row(s)", snap_req.provider, snap_req.location, snap_req.timestamp[:10], len(snap_req.rows))
+        except Exception as exc:
+            errors += 1
+            log.error("  ✗  HFGrain %s: %s", loc.get("location", "?"), exc)
+
+    try:
+        upsert_snapshots([s.model_dump() for s in _snaps])
+    except Exception as exc:
+        log.error("HFGrain bulk snapshot upsert failed: %s", exc)
+    for _prov, _items in _metas.items():
+        try:
+            upsert_location_metas(_prov, _items)
+        except Exception as exc:
+            log.error("HFGrain %s location-meta failed: %s", _prov, exc)
+
+    for loc in folds:
+        try:
+            import bt_inco_bids as inco_bids
+            res = inco_bids.fold_hf(loc)
+            total_rows += len(loc.get("bids") or [])
+            if res is False:
+                errors += 1
+            log.info("  ✓  %-20s %-28s  sheet of %s  %d row(s) %s", "INCO", "Gilman, IL", loc.get("sheet_date"), len(loc.get("bids") or []),
+                     {True: "folded into the Inco series and read back", None: "already in the Inco series", False: "NOT written (see above)"}[res])
+        except Exception as exc:
+            errors += 1
+            log.error("  ✗  HFGrain INCO fold: %s", exc)
+
+    log.info("-" * 60)
+    log.info("HFGrain done: %d location(s)  |  %d row(s)  |  %d error(s)  (bulk upsert)", len(_snaps) + len(folds), total_rows, errors)
+    return total_rows
+
+
 def run_scoular() -> int:
     """
     Scrape Scoular (Bushel-powered cashbidssingle pages) for all ~66 US locations
@@ -1935,6 +2087,11 @@ def run_futures_capture() -> int:
 # Per-run scraper health, populated by _run_guarded and read for the alert email.
 # Each entry: {"name", "rows", "status"} where status ∈ ok|empty|abandoned|crashed.
 _HEALTH: list[dict] = []
+# What pull_health needs to re-run a scraper: name -> (fn, budget) for every one _run_guarded has run, the thread it ran on (an
+# abandoned one may still be going), and how many scrapers the last run() was asked to run (a run with many --no-* flags is not judged).
+_REGISTRY: dict[str, tuple] = {}
+_THREADS: dict[str, threading.Thread] = {}
+_RUN_INFO: dict[str, int] = {"enabled": 0, "total": 0}
 
 
 _LOCK_FH = None
@@ -1993,6 +2150,7 @@ def _run_guarded(fn, name, budget=240):
     network read (before any DB write), abandoning the thread is safe.
     Records the outcome in _HEALTH and returns the row count (0 on timeout/crash)."""
     box = {"n": 0, "err": None}
+    _REGISTRY[name] = (fn, budget)
 
     def _target():
         try:
@@ -2002,6 +2160,7 @@ def _run_guarded(fn, name, budget=240):
             log.error("%s scrape crashed: %s", name, exc)
 
     t = threading.Thread(target=_target, name=f"scrape-{name}", daemon=True)
+    _THREADS[name] = t
     t.start()
     t.join(budget)
     if t.is_alive():
@@ -2048,6 +2207,26 @@ def send_scraper_alert(problems: list[dict], to_addr: str | None = None) -> None
         log.warning("Scraper alert email failed: %s", exc)
 
 
+def _scraper_alive(name: str) -> bool:
+    t = _THREADS.get(name)
+    return bool(t and t.is_alive())
+
+
+def _pull_health_check(email: bool) -> tuple[int, bool]:
+    """After a full run: check what was STORED (not what was parsed), retry what failed once, tell the operator — pull_health.py.
+    Returns (exit code, handled). handled=False means pull_health did not run (switched off, a partial run, or it raised), so the
+    caller falls back to send_scraper_alert as before. Exit code 2 = the run stored under half a normal day, or the database
+    could not be read to check; 9/29 and 9/30 ran rc=0 with nothing stored."""
+    try:
+        import bt_pull_health as pull_health
+        res = pull_health.post_run(_HEALTH, registry=_REGISTRY, run_guarded=_run_guarded, alive=_scraper_alive,
+                                   run_info=_RUN_INFO, email=email)
+    except Exception as exc:                           # noqa: BLE001 — a broken check must never break the run
+        log.warning("Pull-health check failed (scrape unaffected): %s", exc)
+        return 0, False
+    return res.exit_code, not res.skipped
+
+
 def run(
     run_poet_scrape: bool = True,
     run_chs_scrape: bool = True,
@@ -2060,6 +2239,7 @@ def run(
     run_gpre_scrape: bool = True,
     run_andersons_scrape: bool = True,
     run_bunge_scrape: bool = True,
+    run_ncga_scrape: bool = True,
     run_scoular_scrape: bool = True,
     run_agp_scrape: bool = True,
     run_ldc_scrape: bool = True,
@@ -2085,6 +2265,7 @@ def run(
     run_vistacomm_scrape: bool = True,
     run_dtn_scrape: bool = True,
     run_dtn_content_scrape: bool = True,
+    run_stonex_scrape: bool = True,
     run_fse_scrape: bool = True,
     run_cpi_scrape: bool = True,
     run_bushel_powered_scrape: bool = True,
@@ -2093,6 +2274,7 @@ def run(
     run_georges_scrape: bool = True,
     run_agmd_scrape: bool = True,
     run_agrex_scrape: bool = True,
+    run_hfgrain_scrape: bool = True,
     run_pruning: bool = True,
 ) -> int:
     """
@@ -2102,6 +2284,9 @@ def run(
     """
     init_db()
     _HEALTH.clear()
+    _args = dict(locals())
+    _flags = [v for k, v in _args.items() if k.startswith("run_") and k.endswith("_scrape")]
+    _RUN_INFO.update(enabled=sum(1 for v in _flags if v), total=len(_flags))
     total = 0
     # Each scraper runs under a wall-clock budget (POET needs longer for its
     # Playwright browser) so one hung provider can't block the daily email.
@@ -2127,6 +2312,8 @@ def run(
         total += _run_guarded(run_andersons, "Andersons")
     if run_bunge_scrape:
         total += _run_guarded(run_bunge, "Bunge")
+    if run_ncga_scrape:                                 # after Cargill and Bunge: it adds Altona and Cargill West Fargo's canola basis
+        total += _run_guarded(run_ncga, "NCGA", 180)
     if run_scoular_scrape:
         total += _run_guarded(run_scoular, "Scoular")
     if run_agp_scrape:
@@ -2178,6 +2365,8 @@ def run(
         total += _run_guarded(run_dtn_playwright, "DTN", 480)
     if run_dtn_content_scrape:
         total += _run_guarded(run_dtn_content, "DTN-Content", 120)
+    if run_stonex_scrape:
+        total += _run_guarded(run_stonex, "StoneX", 120)
     if run_fse_scrape:
         total += _run_guarded(run_fse, "FSE", 120)
     if run_cpi_scrape:
@@ -2194,6 +2383,8 @@ def run(
         total += _run_guarded(run_agricharts_md, "AgriCharts-MD")
     if run_agrex_scrape:
         total += _run_guarded(run_agrex, "Agrex")
+    if run_hfgrain_scrape:                              # the sheet is posted ~15:40 CT: a late one is picked up by the next run (deploy/run_hfgrain.sh)
+        total += _run_guarded(run_hfgrain, "HFGrain", 120)
 
     # Capture today's futures curve (for per-day basis anchoring as history builds)
     run_futures_capture()
@@ -2328,6 +2519,15 @@ if __name__ == "__main__":
         help="Run Bunge scrape only — skip everything else",
     )
 
+    ncga_group = parser.add_mutually_exclusive_group()
+    ncga_group.add_argument(
+        "--no-ncga", dest="no_ncga", action="store_true",
+        help="Skip the Northern Canola Growers Association table (Bunge Altona + Cargill West Fargo canola)",
+    )
+    ncga_group.add_argument(
+        "--ncga-only", dest="ncga_only", action="store_true",
+        help="Run the Northern Canola Growers Association table only (Bunge Altona + Cargill West Fargo canola)",
+    )
     scoular_group = parser.add_mutually_exclusive_group()
     scoular_group.add_argument(
         "--no-scoular", dest="no_scoular", action="store_true",
@@ -2454,6 +2654,9 @@ if __name__ == "__main__":
     dtnc_group = parser.add_mutually_exclusive_group()
     dtnc_group.add_argument("--no-dtn-content", dest="no_dtn_content", action="store_true", help="Skip DTN content-services plants (NFP, Central United) scrape")
     dtnc_group.add_argument("--dtn-content-only", dest="dtn_content_only", action="store_true", help="Run DTN content-services plants (NFP, Central United) scrape only")
+    stonex_group = parser.add_mutually_exclusive_group()
+    stonex_group.add_argument("--no-stonex", dest="no_stonex", action="store_true", help="Skip the StoneX Stonehedge bids component (River Valley Coop) scrape")
+    stonex_group.add_argument("--stonex-only", dest="stonex_only", action="store_true", help="Run the StoneX Stonehedge bids component (River Valley Coop) scrape only")
     fse_group = parser.add_mutually_exclusive_group()
     fse_group.add_argument("--no-fse", dest="no_fse", action="store_true", help="Skip Farm Service Elevator (Willmar/Swanville MN) scrape")
     fse_group.add_argument("--fse-only", dest="fse_only", action="store_true", help="Run Farm Service Elevator scrape only")
@@ -2478,6 +2681,10 @@ if __name__ == "__main__":
     agrex_group = parser.add_mutually_exclusive_group()
     agrex_group.add_argument("--no-agrex", dest="no_agrex", action="store_true", help="Skip Agrex cash-bids terminal (Agrex, WNY Energy, Oracle Pork) scrape")
     agrex_group.add_argument("--agrex-only", dest="agrex_only", action="store_true", help="Run Agrex cash-bids terminal scrape only")
+
+    hfgrain_group = parser.add_mutually_exclusive_group()
+    hfgrain_group.add_argument("--no-hfgrain", dest="no_hfgrain", action="store_true", help="Skip the Hollander & Feuerhaken (hfgrain.com) daily bid PDF scrape")
+    hfgrain_group.add_argument("--hfgrain-only", dest="hfgrain_only", action="store_true", help="Run the Hollander & Feuerhaken bid PDF scrape only")
 
     prune_group = parser.add_mutually_exclusive_group()
     prune_group.add_argument(
@@ -2558,6 +2765,9 @@ if __name__ == "__main__":
     elif args.bunge_only:
         init_db()
         run_bunge()
+    elif args.ncga_only:
+        init_db()
+        run_ncga()
     elif args.scoular_only:
         init_db()
         run_scoular()
@@ -2634,6 +2844,9 @@ if __name__ == "__main__":
     elif args.dtn_content_only:
         init_db()
         run_dtn_content()
+    elif args.stonex_only:
+        init_db()
+        run_stonex()
     elif args.fse_only:
         init_db()
         run_fse()
@@ -2658,6 +2871,9 @@ if __name__ == "__main__":
     elif args.agrex_only:
         init_db()
         run_agrex()
+    elif args.hfgrain_only:
+        init_db()
+        run_hfgrain()
     else:
         # The emailing run WAITS its turn (the Changes email must still go out even
         # if it loses the wake-up race); the --no-email refresh just steps aside.
@@ -2681,6 +2897,7 @@ if __name__ == "__main__":
             run_gpre_scrape=not args.no_gpre,
             run_andersons_scrape=not args.no_andersons,
             run_bunge_scrape=not args.no_bunge,
+            run_ncga_scrape=not args.no_ncga,
             run_scoular_scrape=not args.no_scoular,
             run_agp_scrape=not args.no_agp,
             run_ldc_scrape=not args.no_ldc,
@@ -2706,6 +2923,7 @@ if __name__ == "__main__":
             run_vistacomm_scrape=not args.no_vistacomm,
             run_dtn_scrape=not args.no_dtn,
             run_dtn_content_scrape=not args.no_dtn_content,
+            run_stonex_scrape=not args.no_stonex,
             run_fse_scrape=not args.no_fse,
             run_cpi_scrape=not args.no_cpi,
             run_bushel_powered_scrape=not args.no_bushel_powered,
@@ -2714,8 +2932,13 @@ if __name__ == "__main__":
             run_georges_scrape=not args.no_georges,
             run_agmd_scrape=not args.no_agmd,
             run_agrex_scrape=not args.no_agrex,
+            run_hfgrain_scrape=not args.no_hfgrain,
             run_pruning=not args.no_prune,
         )
+
+        # Verify what was stored, retry what failed, alert the operator — BEFORE the Changes email, so a retry that fills a
+        # hole lands in it. The alert goes out from here; the old scraper alert below is the fallback when this did not run.
+        _health_rc, _health_done = _pull_health_check(email=not args.no_email)
 
         # ── Email the daily Changes report via Outlook (full scheduled run) ──
         if not args.no_email:
@@ -2740,5 +2963,10 @@ if __name__ == "__main__":
             # the *-only manual runs don't double-alert.
             problems = [h for h in _HEALTH
                         if h["status"] in ("abandoned", "crashed", "empty")]
-            if problems:
+            if problems and not _health_done:
                 send_scraper_alert(problems)
+
+        # Surface a pull that stored (almost) nothing to cron — cron-alert mails on a non-zero exit, healthchecks sees a failure.
+        if _health_rc:
+            log.error("Exiting %d: the pull stored under half a normal day, or could not be verified (pull_health).", _health_rc)
+            sys.exit(_health_rc)

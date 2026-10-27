@@ -20,6 +20,11 @@ import threading
 import time
 from pathlib import Path
 from bt_models import Snapshot, SnapshotRow
+try:                                           # canola is stored x100 (C$/t) and read back as quoted; see grain_units.py
+    from bt_grain_units import scale_basis as _scale_basis
+except Exception:                              # noqa: BLE001 — a packaged copy without the helper (e.g. a Snowpark proc): rows come back as stored
+    def _scale_basis(grain, basis_cents):
+        return basis_cents
 
 DB_PATH = Path(__file__).parent / "basis_tracker.db"
 
@@ -1179,7 +1184,7 @@ def get_snapshots(provider: str, location: str) -> list[Snapshot]:
             grain         = row["grain"],
             deliveryMonth = row["delivery_month"],
             futuresSymbol = row["futures_symbol"],
-            basisCents    = row["basis_cents"],
+            basisCents    = _scale_basis(row["grain"], row["basis_cents"]),
             isSpot        = bool(row["is_spot"]),
             spotGrain     = row["spot_grain"],
         ))
@@ -1434,7 +1439,7 @@ def get_map_data() -> list[dict]:
                     "grain":          canon,
                     "delivery_month": row["delivery_month"] or "",
                     "futures_symbol": row["futures_symbol"] or "",
-                    "basis":          row["basis_cents"],
+                    "basis":          _scale_basis(row["grain"], row["basis_cents"]),     # canola: the quoted C$/t, not x100
                 })
 
     return list(locs.values())
@@ -1674,7 +1679,26 @@ def save_rail_fob(date: str, source: str, rows: list) -> int:
     return len(rows)
 
 
-def get_rail_fob(source: str, date: str) -> list:
+# Pure-estimate archive weeks (bid_raw = 'est' — UP Allen Station before its actual bids begin; rail_corridors.EST_FLAG) are HIDDEN from every reader of the rail archive: the
+# board, the seasonal charts, the Spread tab, Net Carry and Return to Carry. Kolten 2026-10-22: "side bar that still but hide data that is pure estimate at least for now" — whether
+# to keep, exclude or delete them is still open, so the rows stay in rail_fob. RAIL_SHOW_ESTIMATES=1 (or include_estimates=True on a call) brings them back. The flag is repeated
+# here rather than imported from rail_corridors because this module is copied on its own into the portals.
+RAIL_EST_FLAG = "est"
+
+
+def rail_estimates_shown(include_estimates=None) -> bool:
+    """Whether the estimated archive weeks are returned: the call's include_estimates if given, else RAIL_SHOW_ESTIMATES (1/true/yes/on). Default: hidden."""
+    if include_estimates is not None:
+        return bool(include_estimates)
+    return os.getenv("RAIL_SHOW_ESTIMATES", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _rail_est_clause(include_estimates=None) -> str:
+    """The WHERE addition that leaves estimated weeks out ('' when they are shown). `NULL <> 'est'` is NULL, so the IS NULL half is what keeps an ordinary bid."""
+    return "" if rail_estimates_shown(include_estimates) else f" AND (bid_raw IS NULL OR bid_raw <> '{RAIL_EST_FLAG}')"
+
+
+def get_rail_fob(source: str, date: str, include_estimates=None) -> list:
     """Return all rail FOB cells for a source + date, ordered by market then period_order."""
     conn = get_conn()
     c    = conn.cursor()
@@ -1682,27 +1706,27 @@ def get_rail_fob(source: str, date: str) -> list:
     try:
         c.execute(f"""SELECT market, rail, commodity, period, period_order, futures,
                              bid, offer, bid_raw, offer_raw
-                      FROM rail_fob WHERE source={ph} AND date={ph}
+                      FROM rail_fob WHERE source={ph} AND date={ph}{_rail_est_clause(include_estimates)}
                       ORDER BY market, period_order, period""", (source, date))
         return [dict(r) for r in c.fetchall()]
     finally:
         conn.close()
 
 
-def get_rail_fob_dates(source: str) -> list:
-    """Distinct posting dates for a source, most recent first."""
+def get_rail_fob_dates(source: str, include_estimates=None) -> list:
+    """Distinct posting dates for a source, most recent first (a date holding only estimated weeks is not a posting date while they are hidden)."""
     conn = get_conn()
     c    = conn.cursor()
     ph   = _ph()
     try:
-        c.execute(f"SELECT DISTINCT date FROM rail_fob WHERE source={ph} ORDER BY date DESC",
+        c.execute(f"SELECT DISTINCT date FROM rail_fob WHERE source={ph}{_rail_est_clause(include_estimates)} ORDER BY date DESC",
                   (source,))
         return [r["date"] for r in c.fetchall()]
     finally:
         conn.close()
 
 
-def get_rail_fob_all(source: str) -> list:
+def get_rail_fob_all(source: str, include_estimates=None) -> list:
     """All rail FOB cells for a source across every date (for trend/change columns)."""
     conn = get_conn()
     c    = conn.cursor()
@@ -1710,7 +1734,7 @@ def get_rail_fob_all(source: str) -> list:
     try:
         c.execute(f"""SELECT date, market, rail, commodity, period, period_order, futures,
                              bid, offer, bid_raw, offer_raw
-                      FROM rail_fob WHERE source={ph}
+                      FROM rail_fob WHERE source={ph}{_rail_est_clause(include_estimates)}
                       ORDER BY market, period_order, period, date""", (source,))
         return [dict(r) for r in c.fetchall()]
     finally:
@@ -1771,7 +1795,7 @@ def get_snapshots_bulk(pairs: list[tuple[str, str]], since_days: int = 400) -> d
             grain         = row["grain"],
             deliveryMonth = row["delivery_month"],
             futuresSymbol = row["futures_symbol"],
-            basisCents    = row["basis_cents"],
+            basisCents    = _scale_basis(row["grain"], row["basis_cents"]),
             isSpot        = bool(row["is_spot"]),
             spotGrain     = row["spot_grain"],
         ))
@@ -1828,9 +1852,52 @@ def get_snapshots_asof(pairs: list[tuple[str, str]], asof_iso: str, max_age_days
                 location=row["location"], source=row["source"], rows=[])
         snap.rows.append(SnapshotRow(
             id=row["row_id"], grain=row["grain"], deliveryMonth=row["delivery_month"],
-            futuresSymbol=row["futures_symbol"], basisCents=row["basis_cents"],
+            futuresSymbol=row["futures_symbol"], basisCents=_scale_basis(row["grain"], row["basis_cents"]),
             isSpot=bool(row["is_spot"]), spotGrain=row["spot_grain"]))
     return result
+
+
+def get_raw_grains(canonical: str) -> list[str]:
+    """The raw grain strings the grain map files under a canonical grain ('Corn' -> ['Corn', 'Yellow Corn']); [canonical] when the map has none (or no table)."""
+    conn = get_conn()
+    c = conn.cursor()
+    ph = _ph()
+    try:
+        c.execute(f"SELECT raw_grain FROM grain_map WHERE canonical_grain = {ph} AND is_active = 1", (canonical,))
+        got = [r["raw_grain"] for r in c.fetchall()]
+    except Exception:
+        got = []
+    finally:
+        conn.close()
+    return got or [canonical]
+
+
+def get_basis_window(grains: list[str], start_iso: str, end_iso: str, spot: bool | None = None, symbol: str | None = None) -> list[dict]:
+    """The basis rows of every snapshot between two ISO timestamps (start included, end not) for the raw `grains`: [{provider, location, timestamp, is_spot, delivery_month, futures_symbol,
+    basis_cents}] - the baselines of the Basis Maps tab (a location's nearby basis a week, a month or a year ago, or in the same days of earlier years). spot=True / False keeps only the spot /
+    forward rows, symbol one futures contract; both cut the rows read, which for a recent window is a day's bids for every location."""
+    if not grains:
+        return []
+    conn = get_conn()
+    c = conn.cursor()
+    ph = _ph()
+    try:
+        sql = f"""SELECT s.provider AS provider, s.location AS location, s.timestamp AS timestamp, r.grain AS grain, r.is_spot AS is_spot,
+                         r.delivery_month AS delivery_month, r.futures_symbol AS futures_symbol, r.basis_cents AS basis_cents
+                  FROM snapshots s JOIN snapshot_rows r ON r.snapshot_id = s.id
+                  WHERE r.grain IN ({",".join(ph for _ in grains)}) AND s.timestamp >= {ph} AND s.timestamp < {ph}"""
+        params = [*grains, start_iso, end_iso]
+        if spot is not None:
+            sql += f" AND r.is_spot = {ph}"
+            params.append(1 if spot else 0)
+        if symbol:
+            sql += f" AND r.futures_symbol = {ph}"
+            params.append(symbol)
+        c.execute(sql, params)
+        return [{"provider": r["provider"], "location": r["location"], "timestamp": str(r["timestamp"]), "is_spot": bool(r["is_spot"]), "delivery_month": r["delivery_month"],
+                 "futures_symbol": r["futures_symbol"], "basis_cents": _scale_basis(r["grain"], r["basis_cents"])} for r in c.fetchall()]
+    finally:
+        conn.close()
 
 
 def get_forward_locations(asof_iso: str, days: int = 10) -> list[dict]:

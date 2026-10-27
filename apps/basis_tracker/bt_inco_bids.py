@@ -22,6 +22,11 @@ Inco does NOT post daily. They send a sheet and it HOLDS until the next one (Kol
 
           Sheet lines are  LABEL, FUTURES, BASIS  (basis in cents; "flat" = 0).
 
+          A committed sheet is then EMAILED (inco_report: the table with its changes and the
+          seasonal chart, To soyprocessing@jpsi.com) once the write has been read back. --no-email
+          skips it; --to ADDR sends a test copy to ADDR only; a failed send leaves the sheet
+          saved, says so, and exits 3 (resend: python inco_report.py --send --date D).
+
 Rules this encodes (each one bit us once):
   * Labels MUST carry a month name. delivery_period.canonical() reads the first month
     name in a label and otherwise falls back to the futures contract's month, so a bare
@@ -262,6 +267,92 @@ def apply_plan(plan: dict) -> bool:
     return True
 
 
+# ── Hollander & Feuerhaken's Incobrasa block ──────────────────────────────────
+# hfgrain.com's daily bid PDF (hfgrain_scraper.py) quotes Incobrasa for the next three months — a SUBSET of the six-month sheet Inco sends. Kolten 2026-10-23: "Add inco into the
+# existing one we have." So that block does not become a second series: it is folded into THIS one, on the sheet's own date. The months H&F quotes are H&F's (all windows of that month),
+# every other month stays as the last Inco sheet had it, and the day is marked so the stale-sheet guard keeps measuring the last sheet Kolten pasted (not the H&F refresh), which would
+# otherwise hide that Jan-Mar are weeks old.
+
+HF_PREFIX = "H&F bids PDF of "      # in the subject of a day whose near months came from hfgrain.com's daily sheet
+
+
+def _month_key(r: dict):
+    return dp.canonical(r["deliveryMonth"], r["futuresSymbol"])
+
+
+def merge_sheet(base_rows: list[dict], hf_rows: list[dict], day: date) -> list[dict]:
+    """The Inco sheet as it stands on `day` once H&F's rows are folded in: every month H&F quotes is H&F's (a plain 'Oct' and an 'LH Oct' are both October), every other month is as
+    `base_rows` had it; expired windows dropped; in delivery order."""
+    quoted = {_month_key(r) for r in hf_rows if not r.get("isSpot")}
+    keep = [r for r in base_rows if r.get("isSpot") or _month_key(r) not in quoted]
+    rows = carried_rows(keep + [dict(r) for r in hf_rows], day)
+    return sorted(rows, key=lambda r: dp.deliv_key(r["deliveryMonth"], r["futuresSymbol"]))
+
+
+def _signature(rows: list[dict]) -> list[tuple]:
+    """What a day says, whatever its row ids or order."""
+    return sorted((str(r["deliveryMonth"]), r["futuresSymbol"], r["basisCents"]) for r in rows)
+
+
+def plan_hf(snaps: list[dict], D: date, hf_rows: list[dict], today: date, max_age: int = MAX_AGE_DAYS) -> dict:
+    """Plan for folding H&F's Incobrasa rows into the INCO series on day D (the sheet's date). Replaces D with the merged sheet and re-carries the days after it (plan_post), unless D
+    already holds exactly this (a second run of the same sheet, or a re-posted copy: nothing to write). The merged day is marked 'carried forward from <last Inco sheet> sheet; Oct/Nov/Dec
+    from H&F bids PDF of D' — carried, so the guard and the next carry still run off the last REAL Inco sheet. When that sheet is more than max_age days before D its other months are NOT
+    carried into D (a forgotten sheet leaves a visible gap, as in plan_carry): D then holds only what H&F quotes."""
+    notes: list[str] = []
+    upto = [s for s in snaps if s["d"] <= D]
+    base = upto[-1] if upto else None
+    real = next((s for s in reversed(upto) if not is_carried(s)), None)
+    base_rows = load_rows(base["id"]) if base else []
+    if real is not None and (D - real["d"]).days > max_age:
+        notes.append("the last Inco sheet is %s (%d days before %s, limit %d): its other months are NOT carried into the H&F day" % (real["d"], (D - real["d"]).days, D, max_age))
+        base_rows = []
+    merged = merge_sheet(base_rows, hf_rows, D)
+    if not merged:
+        return {"delete": [], "write": [], "notes": notes + ["nothing left of H&F's Incobrasa rows on %s after the expired ones were dropped" % D]}
+    existing = next((s for s in snaps if s["d"] == D), None)
+    if existing is not None and not is_carried(existing):
+        # A sheet Kolten POSTED on D is the day's record: H&F's relay of the same bids must not replace it (and the replacement would mark the day 'carried', so the stale-sheet
+        # guard would stop counting it as a real sheet). Found 2026-10-26, the day a real sheet and H&F's daily PDF first landed together.
+        return {"delete": [], "write": [], "notes": notes + ["INCO %s holds a sheet that was posted, not a carried copy — H&F's Incobrasa rows are not folded over it" % D]}
+    mark = HF_PREFIX + D.isoformat()
+    if existing is not None and mark in str(existing.get("email_subject") or "") and _signature(load_rows(existing["id"])) == _signature(merged):
+        return {"delete": [], "write": [], "notes": notes + ["INCO %s already holds H&F's sheet of %s — nothing to write" % (D, D)]}
+    plan = plan_post(snaps, D, merged, today, max_age)
+    months = "/".join(sorted({date(2000, k[1], 1).strftime("%b") for k in (_month_key(r) for r in hf_rows) if k}, key=lambda m: datetime.strptime(m, "%b").month))
+    for s in plan["write"]:
+        if s["timestamp"][:10] == D.isoformat():
+            if real is not None:
+                s["emailSubject"] = f"{CARRY_PREFIX}{real['d'].isoformat()} sheet; {months} from {mark}"
+                s["emailDate"] = real["d"].isoformat()
+            else:
+                s["emailSubject"] = f"{mark} ({months})"
+                s["emailDate"] = D.isoformat()
+    plan["notes"] = notes + plan["notes"]
+    return plan
+
+
+def fold_hf(loc: dict, today: date | None = None, dry_run: bool = False):
+    """Fold the Incobrasa location dict hfgrain_scraper built ({sheet_date, bids: [{delivery, cme_symbol, basis_cents, grain}]}) into the INCO series. True when written and read back
+    (or, with dry_run, when there is something to write), None when the series already held it, False when it could not be done (a weekend date, a read-back mismatch)."""
+    D = date.fromisoformat(loc["sheet_date"])
+    hf_rows = [{"grain": GRAIN, "deliveryMonth": b["delivery"], "futuresSymbol": b["cme_symbol"], "basisCents": int(b["basis_cents"]), "isSpot": False, "spotGrain": None}
+               for b in loc.get("bids", []) if b.get("grain") == GRAIN and _FUT.match(str(b.get("cme_symbol")))]
+    if not hf_rows:
+        return None
+    try:
+        plan = plan_hf(load_snaps(), D, hf_rows, today or today_ct())
+    except ValueError as e:                                  # plan_post: a weekend / future date
+        print("inco_bids: ERROR %s" % e)
+        return False
+    show_plan(plan, "write")
+    if not plan["write"] and not plan["delete"]:
+        return None
+    if dry_run:
+        return True
+    return apply_plan(plan)
+
+
 # ── sheet parsing ─────────────────────────────────────────────────────────────
 
 def parse_sheet(text: str, D: date) -> tuple[list[dict], list[str]]:
@@ -340,9 +431,43 @@ def cmd_post(args) -> int:
         print("inco_bids:     %-14s %-7s %+d" % (r["deliveryMonth"], r["futuresSymbol"], r["basisCents"]))
     show_plan(plan, "write")
     if not args.commit:
-        print("inco_bids: PREVIEW ONLY — nothing written. Re-run with --commit.")
+        print("inco_bids: update email after --commit: %s" % _email_plan(args))
+        print("inco_bids: PREVIEW ONLY — nothing written, nothing emailed. Re-run with --commit.")
         return 0
-    return 0 if apply_plan(plan) else 1
+    if not apply_plan(plan):
+        return 1
+    return _email_after_post(args, D)
+
+
+def _email_plan(args) -> str:
+    """Who the update email would go to, for the preview."""
+    if getattr(args, "no_email", False):
+        return "none (--no-email)"
+    try:
+        import bt_inco_report as inco_report
+        to, bcc = inco_report.recipients(getattr(args, "to", None))
+    except Exception as exc:                                  # the preview must work even if the report module cannot load
+        return "(unknown: %s)" % exc
+    return "To %s%s%s" % (to, " + BCC %s" % bcc if bcc else "", "  [test: not logged as the list's copy]" if getattr(args, "to", None) else "")
+
+
+def _email_after_post(args, D: date) -> int:
+    """Email the sheet just posted (inco_report). It is already saved and read back, so a failure here is reported and never undone: exit 3, with the resend command."""
+    if getattr(args, "no_email", False):
+        print("inco_bids: email skipped (--no-email).")
+        return 0
+    try:
+        import bt_inco_report as inco_report
+        sent = inco_report.send_inco_update_email(D, to_addr=getattr(args, "to", None), force=getattr(args, "force_email", False))
+    except Exception as exc:
+        print("inco_bids: the sheet is SAVED but the update email FAILED: %s" % exc)
+        print("inco_bids: resend it with: python inco_report.py --send --date %s" % D)
+        return 3
+    if sent:
+        print("inco_bids: update email sent.")
+    else:
+        print("inco_bids: update email NOT sent: this exact sheet was already emailed (--force-email to send it again).")
+    return 0
 
 
 def main() -> int:
@@ -359,6 +484,9 @@ def main() -> int:
     pp.add_argument("--date", required=True, help="sheet date, YYYY-MM-DD (a business day)")
     pp.add_argument("--file", help="read the sheet from this file instead of stdin")
     pp.add_argument("--commit", action="store_true")
+    pp.add_argument("--no-email", action="store_true", help="write the sheet but do not send the update email")
+    pp.add_argument("--to", help="send the update email only to this address (a test copy; the list gets nothing)")
+    pp.add_argument("--force-email", action="store_true", help="email the list even if this exact sheet already went out")
     pp.add_argument("--max-age", type=int, default=MAX_AGE_DAYS)
     pp.add_argument("--today", help=argparse.SUPPRESS)       # testing only
     pp.set_defaults(fn=cmd_post)

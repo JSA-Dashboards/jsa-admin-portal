@@ -22,6 +22,10 @@ from datetime import datetime, date, timedelta
 
 from bt_changes_report import signature_html, send_email, JPSI_DARK, JPSI_BLUE, _GAIN, _LOSS, _SIG_LOGO, _SIG_LOGO_CID, _table_watermark, _TBL_WM_CID, _roll_adjust, _futures_curve, JSA_GROUP_BCC, dashboard_cta_html
 from bt_database import get_rail_fob_all
+try:
+    from bt_database import rail_estimates_shown as _est_shown
+except ImportError:                       # an older database module (a stale process): it hides nothing either
+    _est_shown = lambda: True
 
 # Load DATABASE_URL when rail_report is invoked standalone (a script or the scheduled
 # task) so we connect to Postgres — otherwise database.py silently falls back to the
@@ -44,10 +48,12 @@ _EXCLUDE = {"UP Illinois (Dom)"}     # Allen Station (Dom) — dropped 2026-08-2
 _ALWAYS  = {"BN Freight", "UP Freight"}
 
 try:
-    from bt_rail_corridors import CORRIDORS, CORRIDOR_ORDER
+    from bt_rail_corridors import CORRIDORS, CORRIDOR_ORDER, band_years as _band_years, estimate_hidden_note as _hidden_note
     _RAIL_BY = {n: r for n, r in CORRIDORS}
 except Exception:                                   # registry optional
     CORRIDOR_ORDER, _RAIL_BY = {}, {}
+    _band_years = lambda _m: 5
+    _hidden_note = lambda _m: ""
 
 # Board display overrides (match app.py's _RAIL_DISPLAY).
 _RAIL_DISPLAY = {"BN PNW CP": "CP PNW", "UP Illinois (Dom)": "Allen Station (Dom)",
@@ -87,6 +93,8 @@ def _prior_maps(market, cur, by_md, mkt_dates):
 
 # ── cell formatters ──────────────────────────────────────────────────────────
 def _disp(num, raw):
+    if raw == "est":                    # flags an ESTIMATED archive week (rail_corridors.EST_FLAG), it is not a typed cell: show the number
+        raw = None
     return raw if raw else (f"{num:+d}" if num is not None else None)
 
 
@@ -97,7 +105,8 @@ def _bo_cell(cell, blue, tdr):
     if s == "?":
         return f'<td style="{tdr};color:#94a3b8">?</td>'
     col = f"color:{JPSI_BLUE};font-weight:600" if blue else "color:#32373c;font-weight:700"
-    return f'<td style="{tdr};{col}">{s}</td>'
+    tag = ' <span style="font-size:9px;color:#d97706;font-weight:700">est</span>' if (not blue and cell.get("bid_raw") == "est") else ""
+    return f'<td style="{tdr};{col}">{s}{tag}</td>'
 
 
 def _chg_cell(cur_bid, prior_map, period, tdr, cur_fut=None, curve=None):
@@ -147,13 +156,21 @@ def _chg_yr_cell(cur_bid, yr_map, cell, tdr, cur_fut=None, curve=None, spot_cell
 
 
 # ── spot seasonal chart (front-period bid by marketing week) ──────────────────
+def _nearest_bid_cell(cells):
+    """The first cell (in period order) that carries a bid and is a delivery period: a spread note ('Spread-Sell FH Nov CP / Buy FH Nov ; offered')
+    carries a bid too (the spread, -2) but is not a nearby basis — BN PNW charted it as its spot on 2026-10-19."""
+    import bt_forward_month as fm
+    return next((c for c in cells if c.get("bid") is not None and not fm.is_spread_note(c.get("period"))), None)
+
+
 def _spot_series(market, by_md, mkt_dates):
-    """{date -> nearest-period bid} for a corridor (smallest period_order with a bid)."""
+    """{date -> nearest-period bid} for a corridor (smallest period_order with a bid; a spread note is not a period)."""
     out = {}
     for d in sorted(mkt_dates.get(market, ())):
         cells = sorted(by_md.get((market, d), {}).values(),
                        key=lambda r: (r.get("period_order") if r.get("period_order") is not None else 99))
-        bid = next((c["bid"] for c in cells if c.get("bid") is not None), None)
+        nearest = _nearest_bid_cell(cells)
+        bid = nearest["bid"] if nearest is not None else None
         if bid is not None:
             out[d] = bid
     return out
@@ -183,23 +200,18 @@ def _fwd_bucket(period: str):
 
 def _fwd_curve(market, by_md, mkt_dates):
     """Forward curve of the corridor's LATEST rundown as a (MktWeek, Bid) DataFrame:
-    each delivery period placed at its month's week, packages spread into carry, kept
-    to the current marketing year from today forward. None if it can't be built."""
+    each delivery month placed at its week, kept to the current marketing year from
+    today forward. A month is its FULL-month bid; its halves count only when there is
+    none (the midpoint of FH and LH when both are posted); a package spreads into carry
+    and fills only a month with no bid of its own (forward_month, Kolten 2026-10-20: Dec
+    bid +16 must not draw +15). None if it can't be built."""
     ds = sorted(mkt_dates.get(market, ()))
     if not ds:
         return None
-    pts = []
-    for period, r in by_md.get((market, ds[-1]), {}).items():
-        bid = r.get("bid")
-        if bid is None:
-            continue
-        bk = _fwd_bucket(period)
-        if bk in _MON_WK:
-            pts.append((_MON_WK[bk], float(bid)))
-        elif bk in _PKG_MON:
-            mons = _PKG_MON[bk]; ctr = (len(mons) - 1) / 2.0
-            for i, mo in enumerate(mons):
-                pts.append((_MON_WK[mo], round(float(bid) + _FWD_CARRY * (i - ctr), 1)))
+    import bt_forward_month as fm
+    cells = [(period, r.get("bid")) for period, r in by_md.get((market, ds[-1]), {}).items()
+             if _fwd_bucket(period) in _MON_WK or _fwd_bucket(period) in _PKG_MON]
+    pts = [(_MON_WK[fm.ABBR[m]], v) for m, v in fm.rail_forward(cells, _FWD_CARRY).items()]
     if len(pts) < 2:
         return None
     import pandas as pd
@@ -208,6 +220,22 @@ def _fwd_curve(market, by_md, mkt_dates):
     twk = min(52, max(1, ((t - date(tmy, 9, 1)).days // 7) + 1))
     cur = df[df["MktWeek"] >= twk].sort_values("MktWeek")
     return cur if len(cur) >= 2 else df.sort_values("MktWeek")
+
+
+def _est_dates(market, by_md, mkt_dates):
+    """The posting dates whose rows are ESTIMATES, not posted bids (bid_raw 'est' in the archive: UP Allen Station before its actual bids begin)."""
+    return {d for d in mkt_dates.get(market, ())
+            if any(c.get("bid_raw") == "est" for c in by_md.get((market, d), {}).values())}
+
+
+def _five_year_band(hist):
+    """The prior years' average and range by marketing week, from their weekly bids (a frame with MktWeek, MyNum, Bid), as a
+    (MktWeek, lo, hi, avg) DataFrame. The AVERAGE is Olympic (seasonal_band): with five years in a week the highest and the lowest
+    are dropped before the mean, so one freak crop year cannot drag it (UP Allen Station's 2022/23). The RANGE is the true lowest to
+    highest of every year in the window (Kolten 2026-10-26: "take out the ex hi / low on these and make true 5 year range. Keep the
+    average line as we have it")."""
+    import bt_seasonal_band as sb
+    return hist.groupby("MktWeek")["Bid"].agg(lo=sb.range_lo, hi=sb.range_hi, avg=sb.olympic_avg).reset_index()
 
 
 def _seasonal_png(market, by_md, mkt_dates):
@@ -227,13 +255,15 @@ def _seasonal_png(market, by_md, mkt_dates):
         log.warning("rail seasonal render unavailable: %s", exc)
         return None
 
+    _est = _est_dates(market, by_md, mkt_dates)
     rows = []
     for d, bid in series.items():
         dt = datetime.fromisoformat(d).date()
         my = dt.year if dt.month >= 9 else dt.year - 1
         wk = min(52, max(1, ((dt - date(my, 9, 1)).days // 7) + 1))
-        rows.append({"MktYear": f"{my}/{str(my + 1)[-2:]}", "MyNum": my, "MktWeek": wk, "Bid": bid})
-    df = pd.DataFrame(rows).groupby(["MktYear", "MyNum", "MktWeek"], as_index=False)["Bid"].mean()
+        rows.append({"MktYear": f"{my}/{str(my + 1)[-2:]}", "MyNum": my, "MktWeek": wk, "Bid": bid, "Est": d in _est})
+    df = (pd.DataFrame(rows).groupby(["MktYear", "MyNum", "MktWeek"], as_index=False)
+          .agg(Bid=("Bid", "mean"), Est=("Est", "max")))
     mx = int(df["MyNum"].max())                          # current (bold) marketing year
     if df["MyNum"].nunique() < 2:
         return None
@@ -243,10 +273,14 @@ def _seasonal_png(market, by_md, mkt_dates):
     cur_lbl = _yr(mx)
     prev = df[df["MyNum"] == mx - 1]        # most recent COMPLETE marketing year
     prev_lbl = _yr(mx - 1)
-    _hy = sorted(y for y in df["MyNum"].unique() if y < mx)[-5:]   # 5 prior complete years (or fewer)
+    import bt_seasonal_band as _sband
+    _prior = [y for y in df["MyNum"].unique() if y < mx]
+    _hid_est = (not _est_shown()) and bool(_hidden_note(market))      # a corridor whose estimated weeks are hidden now starts at its first ACTUAL bid, mid-year
+    if _hid_est:                                      # ... and that part-year (Allen Station's 2022/23 is 14 weeks, +58 to +85) is not one of the years behind the band: it would lift June-August alone
+        _prior = _sband.full_years(df.groupby("MyNum")["MktWeek"].nunique().to_dict(), _prior)
+    _hy = sorted(_prior)[-_band_years(market):]   # the prior complete years behind the band: 5 (or fewer); 3 for the BN corridors
     hist = df[df["MyNum"].isin(_hy)]
-    band = (hist.groupby("MktWeek")["Bid"].agg(lo="min", hi="max", avg="mean").reset_index()
-            if len(_hy) >= 2 else None)
+    band = _five_year_band(hist) if len(_hy) >= 2 else None
     _n = len(_hy)
     rng_lbl = f"{_yr(_hy[0])}–{_yr(_hy[-1])}" if _hy else ""
     _fwd = _fwd_curve(market, by_md, mkt_dates)
@@ -284,7 +318,8 @@ def _seasonal_png(market, by_md, mkt_dates):
     # Muted green/gray theme: bold near-black current year, dashed sage avg, light-sage
     # range band, brick-red forward curve. Legend up top with a swatch per series.
     _CUR, _PREV, _AVG, _BAND, _FWD = "#111827", "#2563eb", "#4b6a4b", "#c4d7bd", "#c0392b"
-    _rng_name, _avg_name = f"{_n}-yr range ({rng_lbl})", f"{_n}-yr average"
+    _rng_name = f"{_n}-yr range ({rng_lbl})"        # the true lowest to highest year of the window, never trimmed
+    _avg_name = f"{_n}-yr Olympic avg" if _sband.is_trimmed(_n) else f"{_n}-yr average"      # five years: the average drops each week's high and low year, and the legend says so
     _dom, _rng = [cur_lbl], [_CUR]
     if not prev.empty:
         _dom.append(prev_lbl); _rng.append(_PREV)      # most recent complete year, hero blue
@@ -334,9 +369,20 @@ def _seasonal_png(market, by_md, mkt_dates):
                        y=alt.value(int(250 / 2)), url="url:N"))
         layers = [layers[0], _wm] + layers[1:]
 
+    _title = f"{_RAIL_DISPLAY.get(market, market)} · Spot {_comm} Basis Seasonal"
+    _n_est = int(hist["Est"].sum()) if band is not None else 0
+    if _n_est:                                           # estimated weeks (bid_raw 'est') behind the average and range: say so on the chart
+        try:
+            from bt_rail_corridors import estimate_short as _est_short
+        except Exception:
+            _est_short = lambda _m: ""
+        _sub = f"{_n_est} of {len(hist)} weeks behind the 5-yr avg / range are estimates" + (f": {_est_short(market)}" if _est_short(market) else "")
+        _title = alt.TitleParams(_title, subtitle=_sub, subtitleFontSize=9, subtitleColor="#b45309")
+    elif _hid_est:                                       # estimated weeks are hidden: a corridor that has some says why its history stops
+        _title = alt.TitleParams(_title, subtitle=_hidden_note(market), subtitleFontSize=9, subtitleColor="#b45309")
     chart = alt.layer(*layers).properties(
         width=680, height=250, padding={"left": 6, "right": 26, "top": 6, "bottom": 6},
-        title=f"{_RAIL_DISPLAY.get(market, market)} · Spot {_comm} Basis Seasonal")
+        title=_title)
     try:
         return vlc.vegalite_to_png(json.dumps(chart.to_dict(), default=str), scale=1.5)
     except Exception as exc:
@@ -409,7 +455,7 @@ def build_rail_html(markets: list | None = None, charts: bool = True,
             continue
         # Spot/front row = nearest period with a bid; the year-ago column falls back
         # onto it (last year's rail history is weekly Spot-only).
-        spot_cell = next((r for r in cells if r.get("bid") is not None), None)
+        spot_cell = _nearest_bid_cell(cells)
         rail = cells[0].get("rail") or ""
         rcol = _RAIL_COLORS.get(rail, "#64748b")
         pd_, pw, pmo, pyr = _prior_maps(m, eff, by_md, mkt_dates)

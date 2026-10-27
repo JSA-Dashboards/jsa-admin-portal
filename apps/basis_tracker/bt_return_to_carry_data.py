@@ -78,12 +78,22 @@ def _parse_date(v) -> date | None:
         return None
 
 
+_SPREAD_NOTE = re.compile(r"\bspread\b", re.I)
+
+
+def is_spread_note(period: str | None) -> bool:
+    """A posted line that quotes a SPREAD between two delivery periods ('Spread-Sell FH Nov CP / Buy FH Nov ; offered'), not a period's basis: its number
+    is the spread (-2), so it is never a nearby bid, a forward quote or a month's value. BN PNW charted -2 as its spot on 2026-10-19 because the note was
+    that posting's first line (Kolten: "fix the BN PNW")."""
+    return bool(_SPREAD_NOTE.search(period or ""))
+
+
 def obs_from_rail(rows: list[dict], market: str, commodity: str = "Corn") -> list[dict]:
-    """One bid per posting date for a corridor: its 'Spot' bid, else the nearest forward period's bid.
+    """One bid per posting date for a corridor: its 'Spot' bid, else the nearest forward period's bid (a spread note is not a period).
     rows = rail_fob rows ({date, market, commodity, period, period_order, futures, bid})."""
     by_date: dict = {}
     for r in rows:
-        if r["market"] != market or (r.get("commodity") or "Corn") != commodity or r.get("bid") is None:
+        if r["market"] != market or (r.get("commodity") or "Corn") != commodity or r.get("bid") is None or is_spread_note(r.get("period")):
             continue
         d = _parse_date(r["date"])
         if d is None:
@@ -225,10 +235,10 @@ def shipment_quotes(raw: list[dict], crop_year: int, spec: rtc.Spec = rtc.CORN) 
 
 
 def quotes_from_rail(rows: list[dict], market: str, commodity: str = "Corn") -> list[dict]:
-    """Every posted period of a corridor with a bid: [{'date', 'label', 'tag', 'basis'}] (rail_fob rows)."""
+    """Every posted period of a corridor with a bid: [{'date', 'label', 'tag', 'basis'}] (rail_fob rows; spread notes are not periods)."""
     out = []
     for r in rows:
-        if r["market"] != market or (r.get("commodity") or "Corn") != commodity or r.get("bid") is None:
+        if r["market"] != market or (r.get("commodity") or "Corn") != commodity or r.get("bid") is None or is_spread_note(r.get("period")):
             continue
         d = _parse_date(r["date"])
         if d is not None:
@@ -308,7 +318,8 @@ def shipment_table(obs: list[dict], raw: list[dict], futs: dict, rate_on, asof: 
     b0_override  the user's OWN harvest basis (cents vs the spec's base contract) in place of the calculated one: the break-even,
                  the returns and the interest all use it, `tbl.b0_own` is True and `tbl.b0_calc` keeps what the calculated method
                  gives (the average so far, or the estimate before the weekly bids) to show beside it; no estimate is returned then.
-    harvest_window the user's window for the calculated harvest basis, (first week index, number of weeks) — see build_crop_year. The average is then
+    harvest_window the user's window for the calculated harvest basis, (first week, number of weeks), week 0 = the first Wednesday of September — see
+                 build_crop_year. The average is then
                  taken over THOSE weeks' bids as they post (`tbl.b0_window` says so), and there is no estimate from the forward quotes before they do: the
                  estimate is of the report's window, not theirs."""
     crop_year = rtc.shipment_crop_year(asof)
@@ -324,19 +335,16 @@ def shipment_table(obs: list[dict], raw: list[dict], futs: dict, rate_on, asof: 
         b0, est = float(b0_override), None
     tbl = rtc.build_shipment_table(crop_year, asof, b0, shipment_quotes(raw, crop_year, spec), futs, rate_on, measure,
                                    b0_weeks=cy.b0_weeks if (cy.b0 is not None and not own) else 0, b0_est=est is not None, spec=spec,
-                                   b0_own=own, b0_calc=calc)
+                                   b0_own=own, b0_calc=calc, purchase=cy.purchase)     # a September window moves the purchase
     tbl.b0_window = cy.b0_window
     return tbl, est
 
 
-def own_b0_map(value: float | None, crop_year: int, obs: list[dict], spec: rtc.Spec = rtc.CORN, every_year: bool = False) -> dict:
-    """{crop year: harvest basis} to hand run_history_noted: the user's own harvest basis for the crop year being tracked — or, as a what-if
-    ('what would storing have paid had I always bought at -15'), for every crop year the series covers (and the tracked one). {} when
-    `value` is None, i.e. the calculated method everywhere."""
-    if value is None:
-        return {}
-    years = (set(crop_years_in(obs, spec)) | {crop_year}) if every_year else {crop_year}
-    return {y: float(value) for y in years}
+def own_b0_map(value: float | None, crop_year: int, obs: list[dict] | None = None, spec: rtc.Spec = rtc.CORN) -> dict:
+    """{crop year: harvest basis} to hand run_history_noted: the user's own harvest basis for the crop year being tracked ONLY — every other
+    year keeps its calculated one (Kolten 2026-10-19: "it's just this year's basis"; the every-year what-if was removed). {} when `value`
+    is None, i.e. the calculated method everywhere. `obs` / `spec` are unused, kept so existing callers need no change."""
+    return {} if value is None else {crop_year: float(value)}
 
 
 def crop_years_in(obs: list[dict], spec: rtc.Spec = rtc.CORN) -> list[int]:
@@ -389,8 +397,9 @@ def run_history_noted(obs: list[dict], futs: dict, rate_on, min_weeks: int = 12,
     without the years that only repeat the previous one (`skipped` = their labels). A year needs some weeks to say anything,
     so one with fewer than `min_weeks` of bids is left out unless it is the newest (the one in progress).
     `b0_overrides` = {crop year: the user's own harvest basis} (see own_b0_map()): those years are measured from it, the rest
-    from their calculated average. `harvest_window` = the user's (first week index, number of weeks) for that calculated average, the same
-    weeks in EVERY crop year (instead of the report's first 7 and its year-specific windows); None = the report's."""
+    from their calculated average. `harvest_window` = the user's (first week, number of weeks) for that calculated average, week 0 = the first
+    Wednesday of September: the same weeks, counted from September, in EVERY crop year (instead of the report's first 7 and its year-specific
+    windows); None = the report's."""
     min_year = spec.min_crop_year if min_year is None else min_year
     ys = [y for y in crop_years_in(obs, spec) if y >= min_year]
     out = []
@@ -419,34 +428,105 @@ def _value(w, measure: str):
     return w.net if measure == "net" else w.gross
 
 
-def summary_rows(results: list, measure: str = "net") -> list[dict]:
+# ── the best LOCKABLE return: the nearby bid or any forward month, on any day ─────────────────────────
+# Kolten 2026-10-19: "Best return ... should be the most active best return that can be locked in at any time ... you can sell to lock in
+# this value, not have to be able to ship it to execute." The weekly history (the report's method) prices only the NEARBY bid each week:
+# selling for prompt shipment. A forward month is lockable the same day — sell the forward bid, roll the hedge to its contract at that
+# day's spread, carry the interest to its shipment date — which is exactly the shipment table's 'return' (bid - that day's break-even).
+def forward_best(cy, quotes: list[dict], futs: dict, rate_on, asof: date, measure: str = "net", spec: rtc.Spec = rtc.CORN,
+                 ship_month: int | None = None, b0: float | None = None) -> dict | None:
+    """The best return lockable by selling a FORWARD month on any day of crop year `cy`, up to `asof` and the end of the study:
+    {'value', 'date' (the day it was locked), 'ship' (the shipment date, the 20th), 'month', 'letter'}; None when no forward bid of that
+    year was posted (elevators and rail corridors only archived forward periods from 2026) or there is no harvest basis.
+    The return of each (day, month) is the shipment table's: bid - that day's break-even (harvest basis - the futures spread from the base
+    contract to the month's + the interest from the purchase to the shipment date, on the measure). Sales count from the first bid of the
+    harvest window (or the purchase, if earlier) — the same rule in every year, so the tracked year's sale TODAY counts even before the
+    report's Oct 20 purchase date — and only while they are DEFERRED: made before the shipment month begins (a July bid sold in July is
+    the nearby sale, which the weekly history prices; comparing the two only compares the report's two interest conventions — on Greenville
+    corn that alone made July 'forward' sales look 2-4c better than the same week's nearby). `b0` = the harvest basis to use instead of
+    `cy.b0` (the page's table may hold the posted-quote estimate)."""
+    b0 = cy.b0 if b0 is None else b0
+    if b0 is None:
+        return None
+    end = rtc.study_end(cy.crop_year, ship_month) if ship_month else date(cy.crop_year + 1, *spec.horizon)
+    t = min(asof, end)
+    q = shipment_quotes(quotes, cy.crop_year, spec)
+    if not q:
+        return None
+    purchase = cy.purchase or rtc.purchase_date(cy.crop_year)
+    since = min(cy.b0_dates[0], purchase) if cy.b0_dates else purchase
+    known = {d: px for d, px in futs.items() if d <= t}             # a past day must not see a spread measured after it
+    table = rtc.limit_shipment_table(rtc.build_shipment_table(cy.crop_year, t, b0, q, known, rate_on, measure, spec=spec, purchase=purchase,
+                                                              best_from=since, deferred_only=True), ship_month)
+    col = rtc.best_column(table, "best_ret")                         # the earliest month wins a tie
+    if col is None:
+        return None
+    return {"value": col.best_ret, "date": col.best_ret_date, "ship": col.ship, "month": col.month, "letter": col.letter}
+
+
+def lockable_bests(results: list, quotes: list[dict], futs: dict, rate_on, asof: date, measure: str = "net", spec: rtc.Spec = rtc.CORN,
+                   ship_month: int | None = None, table=None) -> dict:
+    """{crop year: the best return lockable at any time that year} — the higher of the weekly NEARBY bid's best (`cy.best`, already
+    limited to the study) and the best FORWARD month (forward_best): {'value', 'date' (locked), 'kind' ('nearby' | 'forward'), 'ship'
+    (forward: the shipment date), 'month', 'letter', 'nearby' (the nearby best's value), 'forward' (the forward best's value, None = no
+    forward bids that year)}. `table` = the tracked year's shipment table from the page: its harvest basis is used for that year (it may be
+    the posted-quote estimate before the weekly bids). Years with neither are left out."""
+    out = {}
+    for cy in results:
+        nb = cy.best.get(measure)
+        nv = None if nb is None else _value(nb, measure)
+        fb = forward_best(cy, quotes, futs, rate_on, asof, measure, spec, ship_month,
+                          b0=table.b0 if (table is not None and table.crop_year == cy.crop_year) else None)
+        if nv is None and fb is None:
+            continue
+        if fb is not None and (nv is None or fb["value"] > nv + 1e-9):      # a tie goes to the nearby bid (the report's own pick)
+            out[cy.crop_year] = dict(fb, kind="forward", nearby=nv, forward=fb["value"])
+        else:
+            out[cy.crop_year] = {"value": nv, "date": nb.date, "kind": "nearby", "ship": None, "month": None, "letter": nb.tag,
+                                 "nearby": nv, "forward": None if fb is None else fb["value"]}
+    return out
+
+
+def summary_rows(results: list, measure: str = "net", lockable: dict | None = None) -> list[dict]:
     """One row per crop year for the table: harvest basis, the headline futures carry, best summer basis, the best return
-    on the measure (and its week), and the return at the last week."""
+    on the measure (and its week), and the return at the last week. With `lockable` (lockable_bests) the best return is the best
+    LOCKABLE one — the nearby bid or a forward month, on any day — and the row says which ('best_kind', 'best_ship' = the forward
+    month's shipment date, 'best_nearby', 'best_forward'); without it, the weekly nearby bid's best, as the report has it."""
     rows = []
     for cy in results:
         best = cy.best.get(measure)
         last = next((w for w in reversed(cy.weeks) if _value(w, measure) is not None), None)
-        rows.append({
+        row = {
             "crop_year": cy.crop_year, "label": cy.label, "weeks": len(cy.weeks), "complete": cy.complete,
             "b0": cy.b0, "b0_weeks": cy.b0_weeks, "b0_own": cy.b0_own, "b0_calc": cy.b0_calc, "carry": cy.season_carry,
             "summer": None if cy.summer is None else cy.summer.basis,
             "summer_date": None if cy.summer is None else cy.summer.date,
             "best": None if best is None else _value(best, measure),
             "best_date": None if best is None else best.date, "best_tag": None if best is None else best.tag,
+            "best_kind": None if best is None else "nearby", "best_ship": None,
+            "best_nearby": None if best is None else _value(best, measure), "best_forward": None, "lockable": lockable is not None,
             "last": None if last is None else _value(last, measure),
             "last_date": None if last is None else last.date,
             "ship_by": cy.window_end, "carry_tag": cy.carry_tag,       # set only when the study was limited (limit_history)
             "b0_window": cy.b0_window,                                 # set only when the user chose the weeks of the harvest-basis average
-        })
+        }
+        lk = (lockable or {}).get(cy.crop_year)
+        if lk is not None:
+            row.update(best=lk["value"], best_date=lk["date"], best_tag=lk["letter"], best_kind=lk["kind"], best_ship=lk["ship"],
+                       best_nearby=lk["nearby"], best_forward=lk["forward"])
+        rows.append(row)
     return rows
 
 
 def seasonal_points(results: list, measure: str = "net") -> list[dict]:
-    """Every weekly return as {crop, week (0 = first Wednesday of October), date, value} for the overlay chart."""
+    """Every weekly return as {crop, week, date, value} for the overlay chart. `week` counts from week 0 = the first Wednesday of SEPTEMBER
+    of each crop year (Kolten 2026-10-19: "start this chart in Sep as well"), the harvest window's numbering: the report's first weekly row
+    (the first Wednesday of October) is week 4 or 5."""
     pts = []
     for cy in results:
+        off = rtc.report_start_week(cy.crop_year)
         for w in cy.weeks:
             v = _value(w, measure)
             if v is not None:
-                pts.append({"crop": cy.label, "week": w.idx, "date": w.date, "value": float(v)})
+                pts.append({"crop": cy.label, "week": w.idx + off, "date": w.date, "value": float(v)})
     return pts

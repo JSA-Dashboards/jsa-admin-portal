@@ -16,6 +16,8 @@ from bt_adm_names import adm_city_from_name
 from bt_regions import region_from_state
 from bt_river_segments import river_segment, SEGMENT_ORDER
 import bt_delivery_period as _dp
+import bt_forward_month as _fm
+import bt_seasonal_band as _sband
 
 from bt_database import init_db, upsert_snapshot, get_snapshots, delete_snapshot, list_locations, get_location_meta, get_all_location_meta, get_map_data, get_grain_map, get_bids_filter_data, get_snapshots_bulk, grain_counts_by_facility, save_spot_forward_manual, get_spot_forward_manual, get_spot_forward_manual_history
 
@@ -157,6 +159,18 @@ def _cached_futures_curve_for(date_str: str) -> dict:
     from bt_database import get_futures_curve
     stored = get_futures_curve(date_str)
     return stored if stored else _cached_futures_curve()
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_basis_maps(crop: str, states: tuple, types: tuple, baseline: str, as_of_iso: str) -> dict:
+    """The Basis Maps tab's pair of pictures (basis_map.build_pair) as PNG bytes plus the numbers for its captions; cached ten minutes per choice and day."""
+    import bt_basis_map as _bm
+    from datetime import date as _date
+    import bt_database as _db
+    curve = _cached_futures_curve_for(as_of_iso)
+    r = _bm.build_pair(_cached_get_map_data(), crop, list(states), list(types), baseline, _date.fromisoformat(as_of_iso),
+                       fetch=_db.get_basis_window, raw_grains=_db.get_raw_grains, futures_cents=lambda sym: curve.get(sym))
+    return {k: v for k, v in r.items() if k != "image"}
+
 
 @st.cache_data(show_spinner=False)
 def _jsa_watermark_uri() -> str:
@@ -422,11 +436,19 @@ def short_sym(s):
         return f"{MONTH_CODES.get(s[2], s[2])} '{s[3:]}"
     return s or ""
 
-def fmt_basis(c, is_meal=False):
+def _basis_unit(grain) -> str:
+    """The unit printed beside a basis in the charts and captions. Canola is quoted in Canadian dollars per tonne and comes back from the database
+    as quoted (grain_units.scale_basis, applied where the rows are read), so it says 'C$/t'; every other grain stays '¢' — soybean meal's x100
+    values keep their older '$/t' handling in the Bids table and the Summary tab."""
+    return "C$/t" if grain == "Canola" else "¢"
+
+def fmt_basis(c, is_meal=False, unit="¢"):
     if c is None: return "—"
     sign = "+" if c >= 0 else "−"
     if is_meal:
         return f"{sign}${abs(c)/100:.2f}/t"
+    if unit != "¢":                       # canola: whole C$/t as quoted ("−C$45/t")
+        return f"{sign}C${abs(c)}/t"
     return f"{sign}{abs(c)}¢"
 
 _FROZEN_SPREAD_MEMO: dict = {}
@@ -602,7 +624,7 @@ def compute_changes(snapshots):
 
     return {"rows": row_changes, "spots": spot_changes, "derived_spots": derived_spot_changes}
 
-def delta_html(d, is_meal=False):
+def delta_html(d, is_meal=False, unit="¢"):
     if not d:
         return '<span style="color:#94a3b8">—</span>'
     if d.get("unknown"):
@@ -611,18 +633,18 @@ def delta_html(d, is_meal=False):
     if val is None:
         return '<span style="color:#94a3b8">—</span>'
     if val == 0:
-        zero_str = "±$0.00/t" if is_meal else "±0¢"
+        zero_str = "±$0.00/t" if is_meal else ("±C$0/t" if unit != "¢" else "±0¢")
         return f'<span style="color:#94a3b8;font-weight:600">{zero_str}</span>'
     color  = "#16a34a" if val > 0 else "#dc2626"
     arrow  = "▲" if val > 0 else "▼"
     sign   = "+" if val > 0 else "−"
     adj    = ' <span style="font-size:9px;color:#94a3b8">adj</span>' if d.get("rolled") else ""
-    amount = f"${abs(val)/100:.2f}/t" if is_meal else f"{abs(val)}¢"
+    amount = f"${abs(val)/100:.2f}/t" if is_meal else (f"C${abs(val)}/t" if unit != "¢" else f"{abs(val)}¢")
     return (f'<span style="color:{color};font-weight:700">'
             f'<span style="font-size:9px">{arrow}</span>'
             f'{sign}{amount}{adj}</span>')
 
-def render_table(body_rows, spot_row, changes, spot_chg, loc_color, year_ago_label, is_meal=False):
+def render_table(body_rows, spot_row, changes, spot_chg, loc_color, year_ago_label, is_meal=False, unit="¢"):
     th = ("background:#f1f5f9;color:#64748b;font-size:9px;text-transform:uppercase;"
           "letter-spacing:.12em;padding:5px 12px;text-align:left;border-bottom:1px solid #e2e8f0;"
           "font-weight:700;white-space:pre;line-height:1.3;font-family:inherit")
@@ -657,11 +679,11 @@ def render_table(body_rows, spot_row, changes, spot_chg, loc_color, year_ago_lab
             f'{spot_row.futuresSymbol}</span></td>'
             f'<td style="{td_base};color:#0693e3;font-size:11px">{short_sym(spot_row.futuresSymbol)}</td>'
             f'<td style="{td_base}"><span style="color:{color};font-weight:800;font-size:16px;'
-            f'font-variant-numeric:tabular-nums">{fmt_basis(bc, is_meal)}</span></td>'
-            f'<td style="{td_base}">{delta_html(chgs.get("fromPrev"), is_meal)}</td>'
-            f'<td style="{td_base}">{delta_html(chgs.get("fromWeek"), is_meal)}</td>'
-            f'<td style="{td_base}">{delta_html(chgs.get("fromMonth"), is_meal)}</td>'
-            f'<td style="{td_base}">{delta_html(chgs.get("fromYear"), is_meal)}</td>'
+            f'font-variant-numeric:tabular-nums">{fmt_basis(bc, is_meal, unit)}</span></td>'
+            f'<td style="{td_base}">{delta_html(chgs.get("fromPrev"), is_meal, unit)}</td>'
+            f'<td style="{td_base}">{delta_html(chgs.get("fromWeek"), is_meal, unit)}</td>'
+            f'<td style="{td_base}">{delta_html(chgs.get("fromMonth"), is_meal, unit)}</td>'
+            f'<td style="{td_base}">{delta_html(chgs.get("fromYear"), is_meal, unit)}</td>'
             f'</tr>'
         )
         html += (f'<tr><td colspan="8" style="padding:2px 0">'
@@ -684,11 +706,11 @@ def render_table(body_rows, spot_row, changes, spot_chg, loc_color, year_ago_lab
             f'{row.futuresSymbol}</span></td>'
             f'<td style="{td_base};color:#64748b;font-size:11px">{short_sym(row.futuresSymbol)}</td>'
             f'<td style="{td_base}"><span style="color:{bc_color};font-weight:800;font-size:15px;'
-            f'font-variant-numeric:tabular-nums">{fmt_basis(bc, is_meal)}</span></td>'
-            f'<td style="{td_base}">{delta_html(chg.get("fromPrev"), is_meal)}</td>'
-            f'<td style="{td_base}">{delta_html(chg.get("fromWeek"), is_meal)}</td>'
-            f'<td style="{td_base}">{delta_html(chg.get("fromMonth"), is_meal)}</td>'
-            f'<td style="{td_base}">{delta_html(chg.get("fromYear"), is_meal)}</td>'
+            f'font-variant-numeric:tabular-nums">{fmt_basis(bc, is_meal, unit)}</span></td>'
+            f'<td style="{td_base}">{delta_html(chg.get("fromPrev"), is_meal, unit)}</td>'
+            f'<td style="{td_base}">{delta_html(chg.get("fromWeek"), is_meal, unit)}</td>'
+            f'<td style="{td_base}">{delta_html(chg.get("fromMonth"), is_meal, unit)}</td>'
+            f'<td style="{td_base}">{delta_html(chg.get("fromYear"), is_meal, unit)}</td>'
             f'</tr>'
         )
 
@@ -1625,7 +1647,7 @@ _admin = not _view_only()
 _tab_labels = ["🔔 Changes", "📈 Trends", "📊 Summary", "📋 Bids", "🚂 Rail FOB"]
 if _admin:
     _tab_labels.append("✏️ Rail Entry")      # admin: paste-in rail rundowns
-_tab_labels += ["🌊 River FOB", "🔀 Spread", "💵 Net Carry", "🗺️ Map"]
+_tab_labels += ["🌊 River FOB", "🔀 Spread", "💵 Net Carry", "🗺️ Map", "🌡️ Basis Maps"]
 if _admin:
     _tab_labels.append("📧 Client Reports")  # admin: personalized client basis emails
     _tab_labels.append("📥 Export")          # no download tab in the read-only build
@@ -1639,6 +1661,7 @@ tab_railfob  = _ti["🚂 Rail FOB"]
 tab_netcarry = _ti["💵 Net Carry"]
 tab_riverfob = _ti["🌊 River FOB"]
 tab_map      = _ti["🗺️ Map"]
+tab_bmaps    = _ti["🌡️ Basis Maps"]
 tab_summary  = _ti["📊 Summary"]
 tab_trends   = _ti["📈 Trends"]
 tab_spread   = _ti["🔀 Spread"]
@@ -2299,21 +2322,36 @@ with tab_railfob:
             _rows = []
             _spot_seen = set()                     # (market, date) with an explicit "Spot" row
             _mdate = {}                            # (market, date, commodity) -> [(period_order, bid)]
+            _mquotes = {}                          # (market, month, date, commodity) -> [(kind, bid)]
+            _fwd_cells = {}                        # (market, date) -> [(period, bid)] for the forward curve
             for _src in ("manual", "palmetto"):
                 for _r in _cached_rail_fob_all(_src):
-                    if _r.get("bid") is None:
-                        continue
+                    if _r.get("bid") is None or _fm.is_spread_note(_r["period"]):
+                        continue                  # a spread note's number is the spread, not a period's basis
                     _b = _seasonal_bucket(_r["period"])
-                    if _b:                      # None = not a tracked seasonal period
-                        _rows.append((_r["market"], _b, _r["date"], _r["bid"],
-                                      _r.get("commodity") or "Corn"))
+                    _rc = _r.get("commodity") or "Corn"
+                    if _b in _SEAS_MON:         # a month: the day's full / FH / LH bids become ONE value below
+                        _mquotes.setdefault((_r["market"], _b, _r["date"], _rc), []).append(
+                            (_fm.kind_of(_r["period"]), _r["bid"]))
+                    elif _b:                    # None = not a tracked seasonal period
+                        _rows.append((_r["market"], _b, _r["date"], _r["bid"], _rc, _r.get("bid_raw") == "est"))
                         if _b == "Spot":
                             _spot_seen.add((_r["market"], _r["date"]))
+                    if _b and _b != "Spot":     # the forward curve reads the posted label (a tracked package by its bucket name)
+                        _fwd_cells.setdefault((_r["market"], _r["date"]), []).append(
+                            (_r["period"] if _b in _SEAS_MON else _b, _r["bid"]))
                     # Keep every bid so live rundowns — which post named-month fronts, not a
                     # literal "Spot" row — still feed the Spot seasonal via a derived spot.
                     _po = _r.get("period_order")
-                    _mdate.setdefault((_r["market"], _r["date"], _r.get("commodity") or "Corn"),
+                    _mdate.setdefault((_r["market"], _r["date"], _rc),
                                       []).append((_po if _po is not None else 99, _r["bid"]))
+            # A month posted several ways on one day is ONE value (forward_month): its full-month
+            # bid; with none, the midpoint of FH and LH when both are posted, else the lone half.
+            # (Kolten 2026-10-20: Dec bid +16 must not chart as the +14.5 average with FH Dec.)
+            for (_m, _b, _d, _c), _qs in _mquotes.items():
+                _mv = _fm.month_value(_qs)
+                if _mv is not None:
+                    _rows.append((_m, _b, _d, _mv, _c, False))
             # Derived Spot = nearest-period bid, added only where no explicit "Spot" exists
             # (live rundowns after the SA-Master weekly-Spot history ends ~2026-08). Mirrors
             # the board/email spot series so the Spot chart stays continuous into the current
@@ -2324,11 +2362,11 @@ with tab_railfob:
                 _lst.sort(key=lambda t: t[0])
                 _sb = next((b for _o, b in _lst if b is not None), None)
                 if _sb is not None:
-                    _rows.append((_m, "Spot", _d, _sb, _c))
+                    _rows.append((_m, "Spot", _d, _sb, _c, False))
             if not _rows:
                 st.caption("No rail history archived yet — the seasonal chart fills in as postings are saved.")
                 return
-            _df = _pd.DataFrame(_rows, columns=["Market", "Period", "Date", "Bid", "Commodity"])
+            _df = _pd.DataFrame(_rows, columns=["Market", "Period", "Date", "Bid", "Commodity", "Est"])
 
             try:
                 from bt_rail_corridors import CORRIDOR_ORDER as _CO
@@ -2361,14 +2399,15 @@ with tab_railfob:
                 st.caption("Best fit")
                 _rfit = _yfit_radio("rail_seas_fit")
 
-            _sel = _pv[_pv["Period"] == _pd_sel][["Date", "Bid"]].copy()
+            _sel = _pv[_pv["Period"] == _pd_sel][["Date", "Bid", "Est"]].copy()
             _dts = _pd.to_datetime(_sel["Date"])
             _yr, _mo = _dts.dt.year, _dts.dt.month
             _sel["MktYearNum"] = _yr.where(_mo >= 9, _yr - 1)
             _sel["MktYear"] = _sel["MktYearNum"].apply(lambda y: f"{y}/{str(y + 1)[-2:]}")
             _sep1 = _pd.to_datetime(_sel["MktYearNum"].astype(str) + "-09-01")
             _sel["MktWeek"] = ((_dts - _sep1).dt.days // 7 + 1).clip(1, 52)
-            _sel = _sel.groupby(["MktYear", "MktYearNum", "MktWeek"], as_index=False)["Bid"].mean()
+            _sel = (_sel.groupby(["MktYear", "MktYearNum", "MktWeek"], as_index=False)
+                    .agg(Bid=("Bid", "mean"), Est=("Est", "max")))      # Est: any estimated posting in that week
             _sel["Bid"] = _sel["Bid"].round(1)
 
             _mx = int(_sel["MktYearNum"].max())
@@ -2404,42 +2443,51 @@ with tab_railfob:
             # 5-yr range band + average for THIS period — the five completed crop years
             # immediately before the CURRENT calendar marketing year (anchored to today,
             # not the corridor's max year, so recent gaps don't drag the band to old years).
+            # OLYMPIC AVERAGE (seasonal_band, Kolten 2026-10-20): each week's highest and lowest year
+            # are dropped before the average is taken, so one freak crop year
+            # (UP Allen Station / BN Hereford 2022/23) cannot drag it. The RANGE is not trimmed: lowest to highest of every year (Kolten 2026-10-26).
+            # The window is five years, three for the BN basis corridors (rail_corridors.band_years, Kolten
+            # 2026-10-21: "use the last 3 years for the BN corridors"; 2021/22-2022/23 were unusually tight at
+            # Hereford and the PNW). Under five years nothing is trimmed: the plain mean and the full range.
+            try:
+                from bt_rail_corridors import band_years as _band_years
+            except Exception:
+                _band_years = lambda _m: 5
+            _bw = _band_years(_mk)
             _rcur_my = date.today().year if date.today().month >= 9 else date.today().year - 1
-            _rwin_yrs = list(range(_rcur_my - 5, _rcur_my))
+            _rwin_yrs = list(range(_rcur_my - _bw, _rcur_my))
+            # A corridor whose estimated weeks are hidden (database.rail_estimates_shown) now starts at its first ACTUAL bid, mid-year: UP Allen Station's 2022/23 is 14 weeks of actual
+            # bids (+58 to +85) and is not one of the years behind its Spot band — it would lift June-August alone. Every other corridor keeps the whole calendar window.
+            try:
+                from bt_database import rail_estimates_shown as _rest
+                from bt_rail_corridors import estimate_hidden_note as _hid_note
+            except Exception:
+                _rest, _hid_note = (lambda: True), (lambda _m: "")
+            _hid_est = (not _rest()) and bool(_hid_note(_mk)) and _pd_sel == "Spot"
+            if _hid_est:
+                _rwin_yrs = _sband.full_years(_sel.groupby("MktYearNum")["MktWeek"].nunique().to_dict(), _rwin_yrs)
+            _nu = len(_rwin_yrs) if _hid_est else _bw             # the years behind the band that the labels and the caption count
+            _avg_lbl = f"{_nu}-yr Olympic avg" if _sband.is_trimmed(_nu) else f"{_nu}-yr avg"
             _rwin  = _sel[_sel["MktYearNum"].isin(_rwin_yrs)]
             _rband = (_rwin.groupby("MktWeek")["Bid"]
-                      .agg(avg="mean", lo="min", hi="max").reset_index())
+                      .agg(avg=_sband.olympic_avg, lo=_sband.range_lo, hi=_sband.range_hi).reset_index())
             _rbyrs = sorted(_rwin["MktYear"].unique())
 
-            # Forward curve = the corridor's LATEST full rundown, each period placed at its
-            # delivery-month week (dashed same-colour line over the historical band).
+            # Forward curve = the corridor's LATEST full rundown, each delivery month placed at
+            # its week (dashed same-colour line over the historical band). One value per month
+            # (forward_month, Kolten 2026-10-20): a month's full-month bid is the month; its
+            # FH / LH only when there is none (their midpoint when both are posted).
             _MON_WK = {"Sep": 1, "Oct": 5, "Nov": 10, "Dec": 14, "Jan": 18, "Feb": 23,
                        "Mar": 27, "Apr": 31, "May": 36, "Jun": 40, "Jul": 45, "Aug": 49}
             # A package bid is the AVERAGE across the months it spans; the forward curve
             # spreads it into a per-month carry — later months bid higher by _CARRY ¢/mo,
-            # centered so the months still average back to the package bid. E.g. JFM +0 →
-            # Jan −2 / Feb 0 / Mar +2; AMJJ +0 → Apr −3 / May −1 / Jun +1 / Jul +3.
-            _PKG_MON = {"OND": ["Oct", "Nov", "Dec"], "JFM": ["Jan", "Feb", "Mar"],
-                        "AM": ["Apr", "May"], "JJ": ["Jun", "Jul"],
-                        "AMJJ": ["Apr", "May", "Jun", "Jul"],
-                        "Jan-Jul": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"],
-                        "AS": ["Aug", "Sep"]}
+            # centered so the months still average back to the package bid — and it fills
+            # only the months nothing of their own names. E.g. JFM +0 → Jan −2 / Feb 0 /
+            # Mar +2; AMJJ +0 → Apr −3 / May −1 / Jun +1 / Jul +3.
             _CARRY = 2.0                                        # ¢ of carry per month
             _lastdate = _pv["Date"].max()
-            _rfw = []
-            for _, _rr in _pv[_pv["Date"] == _lastdate].iterrows():
-                if _rr["Bid"] is None:
-                    continue
-                _bk = _seasonal_bucket(_rr["Period"])
-                _bid = float(_rr["Bid"])
-                if _bk in _MON_WK:
-                    _rfw.append({"MktWeek": _MON_WK[_bk], "Bid": _bid})
-                elif _bk in _PKG_MON:
-                    _mons = _PKG_MON[_bk]
-                    _ctr = (len(_mons) - 1) / 2.0
-                    for _i, _m in enumerate(_mons):
-                        _rfw.append({"MktWeek": _MON_WK[_m],
-                                     "Bid": round(_bid + _CARRY * (_i - _ctr), 1)})
+            _rfw = [{"MktWeek": _MON_WK[_fm.ABBR[_m]], "Bid": _v}
+                    for _m, _v in _fm.rail_forward(_fwd_cells.get((_mk, _lastdate), ()), _CARRY).items()]
             # Today's marketing week — periods whose week has already passed this year roll
             # to the NEXT marketing year (a separate segment starting back at the Sep side).
             _t = date.today()
@@ -2520,7 +2568,7 @@ with tab_railfob:
                 _layers.append(
                     _alt.Chart(_rband).mark_line(color=_AVG_CLR, strokeDash=[8, 4], strokeWidth=3)
                     .encode(x=_alt.X("MktWeek:Q"), y=_alt.Y("avg:Q", scale=_ry_scale)))
-                _r_avg_end = _rband.nlargest(1, "MktWeek").assign(_lbl="5-yr avg")
+                _r_avg_end = _rband.nlargest(1, "MktWeek").assign(_lbl=_avg_lbl)
                 _layers.append(
                     _alt.Chart(_r_avg_end).mark_text(align="left", dx=6, fontSize=10,
                                                      fontWeight="bold", color=_AVG_CLR)
@@ -2559,7 +2607,7 @@ with tab_railfob:
                 + '&nbsp;&nbsp;<span style="font-weight:400;text-transform:none">'
                 + (f'<b style="color:#000">{_curr_yr} = black</b>' if _curr_yr else '')
                 + (f'  ·  <b style="color:#2563eb">{_prev_yr} = blue</b>' if _prev_yr else '')
-                + (f'  ·  <b style="color:#d97706">5-yr avg = amber dash</b>' if not _rband.empty else '')
+                + (f'  ·  <b style="color:#d97706">{_avg_lbl} = amber dash</b>' if not _rband.empty else '')
                 + '</span></div>', unsafe_allow_html=True)
             _rail_chart = _alt.layer(*_layers).properties(height=_H, padding=_CHART_PAD)
             st.altair_chart(_rail_chart, use_container_width=True)
@@ -2572,9 +2620,31 @@ with tab_railfob:
                 subtitleFontSize=11, subtitleColor="#64748b", anchor="start", offset=12))
             _chart_download_copy(_chart_png(_rail_export, width=1100, height=_H), _rail_fname,
                                  key=f"rail_seas_{_mk}_{_pd_sel}")
+            if _sband.is_trimmed(_nu):
+                _band_txt = (f"the {_nu}-yr average is Olympic (each week's highest and lowest year are dropped; a week with fewer than five years uses them all) and the gray band is the true range: "
+                             f"each week's lowest to highest of the last {_nu} completed crop years ({', '.join(f'{y}/{(y + 1) % 100:02d}' for y in _rwin_yrs)}).")
+            elif _nu:
+                _band_txt = (f"the {_nu}-yr average and the gray band are the plain mean and the min / max of the last {_nu} "
+                             f"completed crop years ({', '.join(f'{y}/{(y + 1) % 100:02d}' for y in _rwin_yrs)}) — "
+                             + ("the BN corridors' window; 2021/22-2022/23 were unusually tight." if _bw < 5
+                                else "every completed crop year with enough weekly bids."))
+            else:
+                _band_txt = "no completed crop year has enough weekly bids yet for an average and a gray band."
             st.caption(f"{int(_p_n[_pd_sel])} postings · weekly average where a period was posted more "
                        f"than once · partial windows fold into their month (FH/LH/Split Oct, "
-                       f"Oct 10-31, LH Oct/FH Nov → Oct) · the board keeps every period as posted.")
+                       f"Oct 10-31, LH Oct/FH Nov → Oct) · the board keeps every period as posted · " + _band_txt)
+            # Estimated weeks (bid_raw 'est' in the archive) behind the average and range — say so (UP Allen Station: Kolten 2026-10-21).
+            _n_est = int(_rwin["Est"].sum()) if not _rwin.empty else 0
+            if _n_est:
+                try:
+                    from bt_rail_corridors import estimate_note as _est_note
+                except Exception:
+                    _est_note = lambda _m: ""
+                st.caption(f"⚠ {_n_est} of the {len(_rwin)} weeks behind the {_nu}-yr average and range are ESTIMATES (flagged 'est' in the archive). "
+                           + (_est_note(_mk) or "They are not posted bids."))
+            # The estimated weeks are hidden for now (database.rail_estimates_shown; Kolten 2026-10-22): a corridor that has some says why its history is short.
+            if not _rest() and _hid_note(_mk):
+                st.caption("ℹ " + _hid_note(_mk) + ".")
 
         st.markdown(f'<div style="{_RF_BOARDHDR}">Seasonal Chart</div>', unsafe_allow_html=True)
         try:
@@ -2601,6 +2671,8 @@ with tab_railfob:
                 _mkt_dates.setdefault(_r["market"], set()).add(_r["date"])
 
             def _disp(num, raw):
+                if raw == "est":        # flags an ESTIMATED archive week (rail_corridors.EST_FLAG), not a typed cell: show the number
+                    raw = None
                 return raw if raw else (f"{num:+d}" if num is not None else None)
 
             def _bidoff_html(_cell, blue):
@@ -2611,7 +2683,9 @@ with tab_railfob:
                 if s == "?":
                     return f'<td style="{_TDR};color:#94a3b8">?</td>'
                 col = "color:#0693e3;font-weight:600" if blue else "color:#32373c;font-weight:700"
-                return f'<td style="{_TDR};{col}">{s}</td>'
+                _tag = (' <span style="font-size:9px;color:#d97706;font-weight:700">est</span>'
+                        if (not blue and _cell.get("bid_raw") == "est") else "")
+                return f'<td style="{_TDR};{col}">{s}{_tag}</td>'
 
             def _chg_html(cur_bid, prior_map, period, cur_fut=None):
                 if cur_bid is None or not prior_map or prior_map.get(period) is None:
@@ -2746,7 +2820,8 @@ with tab_railfob:
                     return ''
                 # Spot/front row = nearest period that actually carries a bid; it's what
                 # the year-ago column falls back onto (last year is weekly Spot-only).
-                _spot_cell = next((r for r in _cells if r.get("bid") is not None), None)
+                _spot_cell = next((r for r in _cells if r.get("bid") is not None
+                                   and not _fm.is_spread_note(r.get("period"))), None)
                 _rail = _cells[0].get("rail") or ""
                 _rcol = _railcolors.get(_rail, "#64748b")
                 _pd, _pw, _pmo, _pyr = _prior_maps(_m, _eff)
@@ -3351,6 +3426,7 @@ with tab_netcarry:
                     _nc_items = [
                         {"delivery": r["period"], "futures": r.get("futures"), "basis": r["bid"]}
                         for r in _g_rows if str(r["date"]) == _dsel and r.get("bid") is not None
+                        and not _fm.is_spread_note(r["period"])
                     ]
                     _nc_asof = _nc_date.fromisoformat(_dsel[:10])
                     _nc_title = _nc_mkt
@@ -4526,7 +4602,7 @@ with tab_bids:
 
             table_html = render_table(
                 body_rows, spot_row, changes, spot_chg, loc_color, year_ago_label,
-                is_meal=(grain == "Soybean Meal"),
+                is_meal=(grain == "Soybean Meal"), unit=_basis_unit(grain),
             )
             st.markdown(table_html, unsafe_allow_html=True)
 
@@ -4638,7 +4714,7 @@ with tab_bids:
                     .encode(
                         x=_alt.X("Delivery:N", sort=_fwd_order, title=None,
                                  axis=_alt.Axis(labelAngle=-30, labelFontSize=10)),
-                        y=_alt.Y("Basis:Q", title="Basis (¢)", scale=_alt.Scale(zero=False),
+                        y=_alt.Y("Basis:Q", title=f"Basis ({_basis_unit(grain)})", scale=_alt.Scale(zero=False),
                                  axis=_alt.Axis(labelFontSize=10)),
                         color=_alt.Color("Series:N",
                                          scale=_alt.Scale(domain=_dom, range=_rng),
@@ -4647,8 +4723,8 @@ with tab_bids:
                         tooltip=[
                             _alt.Tooltip("Series:N",   title="Date"),
                             _alt.Tooltip("Delivery:N", title="Delivery"),
-                            _alt.Tooltip("Basis:Q",    title="Basis (¢)"),
-                            _alt.Tooltip("Raw:Q",      title="Raw basis (¢)"),
+                            _alt.Tooltip("Basis:Q",    title=f"Basis ({_basis_unit(grain)})"),
+                            _alt.Tooltip("Raw:Q",      title=f"Raw basis ({_basis_unit(grain)})"),
                             _alt.Tooltip("Futures:N",  title="Futures"),
                         ],
                     )
@@ -4708,12 +4784,12 @@ with tab_bids:
                     .encode(
                         x=_alt.X("Date:T", title=None,
                                   axis=_alt.Axis(format="%b %d '%y", labelAngle=-30, labelFontSize=10)),
-                        y=_alt.Y("Basis:Q", title="Spot Basis (¢)",
+                        y=_alt.Y("Basis:Q", title=f"Spot Basis ({_basis_unit(grain)})",
                                  scale=_alt.Scale(zero=False),
                                  axis=_alt.Axis(labelFontSize=10)),
                         tooltip=[
                             _alt.Tooltip("Date:T",     format="%b %d, %Y", title="Date"),
-                            _alt.Tooltip("Basis:Q",    title="Basis (¢)"),
+                            _alt.Tooltip("Basis:Q",    title=f"Basis ({_basis_unit(grain)})"),
                             _alt.Tooltip("Contract:N", title="Futures"),
                             _alt.Tooltip("Delivery:N", title="Delivery"),
                         ],
@@ -4808,7 +4884,7 @@ with tab_bids:
                             _fmy = _fym[0] if _fym[1] >= 9 else _fym[0] - 1
                             _fwk = ((date(_fym[0], _fym[1], 1) - date(_fmy, 9, 1)).days // 7) + 1
                             _fwd_pts.append({"MktYearNum": _fmy, "MktWeek": max(1, min(52, _fwk)),
-                                             "Basis": float(_fr.basisCents)})
+                                             "Basis": float(_fr.basisCents), "Kind": _fm.kind_of(_dm)})
                             _present.setdefault(_fmy, set()).add(_fym[1])
                         elif re.search(r"fall", _dm, re.I) and _fr.futuresSymbol[-2:].isdigit():
                             # "Fall" bid = an October delivery; crop year from the ref symbol.
@@ -4822,13 +4898,16 @@ with tab_bids:
                                 continue
                             _wk = ((date(_fy, _mo, 1) - date(_fy, 9, 1)).days // 7) + 1
                             _fwd_pts.append({"MktYearNum": _fy, "MktWeek": max(1, min(52, _wk)),
-                                             "Basis": _fb})
+                                             "Basis": _fb, "Kind": "full"})
                             _present.setdefault(_fy, set()).add(_mo)
-                    _df_fwdc = _pd.DataFrame(_fwd_pts)
-                    if not _df_fwdc.empty:
-                        _df_fwdc = (_df_fwdc.sort_values("MktWeek")
-                                    .groupby(["MktYearNum", "MktWeek"], as_index=False)["Basis"].mean())
-                        _df_fwdc["Basis"] = _df_fwdc["Basis"].round(1)
+                    # One value per delivery month (forward_month): a full-month bid is the month;
+                    # FH / LH only when there is none (their midpoint when both are posted).
+                    _fwd_one = _fm.pick_months(((_p["MktYearNum"], _p["MktWeek"]), _p["Kind"], _p["Basis"])
+                                               for _p in _fwd_pts)
+                    _df_fwdc = _pd.DataFrame(
+                        [{"MktYearNum": _k[0], "MktWeek": _k[1], "Basis": round(_v, 1)}
+                         for _k, _v in sorted(_fwd_one.items())],
+                        columns=["MktYearNum", "MktWeek", "Basis"])
 
                     # Month labels (Sep–Aug marketing year) instead of raw week numbers.
                     # One tick at each month's first week.
@@ -4846,12 +4925,12 @@ with tab_bids:
                     if not _df_fwdc.empty:
                         _yvals += list(_df_fwdc["Basis"])
                     _y_scale = _yfit_scale(_yvals, _bfit)
-                    _y_s = _alt.Y("Basis:Q", title="Basis (¢)", scale=_y_scale,
+                    _y_s = _alt.Y("Basis:Q", title=f"Basis ({_basis_unit(grain)})", scale=_y_scale,
                                   axis=_alt.Axis(labelFontSize=10, grid=True, gridColor="#eef2f6"))
                     _tip_s = [
                         _alt.Tooltip("MktYear:N", title="Mkt Year"),
                         _alt.Tooltip("MktWeek:Q", title="Week"),
-                        _alt.Tooltip("Basis:Q",   title="Basis (¢)"),
+                        _alt.Tooltip("Basis:Q",   title=f"Basis ({_basis_unit(grain)})"),
                     ]
 
                     _SEAS_H = 560
@@ -4905,7 +4984,7 @@ with tab_bids:
                     if not _band.empty:
                         _s_layers.append(
                             _alt.Chart(_band).mark_area(color="#9ca3af", opacity=0.22)
-                            .encode(x=_x_s, y=_alt.Y("lo:Q", title="Basis (¢)",
+                            .encode(x=_x_s, y=_alt.Y("lo:Q", title=f"Basis ({_basis_unit(grain)})",
                                                      scale=_y_scale), y2="hi:Q"))
                     # Older marketing years — faded thin context lines behind the heroes.
                     if not _hist_old.empty:
@@ -4947,7 +5026,7 @@ with tab_bids:
                             _cur_fwd = _pd.concat([_anch, _cur_fwd]).sort_values("MktWeek")
                         _nxt_fwd = _df_fwdc[_df_fwdc["MktYearNum"] == _max_yr + 1][["MktWeek", "Basis"]]
                         _fwd_tip = [_alt.Tooltip("MktWeek:Q", title="Week"),
-                                    _alt.Tooltip("Basis:Q", title="Fwd basis (¢)", format=".0f")]
+                                    _alt.Tooltip("Basis:Q", title=f"Fwd basis ({_basis_unit(grain)})", format=".0f")]
                         for _seg in (_cur_fwd, _nxt_fwd):
                             if _seg is not None and not _seg.empty:
                                 _s_layers += [
@@ -5070,6 +5149,8 @@ with tab_map:
     if tab_map.open:
         import pydeck as pdk
         import pandas as pd
+        import bt_heat_layer as _heat
+        import bt_map_basis as _mb
 
         # Pins are colored by Location Type (facility_type).
         _FTYPE_COLORS = {
@@ -5165,7 +5246,9 @@ with tab_map:
                         if any(_map_base_commodity(b["grain"]) == sel_commodity for b in r["bids"])]
 
             def _fmt_basis(cents):
-                return "—" if cents is None else f"{'+' if cents >= 0 else ''}{cents}c"
+                if cents is None:
+                    return "—"
+                return f"{'+' if cents >= 0 else ''}{cents}" + (" C$/t" if sel_commodity == "Canola" else "c")      # canola: as quoted, C$/t
 
             def _tooltip_text(row):
                 bid = _map_loc_bid(row)
@@ -5175,15 +5258,56 @@ with tab_map:
                 fut = f" ({fut})" if fut else ""
                 return f"{row['location']}  |  {_fmt_basis(bid['basis'])}{fut}"
 
+            # ── Pin colors (map_basis.py): the location type, or the basis in the tooltip relative to the pins shown ──
+            pin_mode = st.radio("Pin colors", ["Location type", "Basis"], horizontal=True, key="map_pin_mode",
+                                help="Basis: the bid in the tooltip (the commodity and delivery month above) sets the color: green where it is stronger than most of the pins shown, purple where it is weaker.")
+            _pin_unit = " C$/t" if sel_commodity == "Canola" else "c"
+            _bid_basis = {id(r): (_map_loc_bid(r) or {}).get("basis") for r in filtered}
+            _basis_scale = _mb.scale(list(_bid_basis.values())) if pin_mode == "Basis" else None
+
+            def _pin_color(r):
+                if _basis_scale:
+                    return _mb.color(_bid_basis[id(r)], _basis_scale)
+                return _FTYPE_COLORS.get(r.get("facility_type"), _DEFAULT_COLOR)
+
             df = pd.DataFrame([
                 {
                     "lat":     r["lat"],
                     "lon":     r["lon"],
                     "tooltip": _tooltip_text(r),
-                    "color":   _FTYPE_COLORS.get(r.get("facility_type"), _DEFAULT_COLOR),
+                    "color":   _pin_color(r),
                 }
                 for r in filtered
             ])
+
+            # ── Production heat (heat_layer.py): NASS county production under the pins ─────────────────
+            heat_layers, heat_note, heat_palette, heat_pins = [], None, "Heat", True
+            _pin_edge = {"stroked": True, "get_line_color": [70, 70, 70, 170], "line_width_min_pixels": 1} if _basis_scale else {}      # a grey pin needs an edge on a light map
+            if _heat.available():
+                hc1, hc2, hc3, hc4, hc5 = st.columns([1.5, 1, 1.4, 1.1, 0.8])
+                with hc1:
+                    heat_on = st.checkbox("🔥 Production heat", key="map_heat_on",
+                                          help="NASS county production for the commodity above, drawn under the pins: where the crop is grown. Counties NASS withheld are filled from their share of "
+                                               "their state in earlier years, so every state adds up to NASS's total.")
+                _hy = _heat.years(sel_commodity) if heat_on and sel_commodity in _heat.CROPS else []
+                if _hy:
+                    if st.session_state.get("map_heat_year") not in _hy:
+                        st.session_state["map_heat_year"] = _hy[0]
+                    with hc2:
+                        heat_year = st.selectbox("Crop year", _hy, key="map_heat_year")
+                    with hc3:
+                        heat_km = st.slider("Smoothing (km)", 40, 300, 150, 10, key="map_heat_km")
+                    with hc4:
+                        heat_palette = st.radio("Colors", list(_heat.PALETTES), horizontal=True, key="map_heat_palette")
+                    with hc5:
+                        heat_pins = st.checkbox("Pins", value=True, key="map_heat_pins", help="Untick to see the production heat on its own.")
+                    _hp = _heat.points(sel_commodity, heat_year)
+                    if len(_hp):
+                        heat_layers = [_heat.layer(_hp, _heat.radius_px(heat_km), heat_palette)]
+                        _pin_edge = {"stroked": True, "get_line_color": [255, 255, 255], "line_width_min_pixels": 1}      # pins keep their own colors on any heat
+                    heat_note = _heat.describe(sel_commodity, heat_year, heat_km, _heat.summary(sel_commodity, heat_year))
+                elif heat_on:
+                    st.caption(f"No production layer for {sel_commodity} (corn, soybeans and wheat only).")
 
             layer = pdk.Layer(
                 "ScatterplotLayer",
@@ -5195,10 +5319,11 @@ with tab_map:
                 radius_max_pixels=18,
                 pickable=True,
                 auto_highlight=True,
+                **_pin_edge,
             )
             view = pdk.ViewState(latitude=39.5, longitude=-98.35, zoom=3.8, pitch=0)
             deck = pdk.Deck(
-                layers=[layer],
+                layers=heat_layers + ([layer] if heat_pins else []),
                 initial_view_state=view,
                 tooltip={"text": "{tooltip}"},
                 map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -5206,7 +5331,7 @@ with tab_map:
             st.pydeck_chart(deck, use_container_width=True)
 
             # ── Legend by Location Type (only types present in the view) ──────────
-            _ftypes_shown = sorted({r["facility_type"] for r in filtered if r.get("facility_type")})
+            _ftypes_shown = [] if _basis_scale else sorted({r["facility_type"] for r in filtered if r.get("facility_type")})
             legend_parts = []
             for ft in _ftypes_shown:
                 c = _FTYPE_COLORS.get(ft, _DEFAULT_COLOR)
@@ -5221,7 +5346,80 @@ with tab_map:
                 '<div style="padding:8px 0;margin-top:4px">' + "".join(legend_parts) + "</div>",
                 unsafe_allow_html=True,
             )
+            if pin_mode == "Basis":
+                if _basis_scale:
+                    st.markdown(_mb.legend_html(_basis_scale, _pin_unit), unsafe_allow_html=True)
+                st.caption(_mb.describe(_basis_scale, sel_commodity, sel_deliv, sum(1 for _v in _bid_basis.values() if _v is None), _pin_unit))
             st.caption(f"{len(filtered)} locations shown  •  geocoding may be incomplete — run `python geocode_locations.py` to fill gaps")
+            if heat_note:
+                st.markdown(_heat.legend_html(heat_palette), unsafe_allow_html=True)
+                st.caption(heat_note)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB: BASIS MAPS  (basis_map.py: AgManager-style surface of today's basis and its deviation)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_bmaps:
+    if tab_bmaps.open:
+        import bt_basis_map as _bm
+        if not _bm.available():
+            st.info("The map outlines (data/maps/us_geometry.json.gz) are not in this copy of the app, so the basis maps cannot be drawn.")
+        else:
+            from bt_rail_corridors import today_ct as _today_ct
+            _bmd = _cached_get_map_data()
+            _bm_types = sorted({r["facility_type"] for r in _bmd if r.get("facility_type")})
+            st.caption("Today's basis between the bids, and how far it is from a baseline: where basis is strong or weak, and where it has moved. Blue is stronger, red weaker; "
+                       "purple is above the baseline, brown below. Each colour class is a tenth of the mapped area.")
+            bm1, bm2, bm3 = st.columns([1, 1.3, 1.7])
+            with bm1:
+                bm_crop = st.selectbox("Commodity", list(_bm.COMMODITIES), key="bm_crop")
+            with bm2:
+                if st.session_state.get("_bm_last_crop") != bm_crop:                                  # a new commodity opens on its own region (wheat: its own states)
+                    st.session_state["_bm_last_crop"] = bm_crop
+                    st.session_state["bm_region"] = _bm.default_region(bm_crop)
+                bm_region = st.selectbox("Region", list(_bm.REGIONS) + ["Custom states"], key="bm_region")
+            with bm3:
+                bm_types = st.multiselect("Location type (the basis map)", _bm_types, default=["Country Elevator"] if "Country Elevator" in _bm_types else [], key="bm_types",
+                                          placeholder="All types",
+                                          help="Which kinds of location's bids make the surface. Country elevators are the default: a crush plant or river terminal bids at a different level, "
+                                               "and mixing them makes bumps around the plants. The 3-year and last-year comparisons always use every type, because the history files hold plants and terminals.")
+            bm4, bm5 = st.columns([1.3, 2.7])
+            _bm_opts = _bm.baselines_for(bm_crop)
+            if st.session_state.get("bm_base") not in _bm_opts:                                       # wheat has only the 30 / 7-day comparisons: never keep a choice it cannot show
+                st.session_state["bm_base"] = _bm_opts[0]
+            with bm4:
+                bm_base = st.selectbox("Compare with", _bm_opts, format_func=lambda k: _bm.BASELINES[k], key="bm_base",
+                                       help="The right-hand map is today's basis minus this. The 3-year average (the same days of the last three years) rests on the few dozen locations with that history; "
+                                            "30 and 7 days ago use every location, against the same futures contract.")
+            with bm5:
+                if bm_region == "Custom states":
+                    bm_states = st.multiselect("States", sorted(_bm.geometry()["states"]), default=["NE", "KS"], key="bm_states")
+                else:
+                    bm_states = _bm.REGIONS[bm_region]
+            _bm_asof = _today_ct()
+            if not bm_states:
+                st.info("Pick at least one state.")
+            else:
+                with st.spinner("Drawing the maps…"):
+                    _bm_r = _cached_basis_maps(bm_crop, tuple(bm_states), tuple(sorted(bm_types)), bm_base, _bm_asof.isoformat())
+                if _bm_r.get("error"):
+                    st.warning(_bm_r["error"])
+                else:
+                    st.image(_bm_r["png"], use_container_width=True)
+                    _bm_notes = [f"{_bm_r['n_level']:,} bids quoted against {_bm_r['symbol']}" + (f"; {_bm_r['n_other']:,} quoted against another contract are left out." if _bm_r["n_other"] else ".")] if _bm_r["symbol"] else ["No bids in these states for the location types picked."]
+                    if _bm_r["n_level"] < 80 and bm_types:
+                        _bm_notes.append("Few bids in these states for the location types picked, so much of the map is blank: clear the Location type box to use every type and fill it in.")
+                    if bm_base in ("30d", "7d"):
+                        _bm_notes.append(f"The right-hand map compares the {_bm_r['n_dev']:,} locations that had a bid both then and now, against the same futures contract.")
+                    if bm_base in ("3yr", "1yr"):
+                        _bm_notes.append(f"The deviation rests on {_bm_r['n_dev']:,} locations with {'two or more years of history' if bm_base == '3yr' else 'history from last year'} for these days "
+                                         f"({', '.join(str(y) for y in _bm_r['dev_years']) or 'none found'}), mostly plants and terminals, because the daily scrape of country elevators began in June 2026: "
+                                         "a broad regional picture, with the locations shown as dots.")
+                    if "Wheat" in bm_crop:
+                        _bm_notes.append("Wheat bids are sorted by the futures market they are quoted against (Chicago for soft red winter, Kansas City for hard red winter); spring wheat has too few bids to map. "
+                                         "The tracker holds no wheat before June 2026, so wheat compares with 30 or 7 days ago only.")
+                    st.caption("  \n".join(_bm_notes))
+                    if not _view_only():
+                        st.download_button("⬇️ Download PNG", _bm_r["png"], file_name=f"{bm_crop.lower()}_basis_maps_{_bm_asof.isoformat()}.png", mime="image/png", key="bm_dl")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB: SUMMARY
@@ -5390,7 +5588,7 @@ with tab_summary:
         # $/ton; corn/soy/wheat stay as cents/bushel.
         _is_meal = (_sgrain == "Soybean Meal")
         _mdiv    = 100.0 if _is_meal else 1.0
-        _unit    = "$/t" if _is_meal else "¢"
+        _unit    = "$/t" if _is_meal else _basis_unit(_sgrain)          # canola: C$/t, read back as quoted (grain_units)
 
         # ── Apply filters ─────────────────────────────────────────────────────────
         _sfilt = [
@@ -6267,7 +6465,8 @@ with tab_spread:
                 if _fym:
                     _fmy = _fym[0] if _fym[1] >= 9 else _fym[0] - 1
                     _wk = max(1, min(52, ((date(_fym[0], _fym[1], 1) - date(_fmy, 9, 1)).days // 7) + 1))
-                    _rws.append({"MktYearNum": _fmy, "MktWeek": _wk, "Basis": float(_fr.basisCents)})
+                    _rws.append({"MktYearNum": _fmy, "MktWeek": _wk, "Basis": float(_fr.basisCents),
+                                 "Kind": _fm.kind_of(_fr.deliveryMonth or "")})
                     _present.setdefault(_fmy, set()).add(_fym[1])
                 elif re.search(r"fall", _fr.deliveryMonth or "", re.I) and _fr.futuresSymbol[-2:].isdigit():
                     _fall.append((2000 + int(_fr.futuresSymbol[-2:]), float(_fr.basisCents)))
@@ -6276,12 +6475,16 @@ with tab_spread:
                     if _mo in _present.get(_fy, set()):
                         continue
                     _wk = max(1, min(52, ((date(_fy, _mo, 1) - date(_fy, 9, 1)).days // 7) + 1))
-                    _rws.append({"MktYearNum": _fy, "MktWeek": _wk, "Basis": _fbv})
+                    _rws.append({"MktYearNum": _fy, "MktWeek": _wk, "Basis": _fbv, "Kind": "full"})
                     _present.setdefault(_fy, set()).add(_mo)
-            _df = _pd.DataFrame(_rws)
-            if _df.empty:
-                return _df
-            return _df.groupby(["MktYearNum", "MktWeek"], as_index=False)["Basis"].mean()
+            if not _rws:
+                return _pd.DataFrame()
+            # One value per delivery month (forward_month): a full-month bid is the month; FH / LH
+            # only when there is none (their midpoint when both are posted).
+            _one = _fm.pick_months(((_p["MktYearNum"], _p["MktWeek"]), _p["Kind"], _p["Basis"]) for _p in _rws)
+            return _pd.DataFrame([{"MktYearNum": _k[0], "MktWeek": _k[1], "Basis": _v}
+                                  for _k, _v in sorted(_one.items())],
+                                 columns=["MktYearNum", "MktWeek", "Basis"])
 
         def _spread_fwd_side(_pair, _grain):
             # (date of the newest forward curve, its delivery-month quotes) for one side: a corridor's latest
@@ -6393,10 +6596,11 @@ with tab_spread:
                         _latest = _mrg.sort_values("Date").iloc[-1]
                         _a_short = _a_lbl.split(" · ")[-1]
                         _b_short = _b_lbl.split(" · ")[-1]
+                        _spu = "¢" if _basis_unit(_sg) == "¢" else " " + _basis_unit(_sg)       # canola: "−5 C$/t"
                         st.markdown(
                             f'<div style="font-size:13px;color:#1e293b;margin:2px 0 6px">Latest spread '
                             f'(<b>{_latest["Date"]:%b %d, %Y}</b>): '
-                            f'<b style="font-size:16px">{_latest["Spread"]:+.0f}¢</b> '
+                            f'<b style="font-size:16px">{_latest["Spread"]:+.0f}{_spu}</b> '
                             f'<span style="color:#64748b">({_a_short} {_latest["A"]:+.0f} − '
                             f'{_b_short} {_latest["B"]:+.0f})</span></div>', unsafe_allow_html=True)
 
@@ -6411,7 +6615,7 @@ with tab_spread:
                         if not _fwd.empty:
                             _yvals += list(_fwd["Spread"])
                         _yscale = _yfit_scale(_yvals, _spfit, pad_frac=0.10)
-                        _y_s = _alt.Y("Spread:Q", title="Spread (¢)", scale=_yscale,
+                        _y_s = _alt.Y("Spread:Q", title=f"Spread ({_basis_unit(_sg)})", scale=_yscale,
                                       axis=_alt.Axis(labelFontSize=10, grid=True, gridColor="#eef2f6"))
 
                         _SEAS_H = 520
@@ -6433,7 +6637,7 @@ with tab_spread:
                         if not _band.empty:
                             _layers.append(
                                 _alt.Chart(_band).mark_area(color="#c4d7bd", opacity=0.55)
-                                .encode(x=_x_s, y=_alt.Y("lo:Q", title="Spread (¢)", scale=_yscale),
+                                .encode(x=_x_s, y=_alt.Y("lo:Q", title=f"Spread ({_basis_unit(_sg)})", scale=_yscale),
                                         y2="hi:Q"))
                             _layers.append(
                                 _alt.Chart(_band).mark_line(color="#4b6a4b", strokeDash=[8, 4],
@@ -6450,7 +6654,7 @@ with tab_spread:
                         if not _cur.empty:
                             _tip = [_alt.Tooltip("MktYear:N", title="Mkt Year"),
                                     _alt.Tooltip("MktWeek:Q", title="Week"),
-                                    _alt.Tooltip("Spread:Q", title="Spread (¢)")]
+                                    _alt.Tooltip("Spread:Q", title=f"Spread ({_basis_unit(_sg)})")]
                             _layers.append(
                                 _alt.Chart(_cur).mark_line(strokeWidth=4, color="#111827")
                                 .encode(x=_x_s, y=_y_s, tooltip=_tip))
@@ -6508,7 +6712,7 @@ with tab_spread:
                         _chart_download_copy(_chart_png(_sp_export, width=1100, height=_SEAS_H),
                                              _sp_fname, key=f"spread_{_a_lbl}_{_b_lbl}_{_sg}")
                         st.caption(f"{len(_mrg)} overlapping posting dates · 5-yr window {_rng_txt} · "
-                                   "spread in ¢/bu (front-month spot basis).")
+                                   f"spread in {'C$/t' if _sg == 'Canola' else '¢/bu'} (front-month spot basis).")
                         if _has_rail:
                             st.caption("A rail corridor's line is its posted basis — the weekly Spot sheets through "
                                        "mid-2026, its nearest forward bid since — against the contract it is quoted "
@@ -6628,7 +6832,7 @@ if not _view_only():
                                  if (lbl, sub) in _df.columns]
                         _df = _df[_cols]
                         st.caption(f"{len(_df)} dates × {len(_sel_lbls)} location(s) · grain "
-                                   f"**{_xgrain}** · delivery **{_deliv_choice}** · basis in ¢/bu.")
+                                   f"**{_xgrain}** · delivery **{_deliv_choice}** · basis in {'C$/t' if _xgrain == 'Canola' else '¢/bu'}.")
                         st.dataframe(_df, use_container_width=True, height=340)
                         if _view_only():
                             st.caption("🔒 Downloads are disabled in this read-only view.")

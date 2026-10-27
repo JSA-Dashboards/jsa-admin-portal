@@ -54,6 +54,61 @@ CORRIDORS = [
 ]
 RAIL_BY_CORRIDOR = {n: r for n, r in CORRIDORS}
 CORRIDOR_ORDER   = {n: i for i, (n, _) in enumerate(CORRIDORS)}
+
+# How many completed crop years the seasonal charts' average and range look back, by carrier. Kolten 2026-10-21: "use the last 3 years for the BN corridors" — 2021/22 and 2022/23 were
+# unusually tight at Hereford and the PNW (crop-year means 150 / 160 against 100-108 since), so the five-year benchmark sat ~14c above what is posted. Three years is below the Olympic
+# average's five-year minimum (seasonal_band.MIN_YEARS), so a BN chart shows the plain mean and the full range of its last three. Freight ($/car, not a basis) keeps five.
+BAND_YEARS_DEFAULT = 5
+BAND_YEARS_BY_RAIL = {"BNSF": 3}
+
+
+def band_years(market: str) -> int:
+    """Completed crop years behind a corridor's seasonal average and range (3 for the BN basis corridors, else 5)."""
+    name = market or ""
+    if name.endswith("Freight") or "Shuttle" in name:
+        return BAND_YEARS_DEFAULT
+    rail = RAIL_BY_CORRIDOR.get(name) or ("BNSF" if name.startswith("BN ") else None)
+    return BAND_YEARS_BY_RAIL.get(rail, BAND_YEARS_DEFAULT)
+
+
+# An archive week that is an ESTIMATE rather than a posted bid carries bid_raw = 'est' (the same column that holds the desk's '?'; 'est' is never shown as text — the board
+# and the email show the number with a small "est" tag, the seasonal charts count the flagged weeks). What the flag means, per corridor, for the charts' caption.
+EST_FLAG = "est"
+ESTIMATE_NOTE = {
+    "UP Illinois (Mex)": ("UP Allen Station (Mex): the actual Allen Station UP bids (Corn Basis master) begin 2023-05-31; earlier weeks, and the weeks since with no "
+                          "bid, are 'Est Mexico Allen' (Group 3 + 20)."),
+    "UP Illinois (Dom)": ("UP Allen Station (Dom): from 2023 on it is Allen Station (Mex) less 5¢ (a rule, not posted Dom bids); the weeks flagged 'est' are those before "
+                          "2023 (Group 3 + 10) and those whose Mexico week is itself an estimate."),
+}
+
+
+ESTIMATE_SHORT = {"UP Illinois (Mex)": "actual Allen Station bids start May 2023; earlier = Est Mexico Allen (Group 3 + 20)",
+                  "UP Illinois (Dom)": "from 2023 = Allen Station (Mex) less 5c (a rule, not posted bids); earlier = Group 3 + 10"}
+
+
+def estimate_note(market: str) -> str:
+    """Caption for a corridor whose archive holds estimated weeks ('' when it has none flagged)."""
+    return ESTIMATE_NOTE.get(market, "")
+
+
+def estimate_short(market: str) -> str:
+    """The same in a line short enough for a chart subtitle."""
+    return ESTIMATE_SHORT.get(market, "")
+
+
+# The estimated weeks are HIDDEN for now (database.get_rail_fob_all & co. leave bid_raw 'est' out; Kolten 2026-10-22: "hide data that is pure estimate at least for now"), so a chart
+# that stops at the first actual bid says why instead of flagging weeks it no longer draws.
+ESTIMATE_HIDDEN = {
+    "UP Illinois (Mex)": "Allen Station's actual bids begin May 2023; the estimated weeks before it (Group 3 + 20) are not shown",
+    "UP Illinois (Dom)": "from 2023 on it is Allen Station (Mex) less 5c (a rule, not posted bids); the estimated weeks before it (Group 3 + 10) are not shown",
+}
+
+
+def estimate_hidden_note(market: str) -> str:
+    """Why a corridor's history is short while its estimated weeks are hidden ('' for a corridor with none)."""
+    return ESTIMATE_HIDDEN.get(market, "")
+
+
 _ALIASES = {"bncn sellers": "BN Hereford"}
 
 
