@@ -12,6 +12,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import brazil_board
+import brazil_card
 import settlement_bank
 import stocks_use
 import trend_board
@@ -19,7 +21,7 @@ from ai_chat import run_chat
 from hl_model import render_hl_tab
 from legacy_history import get_legacy_series, load_legacy_history
 from massive_api import (MassiveApiError, get_daily_bars_many, get_front_contracts, get_futures_curve,
-                         get_prices, get_settlement_histories)
+                         get_fx_history, get_prices, get_settlement_histories)
 from report_dates import NASS_2021_FALLBACK, ReportDatesError, get_nass_dates, get_wasde_dates
 from table_png import table_png_button
 
@@ -244,9 +246,11 @@ def figure_png(fig_json: str) -> bytes | None:
         return None
 
 
-def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, table: dict | None = None):
+def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, table: dict | None = None,
+               extra=None):
     """Copy + CSV, plus PNG for a chart (`fig`) or for a styled table (`table`: a dict with the
-    pandas "styler" to snapshot and an optional "title" and "note" to put around it)."""
+    pandas "styler" to snapshot and an optional "title" and "note" to put around it). `extra` is
+    called inside the row to add one more button, for an export that isn't either of those."""
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
         tsv = frame.to_csv(sep="\t", index=False)
@@ -259,6 +263,8 @@ def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, table: di
             wm = watermark_path()
             table_png_button(table["styler"], filename, key, table.get("title", ""),
                              table.get("note", ""), watermark_uri=watermark_uri(wm) if wm else None)
+        if extra is not None:
+            extra()
         if fig is not None:
             if st.button("PNG", key=f"png_btn_{key}", width=90,
                          help="Render this chart as a PNG for download."):
@@ -1891,6 +1897,89 @@ def render_trends(api_key: str, as_of: date):
             st.warning(f"{commodity['label']}: {error}")
 
 
+# ── Brazil: CBOT futures valued in reais ─────────────────────────────────────
+BRAZIL_LOGO_FILE = "logo-wordmark.png"
+
+
+@st.cache_data(ttl="6h", show_spinner=False)
+def load_usd_brl(api_key: str, as_of: str) -> pd.Series:
+    """USD/BRL daily closes from a little before the chart opens, so its first week has a rate."""
+    return get_fx_history("C:USDBRL", api_key, brazil_board.START - timedelta(days=14),
+                          date.fromisoformat(as_of))
+
+
+def load_brazil_histories(code: str, api_key: str, as_of: date,
+                          bank: dict) -> dict[tuple[str, int], pd.Series]:
+    """Settlements of every contract that has been the front month since the chart opened, from
+    the settlement bank where it is complete for that contract and from Massive where it isn't
+    (no bank here, or a contract the bank has fallen behind on)."""
+    histories: dict[tuple[str, int], pd.Series] = {}
+    behind: dict[tuple[str, int], pd.Series] = {}
+    ask_massive: list[tuple[str, int, str]] = []
+    for letter, year, ticker in brazil_board.contract_tickers(code, brazil_board.START, as_of):
+        series = banked_series(bank, code, letter, year)
+        # Complete means reaching to within a few days of the contract's last trading day (an
+        # expiring month often has no bar in its final sessions, in the bank and on Massive
+        # alike), or the last few days if it is still trading: a weekend or holiday is fine, a
+        # missed job isn't.
+        needed = min(brazil_board.last_trade_day(letter, year) - timedelta(days=5),
+                     as_of - timedelta(days=BANK_FRESH_DAYS))
+        if series is not None and series.index[-1] >= needed:
+            histories[(letter, year)] = series
+            continue
+        if series is not None:
+            behind[(letter, year)] = series
+        ask_massive.append((letter, year, ticker))
+    if ask_massive:
+        fetched = load_trend_analogs(tuple(t for _, _, t in ask_massive), api_key, as_of.isoformat())
+        for letter, year, ticker in ask_massive:
+            got = fetched.get(ticker)
+            if got is not None and len(got):
+                histories[(letter, year)] = got
+            elif (letter, year) in behind:      # better a short history than a hole
+                histories[(letter, year)] = behind[(letter, year)]
+    return histories
+
+
+def render_brazil(api_key: str, as_of: date):
+    st.markdown("##### Brazil")
+    st.caption(
+        "CBOT front-month futures valued in Brazilian reais: the Chicago price times USD/BRL, which "
+        "is the price a Brazilian farmer sees. Weekly closes since January 2025, to the last "
+        "completed session."
+    )
+    iso = as_of.isoformat()
+    with st.spinner("Loading the Brazil charts…"):
+        bank = load_settlement_bank(iso)
+        try:
+            usd_brl = load_usd_brl(api_key, iso)
+        except MassiveApiError as e:
+            st.error(f"Couldn't load USD/BRL: {e}")
+            return
+        weekly = {}
+        for code in brazil_board.MARKETS:
+            histories = load_brazil_histories(code, api_key, as_of, bank)
+            front = brazil_board.front_month(code, histories, brazil_board.START, as_of)
+            weekly[code] = brazil_board.weekly_points(front, usd_brl, before=as_of)
+
+    logo = watermark_uri(asset(BRAZIL_LOGO_FILE))
+    mark = watermark_path()
+    mark_uri = watermark_uri(mark) if mark else None
+    for code, market in brazil_board.MARKETS.items():
+        summary = brazil_board.summarize(weekly[code], market)
+        if summary is None:
+            st.warning(f"{market.name}: not enough settlements and exchange rates on file to draw the chart.")
+            continue
+        card_html, hover = brazil_card.build_card(
+            weekly[code], summary, logo_uri=logo, watermark_uri=mark_uri,
+            source=brazil_board.source_note(market), year=as_of.year)
+        brazil_card.show_card(card_html, hover, key=code)
+        filename = f"jsa_brazil_{market.crop}_reais_{summary.latest_date:%Y%m%d}"
+        export_row(brazil_board.export_frame(weekly[code]), filename, key=f"brazil_{code}",
+                   extra=lambda: brazil_card.png_button(card_html, filename, code))
+    st.caption(history_source_note(bank))
+
+
 def refresh_prices():
     # Quotes only: settlement history is cached for hours on purpose and re-pulling it takes minutes.
     for loader in (load_curve, _load_trend_prices):
@@ -1953,7 +2042,7 @@ def main():
                                       show_wasde, show_nass_major, show_crop_progress)
 
     tab_labels = ["Trends"] + [c["label"] for c in COMMODITIES] + [
-        "Cross-commodity spread", "Report calendar", "Ask AI", "📊 H/L Forecast",
+        "Cross-commodity spread", "Brazil", "Report calendar", "Ask AI", "📊 H/L Forecast",
     ]
     # Trends leads, so it is also the tab the app opens on. Don't pass st.tabs(default=) to keep
     # Corn as the landing tab: with the lazy .open logic below, Streamlit 1.56 highlights the
@@ -1967,9 +2056,12 @@ def main():
             if tab.open:
                 st.caption(commodity["sublabel"])
                 render_commodity(commodity, api_key, as_of, report_dates_visible())
+    with tabs[-5]:
+        if tabs[-5].open:
+            render_cross_commodity_spread(api_key, as_of, report_dates_visible())
     with tabs[-4]:
         if tabs[-4].open:
-            render_cross_commodity_spread(api_key, as_of, report_dates_visible())
+            render_brazil(api_key, as_of)
     with tabs[-3]:
         if tabs[-3].open:
             render_report_calendar(load_wasde_dates(), load_nass_dates(nass_years), as_of)
