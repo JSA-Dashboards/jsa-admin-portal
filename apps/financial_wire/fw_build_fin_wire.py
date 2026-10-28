@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).parent
-SECTION_ORDER = ["history", "snapshot", "futures", "five", "reading", "macro", "headlines"]  # reorder freely
+SECTION_ORDER = ["history", "snapshot", "futures", "macro", "headlines", "five", "reading"]  # reorder freely
 
 INK, ACCENT, MUTED, RULE = "#32373c", "#5e7164", "#5f7267", "#d7e2dc"   # JSA green, as the COT dashboard
 GREEN, RED, AMBER = "#2e7d32", "#c62828", "#b26a00"

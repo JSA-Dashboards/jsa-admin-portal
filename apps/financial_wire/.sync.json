@@ -1,8 +1,8 @@
 {
  "branch": "main",
- "commit": "e071e0f38e184dd4f0a813981b24da800b491a5b",
+ "commit": "81a4f6c2f9e8bb7eb9237e520879046edfbe0324",
  "files": {
-  "fw_build_fin_wire.py": "3ebb072b2f525106b2c98782b7e7fb0d33ef6757870d552c9866c2d1f27d087e",
+  "fw_build_fin_wire.py": "e076b89c6089084bbb0bd7dfd980a6c3bb834678869f615d7c8c902b7caf421a",
   "fw_explain.py": "28cf8ee8dad2d9e9f6bd312951e1af2115918f1778bd87b0d7058ca18d8894e4",
   "fw_headlines.py": "e3e38a744f636097f6ff3cc2bed2f7cacab570899245a6100b02c13bc9c668fb",
   "fw_summarize.py": "20cc31df428a3b2bffe82ee4b85e630c5cb82b4619718165dfb934b982755904",
