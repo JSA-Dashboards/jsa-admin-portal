@@ -24,7 +24,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 HERE = Path(__file__).parent
-MAX_AGE_H = 40          # 64 on Monday, set below
+MAX_AGE_H = 48          # news is at most 2 days old; Sat/Sun/Mon reach back to Friday (see cutoff())
 PER_FEED = 12
 UA = {"User-Agent": "Mozilla/5.0 (JSA morning wire)"}
 
@@ -89,11 +89,25 @@ def parse(xml_bytes: bytes):
         yield title.strip(), source.strip(), link, when, desc
 
 
+def cutoff():
+    """-> (oldest publish time kept, days for Google News' when:Nd filter), in Central time.
+    Normally 2 days back. On Saturday, Sunday and Monday (Monday morning is when the weekend
+    news is read) it reaches back to Friday 00:00 instead."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/Chicago"))
+    except Exception:   # no tzdata (Windows without it): use the machine clock
+        now = datetime.now().astimezone()
+    if now.weekday() in (5, 6, 0):   # Sat, Sun, Mon
+        friday = (now - timedelta(days=(now.weekday() - 4) % 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return friday.astimezone(timezone.utc), (now - friday).days + 1
+    return now.astimezone(timezone.utc) - timedelta(hours=MAX_AGE_H), 2
+
+
 def collect(include_mailbox=True):
     """include_mailbox=False is the hosted app's mode: only the public feeds (the
     mailbox items reach it through Snowflake, pushed from your PC by push_wire.py)."""
-    age = timedelta(hours=64 if datetime.now().weekday() == 0 else MAX_AGE_H)
-    cutoff = datetime.now(timezone.utc) - age
+    oldest, days = cutoff()
     seen, out, errors = set(), [], []
     if include_mailbox:
         out.extend(pj_items(errors))
@@ -101,10 +115,10 @@ def collect(include_mailbox=True):
     for topic, label, url in FEEDS:
         try:
             n = 0
-            for title, source, link, when, desc in parse(fetch(url)):
+            for title, source, link, when, desc in parse(fetch(url.replace("when%3A2d", f"when%3A{days}d"))):
                 if n >= PER_FEED:
                     break
-                if when and when.astimezone(timezone.utc) < cutoff:
+                if when and when.astimezone(timezone.utc) < oldest:
                     continue
                 k = norm(title)
                 if len(title) < 25 or k in seen:   # drops ticker-only items like "AMAN.O"
