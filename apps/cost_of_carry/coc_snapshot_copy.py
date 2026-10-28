@@ -27,11 +27,16 @@ HTML2CANVAS_ESM = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm"
 CHART_WIDTH = 1400
 
 _HTML = """
-<button type="button" class="jsa-snap-btn"
-        title="Copy a snapshot image — paste into email, Teams or Excel">Copy</button>
+<div class="jsa-snap-row">
+  <button type="button" class="jsa-snap-btn" data-act="copy"
+          title="Copy a snapshot image — paste into email, Teams or Excel">Copy</button>
+  <button type="button" class="jsa-snap-btn" data-act="png"
+          title="Download the same snapshot as a PNG file">PNG</button>
+</div>
 """
 
 _CSS = """
+.jsa-snap-row { display: flex; gap: 8px; }
 .jsa-snap-btn {
   width: 90px; height: 2.5rem; padding: 0 0.75rem; cursor: pointer;
   font: inherit; font-size: 0.875rem; color: inherit;
@@ -98,12 +103,13 @@ async function chartBlob(figure) {{
   return dataUrlToBlob(url);
 }}
 
-async function tableBlob(html, watermark) {{
+async function tableBlob(html, watermark, note) {{
   const mod = await import(HTML2CANVAS_ESM);
   const html2canvas = mod.default || mod;
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;left:-100000px;top:0;background:#fff;padding:12px;" +
-    "display:inline-block;font-family:'Source Sans Pro',Arial,sans-serif;font-size:13px;color:#31333f;";
+    "display:flex;align-items:flex-start;gap:18px;" +
+    "font-family:'Source Sans Pro',Arial,sans-serif;font-size:13px;color:#31333f;";
   const style = document.createElement("style");
   style.textContent =
     ".jsa-snap-table table{{border-collapse:collapse;}}" +
@@ -124,6 +130,15 @@ async function tableBlob(html, watermark) {{
   }}
   host.appendChild(style);
   host.appendChild(wrap);
+  if (note) {{
+    // The image travels further than the page does, so the disclaimer rides along with
+    // it — beside the table, where it can't be cropped off the bottom.
+    const side = document.createElement("div");
+    side.style.cssText = "width:210px;flex:0 0 210px;align-self:stretch;font-size:11px;" +
+      "line-height:1.45;color:#6b7280;border-left:1px solid #e6e9ef;padding:4px 0 0 14px;";
+    side.innerHTML = note;
+    host.appendChild(side);
+  }}
   document.body.appendChild(host);
   try {{
     if (watermark) {{
@@ -147,33 +162,44 @@ function download(blob, filename) {{
 
 export default function (component) {{
   const {{ data, parentElement }} = component;
-  const btn = parentElement.querySelector(".jsa-snap-btn");
-  if (!btn || !data) return;
+  if (!data) return;
+  const copyBtn = parentElement.querySelector('.jsa-snap-btn[data-act="copy"]');
+  const pngBtn = parentElement.querySelector('.jsa-snap-btn[data-act="png"]');
+  if (!copyBtn || !pngBtn) return;
 
-  const flash = (text) => {{
+  const flash = (btn, label, text) => {{
     btn.textContent = text;
-    setTimeout(() => {{ btn.textContent = "Copy"; btn.disabled = false; }}, 1800);
+    setTimeout(() => {{ btn.textContent = label; btn.disabled = false; }}, 1800);
   }};
+  const makeBlob = () => data.kind === "chart"
+    ? chartBlob(data.figure)
+    : tableBlob(data.html, data.watermark, data.note);
 
-  btn.onclick = () => {{
-    btn.disabled = true;
-    btn.textContent = "Copying…";
-    const blobPromise = data.kind === "chart"
-      ? chartBlob(data.figure)
-      : tableBlob(data.html, data.watermark);
-
+  copyBtn.onclick = () => {{
+    copyBtn.disabled = true;
+    copyBtn.textContent = "Copying…";
+    const blobPromise = makeBlob();
     const canClip = navigator.clipboard && window.ClipboardItem && window.isSecureContext;
     if (canClip) {{
       // Must be called synchronously in the click; the Promise resolves later.
       navigator.clipboard
         .write([new ClipboardItem({{ "image/png": blobPromise }})])
-        .then(() => flash("Copied ✓"))
-        .catch(() => blobPromise.then((b) => {{ download(b, data.filename); flash("Saved"); }})
-          .catch(() => flash("Failed")));
+        .then(() => flash(copyBtn, "Copy", "Copied ✓"))
+        .catch(() => blobPromise
+          .then((b) => {{ download(b, data.filename); flash(copyBtn, "Copy", "Saved"); }})
+          .catch(() => flash(copyBtn, "Copy", "Failed")));
     }} else {{
-      blobPromise.then((b) => {{ download(b, data.filename); flash("Saved"); }})
-        .catch(() => flash("Failed"));
+      blobPromise.then((b) => {{ download(b, data.filename); flash(copyBtn, "Copy", "Saved"); }})
+        .catch(() => flash(copyBtn, "Copy", "Failed"));
     }}
+  }};
+
+  pngBtn.onclick = () => {{
+    pngBtn.disabled = true;
+    pngBtn.textContent = "Saving…";
+    makeBlob()
+      .then((b) => {{ download(b, data.filename); flash(pngBtn, "PNG", "Saved ✓"); }})
+      .catch(() => flash(pngBtn, "PNG", "Failed"));
   }};
 }}
 """
@@ -183,16 +209,21 @@ _COMPONENT = st.components.v2.component(
 )
 
 
+BUTTONS_WIDTH = 190   # two buttons side by side
+
+
 def copy_chart_button(fig, filename: str, key: str):
-    """Copy button for a Plotly figure."""
-    _COMPONENT(key=f"snap_{key}", width=90,
+    """Copy / PNG buttons for a Plotly figure."""
+    _COMPONENT(key=f"snap_{key}", width=BUTTONS_WIDTH,
                data={"kind": "chart", "figure": json.loads(fig.to_json()), "filename": filename})
 
 
 def copy_table_button(styler: "pd.io.formats.style.Styler", filename: str, key: str,
-                      watermark_uri: str | None = None):
-    """Copy button for a table, snapshotting the Styler's HTML (colours and formats)."""
+                      watermark_uri: str | None = None, note: str | None = None):
+    """Copy / PNG buttons for a table, snapshotting the Styler's HTML (colours and
+    formats). `note` is HTML placed in a column to the right of the table inside the
+    image, so a disclaimer travels with a pasted screenshot."""
     html = styler.hide(axis="index").to_html()
-    _COMPONENT(key=f"snap_{key}", width=90,
+    _COMPONENT(key=f"snap_{key}", width=BUTTONS_WIDTH,
                data={"kind": "table", "html": html, "watermark": watermark_uri,
-                     "filename": filename})
+                     "filename": filename, "note": note})

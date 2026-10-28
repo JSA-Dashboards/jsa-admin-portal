@@ -344,50 +344,20 @@ def plotly_config(filename: str) -> dict:
     }
 
 
-@st.cache_data(show_spinner=False, max_entries=32)
-def figure_png(fig_json: str) -> bytes | None:
-    """Server-side PNG for the explicit download button. Cached on the figure itself so
-    a rerun that doesn't change the chart doesn't pay for it twice."""
-    try:
-        import plotly.io as pio
-        fig = pio.from_json(fig_json)
-        # Streamlit stubs the template, dropping the axis automargin the on-screen chart relies on.
-        fig.update_xaxes(automargin=True, title_standoff=12)
-        fig.update_yaxes(automargin=True, title_standoff=12)
-        fig.update_layout(margin_l=max(fig.layout.margin.l or 0, 90))
-        return fig.to_image(format="png", width=1400, height=700, scale=2)
-    except Exception:
-        return None
-
-
 def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, styler=None):
-    """Copy (a PNG snapshot to the clipboard) + CSV, plus PNG download for charts.
-
-    Copy snapshots the styled table when `styler` is given, otherwise the chart, otherwise
-    the plain table. Server-side PNG bytes are only rendered once the user asks, because
-    to_image() costs about a second per chart and this app draws a lot of charts."""
+    """Copy and PNG, both of the same snapshot image — the styled table when `styler` is
+    given (colours, formats, watermark and the derived-spreads note beside it), otherwise
+    the chart. Drawn in the browser, so Cloud's fragile kaleido never comes into it."""
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
         if styler is not None or fig is None:
             wm = watermark_path()
             snapshot_copy.copy_table_button(
                 styler if styler is not None else frame.style, filename, key,
-                watermark_uri=watermark_uri(wm) if wm else None)
+                watermark_uri=watermark_uri(wm) if wm else None,
+                note=SNAPSHOT_NOTE_HTML)
         else:
             snapshot_copy.copy_chart_button(fig, filename, key)
-        st.download_button("CSV", frame.to_csv(index=False).encode(), f"{filename}.csv",
-                           "text/csv", key=f"csv_{key}", width=90)
-        if fig is not None:
-            if st.button("PNG", key=f"png_btn_{key}", width=90,
-                         help="Render this chart as a PNG for download."):
-                st.session_state[f"png_ready_{key}"] = True
-            if st.session_state.get(f"png_ready_{key}"):
-                data = figure_png(fig.to_json())
-                if data:
-                    st.download_button("Save PNG", data, f"{filename}.png", "image/png",
-                                       key=f"png_dl_{key}", width=120)
-                else:
-                    st.caption("PNG export unavailable — use the camera icon on the chart.")
 
 
 # Every spread in this app is built from the two legs' own settlements. None of them is
@@ -396,6 +366,13 @@ def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, styler=No
 DERIVED_SPREADS_NOTE = (
     "Spreads are **derived** — calculated from each leg's settlement, not exchange-traded "
     "instruments — and may differ from quoted spread markets."
+)
+# Beside the table inside a copied/downloaded image, so a pasted screenshot carries it.
+SNAPSHOT_NOTE_HTML = (
+    "<b>Spreads are derived</b><br><br>Calculated from each leg's settlement — not "
+    "exchange-traded instruments — and may differ from quoted spread markets."
+    "<br><br>John Stewart &amp; Associates · for information only, not a recommendation "
+    "or an offer to buy or sell."
 )
 # Same point, wrapped for the Summary's narrow left-hand column.
 DERIVED_SPREADS_SHORT = (
