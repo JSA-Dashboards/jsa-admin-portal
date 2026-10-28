@@ -110,11 +110,13 @@ instead of calling `st.switch_page`.
 A synced mirror of `JSA-Dashboards/cso-risk-analyzer` (branch `main`; **public since 2026-10-15**, made
 public "for now"), tile under "Futures, Options & Spreads". CME calendar spread options priced as one
 option on the nearby-minus-deferred spread (Bachelier), with quote-implied skew, hedged-vs-unhedged
-analysis and, as its first tab (added 2026-10-26), a **Strategy builder**: a bought put or call laid over a
-spread position, with the payoff shaded green where it gains and red where it loses, and the spread's full
-carry and 12-month range beside it. On 2026-10-26 it gained a **leg picker** (*Spread from → Live curve*: pick
-the near and far contract from the feed's current curve) and a **seasonal overlay** (the same pair in up to five
-earlier years, plus a replay of each year's move as dots on the payoff chart). Unlike the Risk Analyzer it needs
+analysis and, as its first tab (added 2026-10-26), a **Strategy builder**: a put or call, bought or sold, laid
+over a spread position (the position control names the long and the short contract month), with the payoff
+shaded green where it gains and red where it loses, and the spread's full carry and 12-month range beside it.
+On 2026-10-26 it gained a **leg picker** (*Spread from → Live curve*: pick the near and far contract from the
+feed's current curve) and a **seasonal overlay** (the same pair in up to five earlier years, plus a replay of
+each year's move as dots on the payoff chart); on 2026-10-28 the option can be **sold** as well as bought
+(*Option: Buy / Sell*, default Buy). Unlike the Risk Analyzer it needs
 no Snowflake, no grant and no new package (scipy, altair and requests were already here), so merging or pushing
 it is the whole deploy. Its one secret is the optional root-level `MASSIVE_API_KEY`, which this portal already
 holds (`Home.py` bridges it): it powers *Fetch futures prices* and the Strategy builder's fed-funds rate,
