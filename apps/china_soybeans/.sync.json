@@ -1,12 +1,12 @@
 {
  "branch": "main",
- "commit": "c7943d591de843fc0376eb915d1b9508e0fe67d1",
+ "commit": "aad6a4496b377b9baa76c405c1fd46f2bc8b32ee",
  "files": {
-  "app.py": "9f753bbf5dadae7d059c78a43ebbfc5427cdb1710455665fee86315a04c42fb0",
-  "cn_admin.py": "7350fdb3ae805f0f1edd3aa72f3a5acc90f86e1950d7b7bcff22c9ce55eb8130",
+  "app.py": "6003afa04d6c0897b9082432ab50ad7cec0b8f25eaa4e11dde57d8d1e96c7451",
+  "cn_admin.py": "31ce6e6c761e44c9d82790eee23c3a25f1941160b61e7d36a5d84a49ec80d067",
   "cn_esr.py": "8fa015884d88aa62b28a79bb7390d2a10abf857fb9c71e72b0a346f4d62a6c9e",
   "cn_store.py": "4ec8a2f952b50ce05e5df12622dbd413f8bc5abf52fe91d7ef1aaabd4caa6652",
-  "cn_tracker_logic.py": "2e19a8595b18e98b88c590cd81b3f4ac3091c45c5975613c15e5a0cb044a3980"
+  "cn_tracker_logic.py": "a041984a7f3d2976366764170fc188d6a48e8cffdd474c6510ca868a617011ae"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/china-soybean-tracker",
