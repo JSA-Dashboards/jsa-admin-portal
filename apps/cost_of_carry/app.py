@@ -397,6 +397,11 @@ DERIVED_SPREADS_NOTE = (
     "Spreads are **derived** — calculated from each leg's settlement, not exchange-traded "
     "instruments — and may differ from quoted spread markets."
 )
+# Same point, wrapped for the Summary's narrow left-hand column.
+DERIVED_SPREADS_SHORT = (
+    "<b>Spreads are derived</b><br>Calculated from each leg's settlement — not "
+    "exchange-traded instruments — and may differ from quoted spread markets."
+)
 
 
 def render_derived_note():
@@ -1335,6 +1340,13 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
             f"Annual Interest Rate&nbsp;&nbsp;<b>{annual_rate_pct:.2f}%</b><br>"
             f"<span style='color:#6b7280;'>(Fed Funds + {FED_FUNDS_SPREAD_PCT:.2f}%)</span>"
             f"</div>",
+            unsafe_allow_html=True,
+        )
+        # Beside every market's table, not just once at the top of the tab — the Summary
+        # is the page people screenshot and send on, a section at a time.
+        st.markdown(
+            f"<div style='font-size:0.75rem;line-height:1.5;color:#6b7280;padding-top:14px;'>"
+            f"{DERIVED_SPREADS_SHORT}</div>",
             unsafe_allow_html=True,
         )
 
