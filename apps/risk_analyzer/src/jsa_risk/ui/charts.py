@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from jsa_risk.pricing.commodities import CORN, CommoditySpec
-from jsa_risk.pricing.portfolio import portfolio_delta_at, portfolio_pnl_at, portfolio_reference_price
+from jsa_risk.pricing.portfolio import book_totals, portfolio_delta_at, portfolio_pnl_at, portfolio_reference_price
 from jsa_risk.pricing.stress import Position, PositionEval, StressState, eval_position
 
 # Price shocks are a percent of the book's reference price (see portfolio_reference_price),
@@ -37,8 +37,11 @@ def _steps(half_range: float, step: float) -> List[float]:
     return [round(i * step, 6) for i in range(-n, n + 1)]
 
 
-# Live cattle is quoted and traded in fractions of a cent, so its shocks are laddered in cents
-# per pound rather than as a percent window: (half-range ¢, step ¢). The charts still carry
+# Cattle is quoted and traded in fractions of a cent, so its shocks are laddered in cents
+# per pound rather than as a percent window: (half-range ¢, step ¢). Both contracts qualify:
+# live cattle and feeder cattle are both $/lb, and a feeder book was on the percent ladder
+# until 2026-10 for no reason anyone recorded -- it reads as an oversight from when cattle
+# support landed one contract at a time, not a decision. The charts still carry
 # them internally as a percent of the book's reference price (cents / price), so the pricing
 # code is unchanged; only the grid and the labels are in cents.
 #
@@ -52,7 +55,13 @@ CENTS_SHOCK_WINDOWS = {
     "±20¢ · 2¢ steps": (20.0, 2.0),
 }
 DEFAULT_CENTS_SHOCK_WINDOW = "±5¢ · 0.5¢ steps"
-CENTS_SHOCK_COMMODITIES = {"LE"}
+# Per-contract default, because the same cents ladder is not the same window. A nickel on a
+# ~$2.28 live steer is 2.2%; on a ~$3.40 feeder it is 1.5%, and feeders carry the higher
+# daily vol of the two (see CommoditySpec.daily_vol). So a feeder book opens one preset
+# wider -- same ladder, same labels, just a default that covers a comparable day's range.
+# Anything not named here falls back to DEFAULT_CENTS_SHOCK_WINDOW.
+DEFAULT_CENTS_WINDOW_BY_CODE = {"GF": "±10¢ · 1¢ steps"}
+CENTS_SHOCK_COMMODITIES = {"LE", "GF"}
 
 
 def shocks_in_cents(commodity: CommoditySpec) -> bool:
@@ -60,7 +69,7 @@ def shocks_in_cents(commodity: CommoditySpec) -> bool:
 
 
 def shock_windows_for(commodity: Optional[CommoditySpec]) -> dict:
-    """The window presets to offer for a commodity -- cents for live cattle, percent for the
+    """The window presets to offer for a commodity -- cents for cattle, percent for the
     rest. Keyed by the same label the user picks, so `shock_grid` can look one up directly."""
     if commodity is not None and shocks_in_cents(commodity):
         return CENTS_SHOCK_WINDOWS
@@ -69,7 +78,7 @@ def shock_windows_for(commodity: Optional[CommoditySpec]) -> dict:
 
 def default_shock_window(commodity: Optional[CommoditySpec]) -> str:
     if commodity is not None and shocks_in_cents(commodity):
-        return DEFAULT_CENTS_SHOCK_WINDOW
+        return DEFAULT_CENTS_WINDOW_BY_CODE.get(commodity.code, DEFAULT_CENTS_SHOCK_WINDOW)
     return DEFAULT_SHOCK_WINDOW
 
 
@@ -83,7 +92,7 @@ def shock_grid(
     ref_price: Optional[float] = None,
 ) -> Tuple[float, float, List[float]]:
     """(half-range %, step %, shocks in %) for a named window, e.g. (10, 2, [-10.0, ..., 10.0]).
-    For a cents-shock commodity (live cattle) `window` names a CENTS_SHOCK_WINDOWS preset and
+    For a cents-shock commodity (either cattle) `window` names a CENTS_SHOCK_WINDOWS preset and
     the grid is that cents ladder expressed as a percent of `ref_price`."""
     if commodity is not None and shocks_in_cents(commodity):
         half_c, step_c = cents_window(commodity, window)
@@ -103,11 +112,15 @@ LOSS = "#c0392b"
 EXPIRY_COLORS = ["#e8a33d", "#9b6bce", "#4fb8af", "#d9779a", "#c9a227", "#6a8caf"]
 
 
-def _fmt_cents(v: float) -> str:
-    """`v` is a price move in dollars per unit; shown as cents, with a decimal under 10¢
-    so small moves (e.g. 5% of a cheap contract) don't all round to the same label."""
-    cents = abs(v) * 100
+def _fmt_cents(v: float, commodity: Optional[CommoditySpec] = None) -> str:
+    """`v` is a price move in the commodity's own unit ($ per bu/lb/ton); shown as cents for a
+    cents-quoted product, with a decimal under 10¢ so small moves (e.g. 5% of a cheap
+    contract) don't all round to the same label. A dollars-quoted product (soybean meal) shows
+    the move in dollars per unit instead."""
     sign = "-" if v < 0 else ("+" if v > 0 else "")
+    if commodity is not None and commodity.price_divisor != 100:
+        return f"{sign}${abs(v):.2f}"
+    cents = abs(v) * 100
     body = f"{cents:.1f}" if 0 < cents < 10 else f"{cents:.0f}"
     return f"{sign}{body}¢"
 
@@ -124,14 +137,14 @@ def _shock_cents(pct: float, ref_price: float) -> float:
 def _shock_tick(pct: float, ref_price: float, commodity: Optional[CommoditySpec] = None) -> str:
     """Two-line axis tick: % over its cents equivalent -- or, for a cents-shock commodity,
     the cents move over the % it works out to."""
-    cents = _fmt_cents(_shock_cents(pct, ref_price))
+    cents = _fmt_cents(_shock_cents(pct, ref_price), commodity)
     if commodity is not None and shocks_in_cents(commodity):
         return f"{cents}<br>{_fmt_pct_signed(round(pct, 2))}"
     return f"{_fmt_pct_signed(pct)}<br>{cents}"
 
 
 def _shock_hover(pct: float, ref_price: float, commodity: Optional[CommoditySpec] = None) -> str:
-    cents = _fmt_cents(_shock_cents(pct, ref_price))
+    cents = _fmt_cents(_shock_cents(pct, ref_price), commodity)
     if commodity is not None and shocks_in_cents(commodity):
         return f"{cents} ({_fmt_pct_signed(round(pct, 2))})"
     return f"{_fmt_pct_signed(pct)} ({cents})"
@@ -140,12 +153,23 @@ def _shock_hover(pct: float, ref_price: float, commodity: Optional[CommoditySpec
 def _shock_axis_title(ref_price: float, commodity: CommoditySpec) -> str:
     if shocks_in_cents(commodity):
         return f"Price shock (¢/{commodity.unit}, same move on every contract · % of ${ref_price:.2f} avg beneath) →"
-    return f"Price shock (% of avg price · ≈¢/{commodity.unit} at ${ref_price:.2f}, all contracts) →"
+    return f"Price shock (% of avg price · ≈{commodity.move_symbol}/{commodity.unit} at ${ref_price:.2f}, all contracts) →"
 
 
 def _fmt_dollars_signed(v: float) -> str:
     sign = "-" if v < 0 else "+"
     return f"{sign}${abs(v):,.0f}"
+
+
+def _money_md(v: float) -> str:
+    r"""`_fmt_dollars_signed` with the dollar sign escaped for markdown.
+
+    Streamlit renders `$...$` as inline LaTeX, so a caption quoting TWO dollar amounts
+    opens a maths span: both signs vanish and everything between them is italicised. One
+    `$` in a block is safe, which is why the axis captions get away with it -- it takes a
+    pair. Caught in a browser, not by a test: the page text reads correctly either way.
+    """
+    return _fmt_dollars_signed(v).replace("$", r"\$")
 
 
 def _fmt_unit_signed(v: float, unit: str) -> str:
@@ -160,7 +184,19 @@ def render_pnl_heatmap(
     today: Optional[date] = None,
     commodity: CommoditySpec = CORN,
     shock_window: str = DEFAULT_SHOCK_WINDOW,
+    centre_on_today: bool = False,
 ) -> None:
+    """`centre_on_today` re-centres the grid on the current scenario: every cell becomes the
+    CHANGE from where the book stands, so the outlined cell reads 0 and a cell answers "what
+    does this move do to me from here" directly rather than by subtracting two cells.
+
+    Two things fall out, and they are the point of offering it. The vol axis becomes legible
+    -- vol is worth a few thousand dollars where cumulative P&L is worth hundreds of
+    thousands, so it is swamped on the uncentred grid. And the gap between a tick-marked book
+    and a model-priced one cancels exactly -- it is the same constant in every cell -- so a
+    re-centred grid reads the same on either basis, and the tick/model question that the
+    uncentred grid's caption has to explain simply does not arise here.
+    """
     ref_price = portfolio_reference_price(positions, get_contract_price, stress, today, commodity)
     _, _, price_shocks = shock_grid(shock_window, commodity, ref_price)
     # Purely numeric x/y (0,1,2,...) with cosmetic tick labels via update_xaxes/yaxes,
@@ -175,10 +211,24 @@ def render_pnl_heatmap(
     vol_labels = [_fmt_pct_signed(v) for v in VOL_SHOCKS_BOTTOM_UP]
     x_idx = list(range(len(price_shocks)))
     y_idx = list(range(len(VOL_SHOCKS_BOTTOM_UP)))
-    z = [
-        [portfolio_pnl_at(positions, get_contract_price, stress, ps, vs, 0, today, commodity, ref_price) for ps in price_shocks]
+    # Every cell is the blotter's own mark plus the model's change for that shock (see
+    # portfolio_pnl_at), so the current-scenario cell IS the blotter's P&L. The blotter totals
+    # each position rounded to the dollar; the cell takes that exact total so the two agree
+    # to the dollar rather than to within rounding.
+    raw = [
+        [portfolio_pnl_at(positions, get_contract_price, stress, ps, vs, 0, today, commodity, ref_price)
+         for ps in price_shocks]
         for vs in VOL_SHOCKS_BOTTOM_UP
     ]
+    base_price_idx = price_shocks.index(0.0)
+    base_vol_idx = VOL_SHOCKS_BOTTOM_UP.index(0)
+    blotter = book_totals(
+        eval_position(p, stress, get_contract_price, today=today, commodity=commodity) for p in positions
+    )[1]
+    centre = raw[base_vol_idx][base_price_idx]
+    if abs(centre - blotter) <= len(positions):      # only rounding apart; anything wider is left visible
+        raw[base_vol_idx][base_price_idx] = centre = float(blotter)
+    z = [[v - centre for v in row] for row in raw] if centre_on_today else raw
     max_abs = max(1.0, max(abs(v) for row in z for v in row))
     text = [[_fmt_dollars_signed(v) for v in row] for row in z]
     customdata = [[[price_hover[j], vol_labels[i]] for j in x_idx] for i in y_idx]
@@ -202,8 +252,6 @@ def render_pnl_heatmap(
     )
     # Outline the current-scenario (0 price, 0 vol) cell -- a closed line path at
     # +/-0.5 index either side of its center, tracing exactly the cell's own boundary.
-    base_price_idx = price_shocks.index(0.0)
-    base_vol_idx = VOL_SHOCKS_BOTTOM_UP.index(0)
     px0, px1 = base_price_idx - 0.5, base_price_idx + 0.5
     py0, py1 = base_vol_idx - 0.5, base_vol_idx + 0.5
     fig.add_trace(
@@ -227,6 +275,45 @@ def render_pnl_heatmap(
         font=dict(size=11),
     )
     st.plotly_chart(fig, use_container_width=True)
+    _caption_basis(centre, positions, stress, get_contract_price, today, commodity,
+                   centre_on_today)
+
+
+
+def _caption_basis(
+    centre: float,
+    positions: List[Position],
+    stress: StressState,
+    get_contract_price: Callable[[str], float],
+    today: Optional[date],
+    commodity: CommoditySpec,
+    centred: bool = False,
+) -> None:
+    """Name the basis, and reconcile the uncentred grid against the blotter.
+
+    The grid is Black-76 throughout; the blotter at zero stress prefers an imported
+    `last_tick`. So the uncentred grid's zero cell and the P&L column above it are two
+    valuations of one book, and they can be far apart -- on a live cattle book, -$52,320
+    against -$200,500. Both are defensible, which is why the disagreement is printed rather
+    than left for someone to meet on their own.
+
+    The centred grid needs none of this: the difference is the same constant in every cell
+    and vanishes in the subtraction, so that view is identical on either basis.
+    """
+    zero = "0¢" if shocks_in_cents(commodity) else "0%"
+    if centred:
+        st.caption(
+            f"Every cell is the CHANGE from where the book stands now, so the outlined "
+            f"{zero} / 0% cell reads zero. Read a cell as what that move is worth to you from "
+            "here. This view is unaffected by whether a leg is marked to a traded price or to "
+            "the model — that difference is the same in every cell and cancels out."
+        )
+        return
+    st.caption(
+        f"The outlined {zero} / 0% cell is the book's P&L against your entry prices — the same "
+        "total as the position blotter, marks and all. Every other cell adds what the model "
+        "(Black-76 with American early exercise) says that move is worth on top of it."
+    )
 
 
 def render_delta_scenario(
@@ -427,6 +514,25 @@ def _group_by_contract(
     return order, data
 
 
+# Width of one character of the 11px font these bars label their bars with, measured in
+# the browser rather than guessed: "+3,645,343 lb" renders 60.3px over 13 characters.
+_LABEL_CHAR_PX = 4.7
+_LABEL_MIN_PX = 10
+_LABEL_MAX_PX = 70
+
+
+def _label_margin_px(texts: List[str]) -> int:
+    """Side margin wide enough for the longest value label to draw outside its bar, in
+    pixels, capped so three charts in a row still leave a plot to draw in.
+
+    Both sides, because a negative bar labels to the LEFT -- vega and theta go negative
+    routinely, and a net short book does it on the position bar too."""
+    if not texts:
+        return _LABEL_MIN_PX
+    want = int(max(len(t) for t in texts) * _LABEL_CHAR_PX) + 8
+    return max(_LABEL_MIN_PX, min(want, _LABEL_MAX_PX))
+
+
 def _render_mini_bar(
     col,
     title: str,
@@ -448,14 +554,33 @@ def _render_mini_bar(
         fig = go.Figure(
             go.Bar(
                 x=values, y=labels, orientation="h",
-                marker_color=colors, text=text, textposition="outside",
+                marker_color=colors, text=text, textposition="auto",
+                # "auto" rather than "outside", with clipping off. An outside label is
+                # clipped at the axis when it does not fit, so a long value loses its last
+                # characters SILENTLY and still reads as a number -- "+7,391,811 lb"
+                # rendering as "+7,391,81". The full string stays in the DOM either way,
+                # which is why that survived a text-based check and showed up only in a
+                # picture. "auto" moves the label inside the bar instead.
+                #
+                # The margin below is NOT enough on its own: these sit three to a row, and
+                # the width is decided in the browser, so on a narrow window the space a
+                # label needs exceeds the whole column. Reserving pixels cannot fix a case
+                # where the pixels do not exist -- "auto" is what covers it.
+                cliponaxis=False,
                 hovertemplate=f"%{{y}}<br>{title}: %{{text}}<extra></extra>",
             )
         )
+        # Room for the label beyond the longest bar. A fixed multiplier cannot do this:
+        # the headroom is a fraction of the PLOT, the label is a fixed number of PIXELS,
+        # so whatever constant works at one pane width fails at a narrower one -- 1.3
+        # needs a plot about 400px wide to fit a 13-character value, and these sit three
+        # to a row. Hence room reserved in the MARGIN, which is in pixels like the text,
+        # and scaled to the longest label actually being drawn.
+        side = _label_margin_px(text)
         fig.update_layout(
             height=34 * len(order) + 50,
-            margin=dict(l=10, r=10, t=10, b=10),
-            xaxis=dict(range=[-max_abs * 1.3, max_abs * 1.3], zeroline=True, zerolinewidth=1, showgrid=False,
+            margin=dict(l=side, r=side, t=10, b=10),
+            xaxis=dict(range=[-max_abs * 1.12, max_abs * 1.12], zeroline=True, zerolinewidth=1, showgrid=False,
                        showticklabels=False),
             yaxis=dict(autorange="reversed"),
             plot_bgcolor="rgba(0,0,0,0)",
@@ -473,8 +598,15 @@ def render_greeks_bars(
 ) -> None:
     evals = {id(p): eval_position(p, stress, get_contract_price, commodity=commodity) for p in positions}
     cols = st.columns(3)
-    order, delta_data = _group_by_contract(positions, evals, lambda r: r.delta_d)
-    _render_mini_bar(cols[0], f"Delta ({commodity.unit})", "per $1", order, delta_data,
+    # round() per position, matching the blotter's Position column and the group rows
+    # that foot it. Summing the raw floats instead leaves this bar a pound or two from the
+    # same figure printed a few inches above it -- which is nothing as a quantity and is
+    # still one number appearing twice with two values.
+    order, delta_data = _group_by_contract(positions, evals, lambda r: round(r.delta_d))
+    # "Net Position", not "Delta": this is the blotter's Position (lb) column summed per
+    # expiry, and the page now reserves the word Delta for the option's own greek. Net,
+    # because a group really is several legs added together -- unlike a blotter row.
+    _render_mini_bar(cols[0], f"Net Position ({commodity.unit})", "by expiry", order, delta_data,
                       lambda v: _fmt_unit_signed(v, commodity.unit))
     order, vega_data = _group_by_contract(positions, evals, lambda r: r.vega_d)
     _render_mini_bar(cols[1], "Vega $", "per vol pt", order, vega_data, _fmt_dollars_signed)

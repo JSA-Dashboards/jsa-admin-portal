@@ -18,8 +18,11 @@ The Year-Ago column is the same three ratios recomputed from LAST year's file fo
 the same month — what this report looked like a year ago, not the year-ago head
 count.
 """
+import base64
+import functools
 import re
 from datetime import date
+from pathlib import Path
 
 import requests
 
@@ -62,7 +65,34 @@ _US_ROW = re.compile(r"^(.+?)\s*\.{2,}:\s*" + _NUM + r"\s+" + _NUM + r"\s+(\d+)\
 
 _ONFEED_TABLE = "Cattle on Feed Inventory on 1,000+ Capacity Feedlots by Month"
 _PLACED_TABLE = "Cattle Placed on Feed on 1,000+ Capacity Feedlots by Month"
+_MKT_TABLE    = "Cattle Marketed on 1,000+ Capacity Feedlots by Month"
+_OTHER_TABLE  = "Cattle Other Disappearance on 1,000+ Capacity Feedlots by Month"
+_CLASS_TABLE  = "Cattle on Feed by Class on 1,000+ Capacity Feedlots by Quarter"
 _US_TABLE = "1,000+ Capacity Feedlots - United States:"
+
+# "Kansas .....:  1,460  1,390  1,430   950   910   950" -- the quarterly class
+# table is SIX head columns, steers for three periods then heifers for the same
+# three, and no percentages. It matches neither _STATE_ROW (which ends in two
+# percents) nor _US_ROW, which is why _table_block has to be told the shape.
+_CLASS_ROW = re.compile(
+    r"^([A-Za-z][A-Za-z .]*?)\s*\.{2,}:\s*" + r"\s+".join([_NUM] * 6) + r"\s*$")
+
+# series -> (table marker, month offset of the table's CURRENT column from the
+# report month). THE OFFSET IS THE WHOLE CORRECTNESS OF THIS. The October report
+# carries the OCTOBER 1 inventory but SEPTEMBER placements, marketings and other
+# disappearance, and the tables say so in their own headers:
+#
+#   Inventory : October 1, 2025 | September 1, 2026 | October 1, 2026
+#   Marketed  : During September 2025 | During August 2026 | During September 2026
+#
+# Give the flows offset 0 and every figure lands a month late, on a page where
+# a month-late placement number is entirely plausible.
+RELEASED_TABLES = {
+    "inventory":  (_ONFEED_TABLE,  0),
+    "placements": (_PLACED_TABLE, -1),
+    "marketings": (_MKT_TABLE,    -1),
+    "other":      (_OTHER_TABLE,  -1),
+}
 
 
 def _int(s):
@@ -103,8 +133,13 @@ def latest_report(today: date = None):
     return None, None, ""
 
 
-def _table_block(text: str, marker: str) -> list:
-    """Data rows of the first table whose header contains `marker`."""
+def _table_block(text: str, marker: str, row_re=None) -> list:
+    """Data rows of the first table whose header contains `marker`.
+
+    `row_re` overrides the default state/US shapes for a table that prints
+    something else -- the quarterly class table is six head columns with no
+    percentages, and matches neither.
+    """
     lines = text.splitlines()
     try:
         head = next(i for i, ln in enumerate(lines) if marker in ln)
@@ -112,7 +147,8 @@ def _table_block(text: str, marker: str) -> list:
         return []
     out, seen_data = [], False
     for ln in lines[head:head + 60]:
-        if _STATE_ROW.match(ln) or _US_ROW.match(ln):
+        if (row_re.match(ln) if row_re else
+                (_STATE_ROW.match(ln) or _US_ROW.match(ln))):
             out.append(ln)
             seen_data = True
         elif seen_data and ln.startswith("---"):
@@ -149,6 +185,116 @@ def parse_us(text: str) -> dict:
             out["marketed"] = (prev, curr)
     if on_feed:
         out["on_feed"] = on_feed
+    return out
+
+
+_CLASS_MONTH = re.compile(r"([A-Z][a-z]{2})\s+1,")
+
+
+def _class_periods(text: str):
+    """The six (year, month) the class table's OWN HEADER names, or None.
+
+    **USDA DATES THIS TABLE BY THE CALENDAR QUARTER, NOT BY THE REPORT**, and
+    the two come apart whenever a quarterly report slips. It has happened: the
+    October 2025 report was never published, so the **November 2025** report
+    carried the Oct 1 class split — its class header reads
+    `Oct 1, 2024 | Jul 1, 2025 | Oct 1, 2025` while the monthly tables in the
+    SAME FILE read November. Deriving these from the report month filed all
+    seventy-eight class figures a month late, on quarters the series has never
+    held a value for, and the Heifers tile would have shown 37.2% dated Nov
+    2025 against a true 38.1% dated Oct 1.
+
+    So the header is read rather than the dates computed. It is what USDA
+    actually says, and it cannot drift from the rows beneath it.
+
+    Returns None when the header cannot be read, and `released_rows` then skips
+    the class block entirely — **keeping the cached figures is the conservative
+    failure**, where guessing the periods is the one that puts a real number on
+    a date USDA never published.
+    """
+    lines = text.splitlines()
+    try:
+        head = next(i for i, ln in enumerate(lines) if _CLASS_TABLE in ln)
+    except StopIteration:
+        return None
+    for i in range(head, min(head + 20, len(lines) - 1)):
+        months = _CLASS_MONTH.findall(lines[i])
+        if len(months) < 6:
+            continue
+        years = re.findall(r"\b((?:19|20)\d{2})\b", lines[i + 1])
+        if len(years) < 6:
+            continue
+        out = []
+        for mon, yr in zip(months[:6], years[:6]):
+            if mon not in MONTH_ABBR:
+                return None
+            out.append((int(yr), MONTH_ABBR.index(mon) + 1))
+        return out
+    return None
+
+
+def _shift(year: int, month: int, delta: int) -> tuple:
+    """(year, month) `delta` months from (year, month)."""
+    i = year * 12 + (month - 1) + delta
+    return i // 12, i % 12 + 1
+
+
+def released_rows(text: str, year: int, month: int) -> list:
+    """[{series, state_name, year, month, value}] of HEAD, from the release text.
+
+    This is what lets the dashboard move at the release rather than waiting on
+    QuickStats and then on the cache job behind it. Each state row carries three
+    periods — a year before the current one, the month before it, and the
+    current one — so one parse covers the new month AND the restatement of the
+    month before it, which USDA makes in every release.
+
+    **STATE NAMES ARE RETURNED AS PRINTED, not as abbreviations.** app.py owns
+    STATE_NAMES and maps them; a second copy of that map here is the
+    snowflake_db-times-five problem in miniature, and this module already
+    carries a PARTIAL one in DEFAULT_STATES that covers five states of thirteen.
+
+    **Values are multiplied to HEAD.** The tables print "1,000 head" and
+    QuickStats serves head, so an un-multiplied overlay is out by a factor of a
+    thousand — on a page where every figure is already in the millions, that
+    renders as a collapse rather than as an obvious unit error.
+
+    A row USDA suppressed as "(D)" simply fails _STATE_ROW and is skipped, which
+    leaves the cached figure in place rather than blanking it.
+    """
+    out = []
+    for series, (marker, offset) in RELEASED_TABLES.items():
+        cy, cm = _shift(year, month, offset)
+        periods = [(_shift(cy, cm, -12), 0), (_shift(cy, cm, -1), 1), ((cy, cm), 2)]
+        for ln in _table_block(text, marker):
+            m = _STATE_ROW.match(ln)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            for (py, pm), col in periods:
+                out.append({"series": series, "state_name": name,
+                            "year": py, "month": pm,
+                            "value": _int(m.group(2 + col)) * 1000})
+
+    # The quarterly steer/heifer split. Its periods are READ FROM ITS OWN
+    # HEADER, never derived from the report month — see _class_periods for the
+    # November 2025 report that proves why. `year` and `month` are deliberately
+    # unused here, and that is the fix rather than an oversight.
+    #
+    # No month test either: the eight non-quarterly reports carry no such table,
+    # _class_periods returns None, and this block does not run.
+    periods = _class_periods(text)
+    if periods:
+        for ln in _table_block(text, _CLASS_TABLE, _CLASS_ROW):
+            m = _CLASS_ROW.match(ln)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            for series, base in (("steers", 0), ("heifers", 3)):
+                for col in (0, 1, 2):
+                    py, pm = periods[base + col]
+                    out.append({"series": series, "state_name": name,
+                                "year": py, "month": pm,
+                                "value": _int(m.group(2 + base + col)) * 1000})
     return out
 
 
@@ -241,11 +387,130 @@ def build_recap(year: int, month: int, text: str, prior_text: str = None,
 # what the tab shows and what the PNG/PDF button hands over are the same object.
 # kaleido is already pinned at 0.2.1 in requirements.txt for exactly this.
 
-FIG_W, FIG_H = 520, 690
+# 740, not 690: at 690 the page had no bottom margin at all. The weight-class
+# block ends on its Total row around y=644 and the source line sat 12px under
+# it, reading as a fourth column entry rather than a footer -- Ross, 2026-10-23,
+# looking at the HubSpot image: "should sit further down in the left hand corner
+# so it's not right next to the numbers". The extra 50px is bottom margin only;
+# every annotation is positioned in pixels FROM THE TOP, so nothing above moves.
+FIG_W, FIG_H = 520, 740
 INK = "#000000"    # title, column headers
-DATA = "#963634"   # the maroon the client page has always used
+DATA = "#000000"   # Ross, 2026-10-23: black. Was #963634, the maroon this
+                   # page carried from the hand-built Excel original.
 MUTED = "#9a9a9a"
 FONT = "Calibri, Carlito, Arial, sans-serif"
+
+# ── Letterhead ───────────────────────────────────────────────────────────────
+# The daily emails carry a wordmark top-right, the 50-years roundel faint behind
+# the text, and a hairline sage frame. This page is the same company writing and
+# Ross sends it to the same clients, so it carries the same three.
+#
+# letter/render.py IS THE AUTHORITY, and these numbers are its CSS restated
+# rather than imported — that module builds an 8.5x11in HTML document and this
+# is a 520x690 Plotly figure, so there is nothing to share but the geometry.
+# Each value below is a FRACTION OF THE PAGE, multiplied back out at draw time,
+# which is what makes the two look alike at different sizes:
+#
+#   .wm            width 4.4in of an 8.5in page = 0.52; top 46%; opacity 0.07
+#   .masthead img  height 0.34in of an 11in page = 0.031, right-aligned
+#   .frame         config.FRAME #5e7164 at config.FRAME_WIDTH 0.75pt
+#
+# FRAME_INSET IS NOT THE LETTER'S 0.52in, and copying that literally is the
+# mistake to avoid. There the frame sits 0.33in OUTSIDE a text block beginning
+# at 0.85in; here the text begins at 34px, which is 6.5% of 520 and already
+# tighter than 0.52in would be — so the frame is placed the equivalent 0.33in
+# outside THIS page's text instead. Taken literally it lands 2px off the first
+# column and reads as a box drawn round the table.
+BRAND_SAGE    = "#5e7164"   # letter/config.FRAME
+FRAME_PT      = 0.75        # letter/config.FRAME_WIDTH
+FRAME_INSET   = 14          # figure px from the paper edge, every side
+WM_WIDTH_FRAC = 0.52        # .wm width, as a fraction of page width
+WM_CENTRE_Y   = 0.46        # .wm top
+WM_OPACITY    = 0.07        # .wm opacity
+LOGO_H_FRAC   = 0.031       # .masthead img height, as a fraction of page height
+
+
+def _png_size(data: bytes) -> tuple:
+    """(width, height) from a PNG's IHDR, which is always the first chunk.
+
+    Read from the FILE rather than written down here on purpose: the aspect
+    ratio is the one number that must track the asset, and a constant that
+    silently stops matching stretches the wordmark instead of failing. Doing it
+    from the header costs eight bytes of slicing and adds no dependency —
+    Pillow is not in requirements.txt and this module must not be the thing
+    that puts it there.
+    """
+    return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+
+
+@functools.lru_cache(maxsize=4)
+def _asset(name: str):
+    """(data-uri, aspect) for assets/<name>, or ("", 0) when it is missing.
+
+    EMBEDDED, NOT LINKED, for the reason letter/render._asset_uri gives: the
+    figure is serialised to JSON, cached, and handed to kaleido in a separate
+    process, so a relative path would resolve against whatever directory that
+    process happens to be in. A data URI is part of the figure.
+
+    Missing returns empty and the page draws unbranded rather than raising —
+    letterhead is presentation, and losing it must not cost the numbers.
+    """
+    path = Path(__file__).resolve().parents[2] / "assets" / name
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "", 0.0
+    w, h = _png_size(raw)
+    if not h:
+        return "", 0.0
+    return ("data:image/png;base64," + base64.b64encode(raw).decode("ascii"), w / h)
+
+
+def _box(px_w: float, aspect: float) -> tuple:
+    """(sizex, sizey) in PAPER units for an image px_w figure-pixels wide.
+
+    Paper units are fractions of the figure's own width and height, which are
+    different lengths — so passing one fraction for both is what stretches an
+    image, and the asset's aspect has to be divided back out through FIG_W/FIG_H.
+    """
+    return px_w / FIG_W, (px_w / aspect) / FIG_H
+
+
+def _letterhead() -> tuple:
+    """(images, shapes) for the wordmark, the watermark and the frame."""
+    images, shapes = [], []
+
+    mark, mark_aspect = _asset("jsa-50-years.png")
+    if mark:
+        sx, sy = _box(WM_WIDTH_FRAC * FIG_W, mark_aspect)
+        images.append(dict(
+            source=mark, xref="paper", yref="paper",
+            x=0.5, y=1 - WM_CENTRE_Y, sizex=sx, sizey=sy,
+            xanchor="center", yanchor="middle",
+            opacity=WM_OPACITY, layer="below",
+        ))
+
+    logo, logo_aspect = _asset("logo-full.png")
+    if logo:
+        sx, sy = _box(LOGO_H_FRAC * FIG_H * logo_aspect, logo_aspect)
+        images.append(dict(
+            source=logo, xref="paper", yref="paper",
+            # Right edge on the last column rule, baseline-centred on the title
+            # row — the masthead's flex row, which puts the title left and the
+            # wordmark right, expressed in the only terms a figure has.
+            x=C3 / FIG_W, y=1 - 30 / FIG_H, sizex=sx, sizey=sy,
+            xanchor="right", yanchor="middle",
+            opacity=1, layer="above",
+        ))
+
+    shapes.append(dict(
+        type="rect", xref="paper", yref="paper",
+        x0=FRAME_INSET / FIG_W, x1=1 - FRAME_INSET / FIG_W,
+        y0=FRAME_INSET / FIG_H, y1=1 - FRAME_INSET / FIG_H,
+        line=dict(color=BRAND_SAGE, width=FRAME_PT), fillcolor="rgba(0,0,0,0)",
+        layer="below",
+    ))
+    return images, shapes
 
 # Column rules, in figure pixels. Labels right-align into LBL; the three value
 # columns right-align on their own rule so the decimal points line up.
@@ -287,6 +552,27 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
         ann.append(_ann(C3, y, _num(year_ago.get(key)), color=DATA))
         y += 26
 
+    # AN EMPTY YEAR-AGO COLUMN IS AN ANSWER, NOT A HOLE, and three bare em-dashes
+    # on a client page read as a broken fetch. It happens when USDA published no
+    # report that month: October 2025 is absent from BOTH the Todays_Reports
+    # archive (cofd1025.txt 404s while cofd0925 and cofd1125 serve) and from
+    # ESMIS, whose own date filter steps straight from Sep 2025 to Nov 2025.
+    # The line says what is missing and does NOT say why -- a cause nobody
+    # verified is worth less than none.
+    if not any(year_ago.get(k) is not None
+               for k in ("on_feed", "placed", "marketed")):
+        # CENTRED ON THE YEAR-AGO COLUMN, not right-aligned on its rule. Right
+        # aligned at C3 the line is far wider than the column it explains, so it
+        # hangs left and sits under Guesses -- Ross, 2026-10-23: "needs moved
+        # over and centered better. looks weird where it's at". C3-14 is about
+        # the optical centre of the column: its values right-align at C3 and its
+        # header runs ~45px left of it. Shortened to suit -- "published" put the
+        # line back over Guesses, and the em-dashes beside it already say the
+        # figures are absent rather than zero.
+        ann.append(_ann(C3 - 14, y - 8,
+                        f"No {MONTH_ABBR[recap['month'] - 1]} {recap['year'] - 1} report",
+                        color=MUTED, size=8, align="center"))
+
     ann.append(_ann(34, 222, "Percent of Last Year", align="left"))
     for x, lab in ((C1, "On-Feed"), (C2, "Placed")):
         ann.append(_ann(x, 258, lab, size=11))
@@ -298,6 +584,12 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
         y += 26
 
     ann.append(_ann(34, 456, "Weight Classes Placed", align="left"))
+    # Ross, 2026-10-23: the head column had no heading at all, so the only thing
+    # naming it was the "Total" row at the foot of it. Right-aligned on 270 like
+    # the figures beneath it -- the two headings either side are left-aligned on
+    # their own text, and matching THEM would hang this one off the wrong edge
+    # of the column it labels.
+    ann.append(_ann(270, 456, "Total Head", align="right"))
     ann.append(_ann(300, 456, "Marketing Window", align="left"))
     y = 488
     for lab, head, window in recap["weight_classes"]:
@@ -313,15 +605,21 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
         released = recap["release_date"]
         bits = ["USDA NASS Cattle on Feed"]
         if released:
-            bits.append(f"released {released:%b %d, %Y}")
+            bits.append(f"Released {released:%b %d, %Y}")
         if guess_source:
-            bits.append(f"guesses: {guess_source}")
-        ann.append(_ann(34, FIG_H - 20, "  ·  ".join(bits), color=MUTED,
+            bits.append(f"Guesses: {guess_source}")
+        # Bottom-left corner: 14px above the frame line and ~68px below the
+        # Total row, so it reads as provenance on stationery rather than as
+        # another figure in the table. At FIG_H-20 it sat INSIDE the frame.
+        ann.append(_ann(34, FIG_H - 28, "  ·  ".join(bits), color=MUTED,
                         size=8, align="left"))
+
+    brand_images, brand_shapes = _letterhead()
 
     fig = go.Figure()
     fig.update_layout(
         width=FIG_W, height=FIG_H, annotations=ann,
+        images=brand_images, shapes=brand_shapes,
         margin=dict(l=0, r=0, t=0, b=0),
         paper_bgcolor="white", plot_bgcolor="white",
         xaxis=dict(visible=False, range=[0, 1], fixedrange=True),

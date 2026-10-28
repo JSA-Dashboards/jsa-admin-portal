@@ -209,6 +209,17 @@ def get_contract_marks() -> Dict[str, float]:
     }
 
 
+def get_contract_mark_provenance() -> List[dict]:
+    """Same de-prefixing as get_contract_marks, for the futures-mark provenance rows."""
+    spec = get_commodity_spec()
+    prefix = spec.code
+    return [
+        {**r, "key": r["key"][len(prefix):]}
+        for r in reference_repo.get_contract_mark_provenance()
+        if r["key"].startswith(prefix)
+    ]
+
+
 def get_iv_provenance() -> List[dict]:
     """Same de-prefixing as get_contract_marks, for the per-contract IV provenance rows."""
     spec = get_commodity_spec()

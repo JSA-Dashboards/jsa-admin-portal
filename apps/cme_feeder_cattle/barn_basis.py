@@ -49,9 +49,12 @@ name is written unquoted throughout, in prose as well as SQL, because
 tests/test_index_isolation.py bans it wrapped in either kind of quote inside an
 index module and that habit is what keeps app.py clean.
 """
+import datetime as _dt
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 BRACKETS = [400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900]
 WINDOWS = [90, 180, 365]
@@ -82,6 +85,29 @@ WINDOW_LABEL = {90: "last 3 months", 180: "last 6 months", 365: "last year"}
 # windows keep 65-79 of 80-81. Net across all 33 it drops 100 rows against the
 # old print floor (2,053 against 2,153) while removing every 31-head leader.
 MIN_HEAD = 100
+# A SEPARATE, MUCH LOWER FLOOR, and it has to be: MIN_HEAD above gates a BARN
+# over a whole window, while this gates one barn on one DAY. At 700-749 lb the
+# median barn-day is 41 head and 72% are under 100, so reusing MIN_HEAD here
+# would throw away about three quarters of the series.
+#
+# What actually poisons a per-barn line is single animals. The five most
+# extreme premiums on record came from barn-days of 1, 7, 5, 7 and 1 head;
+# at a floor of 10 the worst goes from -120.75 to -70.26 and 82% of barn-days
+# survive, against 28% at a floor of 100.
+MIN_PRINT_HEAD = 10
+# Fewer sale days than this and a line reads as a scatter rather than a
+# series. At 700-749 lb, 74 of 84 barns clear 10 days and 67 clear 20, so
+# 12 charts nearly every barn while keeping the genuinely sparse ones --
+# Belen has 8 over ten months -- out of a shape they cannot support.
+MIN_CHART_DAYS = 12
+# A LINE ACROSS A LONGER GAP THAN THIS INVENTS TRADES THAT DID NOT HAPPEN.
+# A barn sells weekly: the median spacing between one barn's sale days at a
+# bracket is 7 days. Three missed weeks is a barn that stopped, not a barn
+# between sales, and joining across it draws a straight line through months
+# of nothing. Measured at 700-749 lb: El Reno and Beaver have no gap over 21
+# days at all, so their lines are untouched; Billings has one of 105 days,
+# which is the case this exists for.
+MAX_LINE_GAP_DAYS = 21
 
 # How many barns the chart shows from each end of the ranking before pinned
 # barns are added. Named rather than written twice as a literal 10, because the
@@ -178,6 +204,132 @@ def _since(_db, days):
 # which rather than leaving the reader to assume they are equivalent.
 LOOKBACKS = [(182, "6 mo ago"), (365, "12 mo ago")]
 LOOKBACK_BAND_DAYS = 30
+
+# BEFORE THIS DATE fci_daily IS NOT ACCURATE ENOUGH TO SUBTRACT A PRICE FROM.
+#
+# The direct-trade component was added to the reconstruction on 2026-08-28, and
+# CLAUDE.md records the consequence in one line: agreement with CME is to a
+# fraction of a cent FROM that date on. Before it, a whole class of sale is
+# absent. Measured 2026-10-21 against CME's own published file:
+#
+#     2026-04-07..05-07   mean |miss| $2.814   max $7.510   <- the 6 mo band
+#     2025-10-06..11-05   mean |miss| $1.691   max $4.058   <- the 12 mo band
+#     2026-08-28 onward   mean |miss| $0.005   max $0.022
+#
+# So "vs FCI 6 mo ago" was being measured against an index that was $2.81 out on
+# average, sitting in the same row as a live column accurate to half a cent, and
+# the caption said they were comparable. They are not, and a basis quoted to the
+# cent against a figure that is dollars wrong is worse than no answer.
+#
+# vs BRACKET SURVIVES, and the asymmetry is the point rather than an oversight:
+# rel is a barn's basis minus the whole bracket's, both built from the same
+# fci_daily on the same sale days, so the index error very largely cancels. It
+# is a comparison between barns; mode A is a comparison against the index
+# itself, and that is the one with nothing solid to stand on.
+INDEX_TRUSTWORTHY_FROM = _dt.date(2026, 8, 28)
+
+
+def drop_empty_lookbacks(table, short):
+    """
+    Remove a lookback column that has no value in any row.
+
+    NEITHER None NOR NaN RENDERS AS BLANK, which is the whole reason this
+    exists: an all-absent column reaches a traded page as a stripe of "None",
+    and with the index cutoff in force that is every row of both columns.
+    blank_missing_lookbacks below carries what was actually measured, and why
+    the first two attempts could not tell a blank from a null.
+
+    Two attempts shipped before this one -- None, then NaN -- and both passed
+    the whole suite, because nothing in it builds the DataFrame. Only opening
+    the page showed it.
+
+    A SPARSE column is kept: one barn missing a band is a fact about that barn,
+    the column still carries real readings, and dropping it would hide them.
+    Only a column that says nothing at all goes.
+    """
+    for _centre, label in LOOKBACKS:
+        col = "%s %s" % (short, label)
+        if col in table.columns and table[col].isna().all():
+            table = table.drop(columns=[col])
+    return table
+
+
+def blank_missing_lookbacks(table, short):
+    """
+    Turn the surviving lookback columns into TEXT, empty where the value is
+    missing, and hand back the column_config that keeps them right-aligned.
+
+    A NULL IS NOT A BLANK. Measured in a browser against this Streamlit, one
+    missing cell in a column of real numbers: float NaN prints "None", pandas
+    pd.NA prints "None", NumberColumn(format="%.2f") prints "None", and a
+    Styler carrying na_rep="" prints "None". Only a string column holding ""
+    renders empty, so the column has to stop being numeric for a gap to read
+    as a gap.
+
+    The two earlier attempts -- None, then NaN -- were each checked by reading
+    pyarrow's to_pylist(), which prints None for ANY null and so could not tell
+    them apart, or tell either from a blank. That check could not fail. Only
+    the rendered page could, and did.
+
+    THE COST IS THE SORT: the grid sorts text lexically, so clicking one of
+    these headers puts "-18.53" after "5.46". Taken deliberately. The caption
+    under this table promises "Blank means the barn had no qualifying sales in
+    that band"; a column printing "None" breaks that promise on every row with
+    no data, where the sort misleads only a reader who sorts by that column.
+
+    Runs AFTER drop_empty_lookbacks, which needs the NaNs to recognise a column
+    that says nothing at all.
+    """
+    cfg = {}
+    for _centre, label in LOOKBACKS:
+        col = "%s %s" % (short, label)
+        if col not in table.columns:
+            continue
+        table[col] = ["" if pd.isna(v) else "%.2f" % v for v in table[col]]
+        try:
+            cfg[col] = st.column_config.TextColumn(alignment="right")
+        except TypeError:
+            # alignment= is newer than this file's floor. Losing it costs
+            # alignment; raising here would cost the whole tab.
+            cfg[col] = st.column_config.TextColumn()
+    return table, cfg
+
+
+def _cutoff_text():
+    """
+    "28 August 2026". Built by hand because %-d is glibc-only and raises
+    ValueError on Windows, which is where this job actually runs -- the same
+    trap _fmt_date below already carries a note about, and which this caption
+    fell into anyway.
+    """
+    d = INDEX_TRUSTWORTHY_FROM
+    return "%d %s" % (d.day, d.strftime("%B %Y"))
+
+
+def band_dates(centre_days, width=LOOKBACK_BAND_DAYS, today=None):
+    """
+    (oldest, newest) real dates the band covers. Mirrors _band's arithmetic so
+    the two cannot drift: _band builds the SQL, this answers questions about it.
+    `today` is injectable so the cutoff below is testable without waiting a year.
+    """
+    today = today or _dt.date.today()
+    half = width // 2
+    return (today - _dt.timedelta(days=int(centre_days) + half),
+            today - _dt.timedelta(days=int(centre_days) - half))
+
+
+def index_is_trustworthy(centre_days, width=LOOKBACK_BAND_DAYS, today=None):
+    """
+    May a basis measured AGAINST THE INDEX be quoted for this band?
+
+    Requires the WHOLE band to sit on or after INDEX_TRUSTWORTHY_FROM, not just
+    its newest day. A band straddling the cutoff is part good and part dollars
+    out, and there is no way to say which part a given barn's sale fell in --
+    so the honest answer for a straddling band is the same as for a wholly bad
+    one: nothing.
+    """
+    oldest, _newest = band_dates(centre_days, width, today)
+    return oldest >= INDEX_TRUSTWORTHY_FROM
 
 
 def _band(_db, centre_days, width=LOOKBACK_BAND_DAYS):
@@ -378,13 +530,92 @@ def load_basis_lookbacks(weight_low: int):
                 continue
             head = sum(r["head"] for r in band)
             bracket_basis = sum(r["head"] * r["basis"] for r in band) / head
+            # OMITTED, not zeroed and not quietly wrong: a band that reaches
+            # back past INDEX_TRUSTWORTHY_FROM has no index worth subtracting
+            # a price from. render() renders a missing key as blank.
+            trust = index_is_trustworthy(centre)
             for r in band:
-                out.setdefault((r["barn"], r["state"]), {})[centre] = {
-                    "basis": r["basis"],
-                    "rel": r["basis"] - bracket_basis,
-                }
+                entry = {"rel": r["basis"] - bracket_basis}
+                if trust:
+                    entry["basis"] = r["basis"]
+                out.setdefault((r["barn"], r["state"]), {})[centre] = entry
     except Exception:
         return out
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return out
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_barn_history(barn: str, state: str, weight_low: int):
+    """
+    [{date, price, bracket, head}] per sale day for ONE barn, the whole history
+    rather than the selected window, with the bracket's price on each of those
+    same days beside it.
+
+    AGAINST THE BRACKET, NOT AGAINST THE INDEX, and that is a data constraint
+    rather than a preference. INDEX_TRUSTWORTHY_FROM is 2026-08-28; calf_sales
+    begins 2025-09-01, so a basis-vs-FCI line here would have to throw away
+    thirteen of its fourteen months -- 39 sale days survive the cutoff in all,
+    and the best-covered barn has 13 of them. That is not a line. The bracket
+    comparison has no such problem: it prices a barn against its own bracket on
+    the same sale days, so the index error very largely cancels, which is the
+    same reasoning the lookback columns already use to blank themselves in
+    vs FCI mode.
+
+    HEAD-WEIGHTED, matching the tiles and the table on this page. cash_calves.py
+    is pound-weighted for its own good reasons and the two are not
+    interchangeable; using its formula here would put a line on the page that
+    disagrees with the $/cwt directly above it.
+
+    Days where this barn sold fewer than MIN_PRINT_HEAD are dropped -- see the
+    constant for the one-head prints that were otherwise the extremes of it.
+    Empty list on any failure, the same quiet degradation as the rest of the
+    module.
+    """
+    out = []
+    try:
+        _db, conn = _conn()
+    except Exception:
+        return out
+    try:
+        cur = conn.cursor()
+        bracket = {}
+        for d, p in cur.execute(
+                "SELECT report_date, "
+                "       SUM(avg_price*head_count)/NULLIF(SUM(head_count),0) "
+                "FROM calf_sales "
+                f"WHERE weight_low = {int(weight_low)} "
+                "GROUP BY report_date").fetchall():
+            if p:
+                bracket[str(_db.iso(d))] = float(p)
+        # INTERPOLATED, NOT BOUND, and that is the module's convention rather
+        # than laziness: this runs on SQLite locally and Snowflake in
+        # production, and the two take different placeholder styles -- "?"
+        # against "%s". A bound "?" works in every local test and raises on
+        # the deployed backend, where the except below swallows it and the
+        # chart simply never appears. It cost two reboots to find.
+        _barn = str(barn).replace("'", "''")
+        _st = str(state).replace("'", "''")
+        rows = cur.execute(
+            "SELECT report_date, "
+            "       SUM(avg_price*head_count)/NULLIF(SUM(head_count),0), "
+            "       SUM(head_count) "
+            "FROM calf_sales "
+            f"WHERE weight_low = {int(weight_low)} "
+            f"  AND location = '{_barn}' AND state = '{_st}' "
+            "GROUP BY report_date ORDER BY report_date").fetchall()
+        for d, p, h in rows:
+            iso = str(_db.iso(d))
+            if not p or not h or int(h) < MIN_PRINT_HEAD or iso not in bracket:
+                continue
+            out.append({"date": iso, "price": float(p),
+                        "bracket": bracket[iso], "head": int(h)})
+    except Exception:
+        return []
     finally:
         try:
             conn.close()
@@ -666,14 +897,26 @@ def render(tile, muted="#6b7280", colors=None, watermark=None,
             # None, NOT 0.0. Zero basis is a real and ordinary reading here, so a
             # filled-in zero would be indistinguishable from a barn that traded
             # exactly at the index that month.
-            p = prior.get(centre)
-            out[f"{short} {label}"] = round(p[metric], 2) if p else None
+            # .get(metric), NOT [metric]. A band can carry "rel" and not
+            # "basis" -- see index_is_trustworthy -- and a KeyError here would
+            # take the whole tab down rather than leaving one column blank.
+            #
+            # NaN, not None: drop_empty_lookbacks needs .isna() to find a
+            # column that says nothing at all, and blank_missing_lookbacks
+            # needs it to find the individual gaps. NEITHER renders as blank
+            # on its own -- both print the word "None" -- which is what
+            # blank_missing_lookbacks exists to deal with.
+            p = prior.get(centre) or {}
+            v = p.get(metric)
+            out[f"{short} {label}"] = round(v, 2) if v is not None else float("nan")
         out["Timing"] = round(r["timing"], 2)
         out["Last sale"] = _fmt_date(r["last"])
         return out
 
-    st.dataframe(pd.DataFrame([_row(r) for r in ranked]),
-                 use_container_width=True, hide_index=True)
+    table = drop_empty_lookbacks(pd.DataFrame([_row(r) for r in ranked]), short)
+    table, lookback_cfg = blank_missing_lookbacks(table, short)
+    st.dataframe(table, use_container_width=True, hide_index=True,
+                 column_config=lookback_cfg)
     st.caption(
         f"**{short} {LOOKBACKS[0][1]}** and **{short} {LOOKBACKS[1][1]}** are "
         f"the same measure at a point in time — that barn's basis over a "
@@ -684,6 +927,20 @@ def render(tile, muted="#6b7280", colors=None, watermark=None,
         f"opposite season and moves with it. Blank means the barn had no "
         f"qualifying sales in that band."
     )
+    stale = [lbl for cen, lbl in LOOKBACKS if not index_is_trustworthy(cen)]
+    if stale and mode == MODE_FCI:
+        st.caption(_md(
+            f"**{' and '.join(stale)} are blank in this mode on purpose.** Those "
+            f"bands reach back before {_cutoff_text()} where "
+            f"available, and the reconstruction did not carry direct-trade sales "
+            f"until then — measured against CME's own file, the index ran "
+            f"$2.81 out on average over the six-month band and $1.69 over the "
+            f"twelve-month one, against half a cent today. A basis quoted to the "
+            f"cent off a figure that is dollars wrong is worse than no answer. "
+            f"Switch to **{MODE_BRACKET}** to see those bands: it compares a "
+            f"barn against the bracket on the same sale days, so the index error "
+            f"very largely cancels."
+        ))
 
     st.caption(
         f"Steers only, muscle grade #1 and #1-2, {wt}-{wt + 49} lb, from the "
@@ -702,3 +959,126 @@ def render(tile, muted="#6b7280", colors=None, watermark=None,
         f"in two lots and 900 in twenty are different kinds of evidence, which "
         f"is why the count is still shown even though it no longer gates a row."
     )
+
+
+    # ── One barn, against its bracket, over time ──────────────────────────────
+    #
+    # The third of the three charts added on 2026-10-22, and the one that could
+    # not simply copy the other two.
+    #
+    # ONE BARN, because that is this tab's unit. With several picked or none,
+    # `subject` falls back to the bracket, and charting the bracket against
+    # itself says nothing -- so the chart appears exactly when `focus` does.
+    # Pooling the picked barns was the other option and is the one the tiles
+    # above already refuse, for the reason written there: it would invent a
+    # composite barn nobody trades.
+    #
+    # AGAINST THE BRACKET RATHER THAN THE INDEX, and not to duplicate the Cash
+    # Feeder Prices tab -- see load_barn_history for the dates. vs FCI would
+    # have 13 points at best.
+    #
+    # It does NOT follow the vs FCI / vs bracket toggle above. A toggle whose
+    # other position draws a near-empty chart is a control that looks broken,
+    # and the caption says which comparison this is rather than leaving the
+    # reader to assume it tracks the radio.
+    if focus is not None:
+        _hist = load_barn_history(focus["barn"], focus["state"], wt)
+        if len(_hist) >= MIN_CHART_DAYS:
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            st.markdown(f'<div class="sec-header">{_label(focus)} vs the '
+                        f'{wt}-{wt + 49} lb Bracket</div>',
+                        unsafe_allow_html=True)
+            _x = [r["date"] for r in _hist]
+            _bp = [r["price"] for r in _hist]
+            _kp = [r["bracket"] for r in _hist]
+            _gp = [a - b for a, b in zip(_bp, _kp)]
+
+            # None at every gap longer than MAX_LINE_GAP_DAYS, with
+            # connectgaps=False below, so the line breaks where the barn did
+            # rather than running straight through the months it did not sell.
+            # The STATS above and below stay on the unbroken lists: a break is
+            # a drawing decision, not a missing observation.
+            _brk = [0] + [i for i in range(1, len(_x))
+                          if (_dt.date.fromisoformat(_x[i])
+                              - _dt.date.fromisoformat(_x[i - 1])).days
+                          > MAX_LINE_GAP_DAYS]
+
+            def _split(vals):
+                out = []
+                for i, v in enumerate(vals):
+                    if i and i in _brk:
+                        out.append(None)
+                    out.append(v)
+                return out
+
+            def _splitx(vals):
+                out = []
+                for i, v in enumerate(vals):
+                    if i and i in _brk:
+                        out.append(v)
+                    out.append(v)
+                return out
+
+            _xd, _bpd, _kpd, _gpd = (_splitx(_x), _split(_bp),
+                                     _split(_kp), _split(_gp))
+
+            hfig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                 row_heights=[0.72, 0.28], vertical_spacing=0.06)
+            hfig.add_trace(go.Scatter(
+                x=_xd, y=_bpd, name=_label(focus), mode="lines+markers",
+                connectgaps=False,
+                line=dict(color=C["neg"], width=1.6),
+                marker=dict(size=4),
+                hovertemplate="Barn: $%{y:.2f}<extra></extra>"), row=1, col=1)
+            hfig.add_trace(go.Scatter(
+                x=_xd, y=_kpd, name=f"{wt}-{wt + 49} lb bracket",
+                mode="lines", connectgaps=False,
+                line=dict(color=C["text"], width=2),
+                hovertemplate="Bracket: $%{y:.2f}<extra></extra>"), row=1, col=1)
+            hfig.add_trace(go.Scatter(
+                x=_xd, y=_gpd, name="premium", mode="lines",
+                showlegend=False, connectgaps=False,
+                line=dict(color=C["muted"], width=1),
+                hovertemplate="Premium: $%{y:+.2f}<extra></extra>"), row=2, col=1)
+            hfig.update_yaxes(title="$/cwt", tickprefix="$", row=1, col=1, **AXIS)
+            hfig.update_yaxes(title="premium", tickprefix="$", row=2, col=1, **AXIS)
+            hfig.update_xaxes(row=1, col=1, **AXIS)
+            hfig.update_layout(
+                paper_bgcolor=C["bg"], plot_bgcolor=C["bg"],
+                font=dict(color=C["text"], size=11),
+                hovermode="x unified", showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="right", x=1, bgcolor="rgba(0,0,0,0)",
+                            font=dict(color=C["muted"], size=10)),
+                margin=dict(l=55, r=20, t=15, b=40),
+                xaxis2=dict(**AXIS, title="", type="date"),
+                xaxis=dict(type="date"),
+                height=420)
+            if watermark:
+                watermark(hfig, size=0.3, opacity=0.06)
+            st.plotly_chart(hfig, use_container_width=True)
+
+            _above = sum(1 for g in _gp if g > 0)
+            _med = sorted(_gp)[len(_gp) // 2]
+            st.caption(_md(
+                f"Every sale day {_label(focus)} reported at {wt}-{wt + 49} lb, "
+                f"head-weighted like the table above, against the whole "
+                f"bracket on those same days. {len(_hist)} sale days, "
+                f"{_x[0]} to {_x[-1]}. It came in above the bracket on "
+                f"{100 * _above // len(_gp)}% of them; across all of them its "
+                f"median premium was ${_med:+.2f}/cwt. "
+                f"**Against the bracket, not the index, whichever way the "
+                f"toggle above is set** — the reconstruction only carries "
+                f"direct trade from {_cutoff_text()}, so a line against the "
+                f"index could honestly start no earlier than that and would "
+                f"have a handful of points. The bracket comparison prices this "
+                f"barn against its peers on the same days, so the index error "
+                f"very largely cancels. "
+                f"Days under {MIN_PRINT_HEAD} head are left out: a one-head "
+                f"print is not a market, and those were the extremes of this "
+                f"line."
+            ))
+        elif _hist:
+            st.caption(
+                f"{_label(focus)} has only {len(_hist)} qualifying sale "
+                f"day(s) at {wt}-{wt + 49} lb, too few to chart a history.")

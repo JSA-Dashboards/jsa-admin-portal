@@ -56,6 +56,29 @@ def upsert_iv_snapshot(canonical_key: str, iv: float, source: str, updated_by: s
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def get_contract_mark_provenance() -> List[dict]:
+    """Per-contract futures mark with where it came from and how old it is.
+
+    The exact counterpart of get_iv_provenance, and added for a sharper reason: the mark
+    is refreshed only when somebody presses "Update prices from Massive", so a mark from
+    last week looks precisely like this morning's. Every greek on the page is priced off
+    it, so when it stands still the heatmap, the Greeks bars and Net Position all stand
+    still with it -- while the blotter keeps moving, because that prices each leg off its
+    own last tick. That divergence was reported as "the heatmap isn't updating" and took
+    an investigation to trace; UPDATED_AT was already on the table and nothing read it.
+    """
+    df = sf.query_df(
+        "SELECT CANONICAL_KEY, MARK_PRICE, SOURCE, UPDATED_AT FROM CONTRACT_MARKS "
+        "ORDER BY UPDATED_AT DESC NULLS LAST"
+    )
+    return [
+        {"key": r["CANONICAL_KEY"], "price": float(r["MARK_PRICE"]),
+         "source": r["SOURCE"] or "", "updated_at": r["UPDATED_AT"]}
+        for _, r in df.iterrows()
+    ]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def get_contract_marks() -> Dict[str, float]:
     df = sf.query_df("SELECT CANONICAL_KEY, MARK_PRICE FROM CONTRACT_MARKS")
     return {row["CANONICAL_KEY"]: float(row["MARK_PRICE"]) for _, row in df.iterrows()}
@@ -75,6 +98,9 @@ def set_contract_price(canonical_key: str, price: float, source: str = "manual")
         (canonical_key, price, source, canonical_key, price, source),
     )
     get_contract_marks.clear()
+    # Both caches read the same row, so clearing one and not the other would leave the
+    # age caption calling a mark a day old a second after someone refreshed it.
+    get_contract_mark_provenance.clear()
 
 
 @st.cache_data(ttl=60, show_spinner=False)

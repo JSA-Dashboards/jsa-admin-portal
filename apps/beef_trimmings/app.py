@@ -15,7 +15,16 @@ import sys
 # so this folder is never added automatically -- without the insert the
 # trimmings_qc import below dies with ModuleNotFoundError under the portal
 # shell. It works standalone, which is how it would reach production unseen.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 import io
 import re
@@ -1065,7 +1074,7 @@ if not load_ok:
             f"in **Technical details** below (`{err_msg.split(':')[0]}`), and "
             "it needs a code fix rather than a refresh."
         )
-    with st.expander("Technical details"):
+    for _ in portal_view.staff_expander("Technical details"):
         st.code(err_msg)
     st.stop()
 
@@ -1417,7 +1426,7 @@ else:
 
 # ── Data Tables ────────────────────────────────────────────────────────────────
 
-with st.expander("📋  US Fresh 90s — data table"):
+for _ in portal_view.staff_expander("📋  US Fresh 90s — data table"):
     # Project explicitly rather than copying the frame. The previous version
     # renamed whatever columns it happened to find, so central_low/central_high/
     # central_pounds shipped to clients as raw snake_case at six decimals the
@@ -1458,7 +1467,7 @@ with st.expander("📋  US Fresh 90s — data table"):
         unsafe_allow_html=True,
     )
 
-with st.expander("📋  US Fresh 90s — weekly average (LM_XB460)"):
+for _ in portal_view.staff_expander("📋  US Fresh 90s — weekly average (LM_XB460)"):
     if us_weekly.empty:
         st.info("Weekly LM_XB460 data is unavailable.")
     else:
@@ -1473,7 +1482,7 @@ with st.expander("📋  US Fresh 90s — weekly average (LM_XB460)"):
             wdisp[_c] = wdisp[_c].map(_f)
         st.dataframe(wdisp, width="stretch", height=320)
 
-with st.expander("📋  Import Cow Meat (90%) — weekly data table"):
+for _ in portal_view.staff_expander("📋  Import Cow Meat (90%) — weekly data table"):
     disp = imp_hist.copy()
     disp["report_date"] = qc.date_text(disp["report_date"])
     disp = disp.rename(columns={

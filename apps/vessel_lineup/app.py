@@ -16,9 +16,9 @@ import vl_data_sync as data_sync
 JSA_GREEN    = "#5e7164"
 JSA_GREEN_LT = "#8db89a"
 
-# Dark by default. The JSA admin portal is light-only and mirrors this file with
-# VESSEL_THEME pinned to "light" (its sync's pin_env), so one file serves both.
-_LIGHT = str('light' or "dark").strip().lower() == "light"
+# Light by default (VESSEL_THEME=dark brings the old dark palette back). The JSA admin portal is light-only
+# and mirrors this file with VESSEL_THEME pinned to "light" (its sync's pin_env), so one file serves both.
+_LIGHT = str('light' or "light").strip().lower() != "dark"
 
 if _LIGHT:
     DM_BG       = "#f6f8f7"
@@ -107,6 +107,20 @@ except TypeError:  # older Streamlit without st.html JS support
     import streamlit.components.v1 as _stc
     _stc.html(_BADGE_JS, height=0)
 
+def _watermark_css():
+    import base64
+    try:
+        uri = "data:image/png;base64," + base64.b64encode(open(os.path.join(_APP_DIR, "assets", "logo-50yr.png"), "rb").read()).decode()
+    except OSError:
+        return ""
+    return ("[class*=\"st-key-tablewrap_\"] { position: relative; }\n"
+            "[class*=\"st-key-tablewrap_\"]::after { content: \"\"; position: absolute; inset: 0; pointer-events: none; z-index: 5;\n"
+            "  background-image: url('" + uri + "'); background-repeat: no-repeat; background-position: center center;\n"
+            "  background-size: min(34%, 260px); opacity: 0.10; }")
+
+
+_TABLE_WM_CSS = _watermark_css()
+
 st.markdown(f"""
 <style>
 /* ── Base ── */
@@ -122,25 +136,6 @@ h1, h2, h3, h4 {{ color: {DM_TEXT}; }}
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] label,
 [data-testid="stSidebar"] .stMarkdown {{ color: {DM_MUTED}; }}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] {{
-    background: {DM_SURFACE};
-    border-radius: 8px;
-    padding: 4px 6px;
-    gap: 4px;
-    border: 1px solid {DM_BORDER};
-}}
-.stTabs [data-baseweb="tab"] {{
-    background: transparent;
-    color: {DM_MUTED};
-    border-radius: 6px;
-    font-weight: 500;
-}}
-.stTabs [aria-selected="true"] {{
-    background: {JSA_GREEN} !important;
-    color: {DM_TEXT} !important;
-}}
 
 /* ── KPI cards ── */
 .kpi-wrap {{
@@ -185,6 +180,30 @@ h1, h2, h3, h4 {{ color: {DM_TEXT}; }}
 
 /* ── Dataframe ── */
 [data-testid="stDataFrame"] {{ border-radius: 6px; overflow: hidden; }}
+
+/* ── Same look as the CFTC COT dashboard ── */
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap');
+html, body, p, span, div, label, button, td, th {{ font-family:'Source Sans 3','Source Sans Pro',sans-serif; }}
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] {{ display:none !important; }}
+.block-container {{ padding-top: 3.2rem; max-width: 1400px; }}
+.dash-header {{ display:flex; align-items:center; gap:18px; padding-bottom:10px; }}
+.dash-header img {{ height:40px; }}
+.dash-header .t b {{ font-family:'EB Garamond',Georgia,serif; font-size:1.7rem; color:{DM_TEXT}; font-weight:600; }}
+.dash-header .t div {{ font-size:.85rem; color:{DM_MUTED}; }}
+@media (max-width: 640px) {{ .dash-header img {{ display:none; }} }}
+.tile {{ background:{DM_SURFACE}; border:1px solid {DM_BORDER}; border-top:3px solid {JSA_GREEN};
+    border-radius:10px; padding:14px 16px; text-align:center; height:100%; margin-bottom:8px; }}
+.tile-label {{ color:{DM_MUTED}; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.09em; margin-bottom:6px; }}
+.tile-value {{ color:{DM_TEXT}; font-size:1.55rem; font-weight:700; line-height:1.1; }}
+.tile-sub {{ color:{DM_MUTED}; font-size:0.72rem; margin-top:5px; }}
+.tile-delta-neu {{ color:{DM_MUTED}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
+.asof {{ background:{DM_SURFACE}; border:1px solid {DM_BORDER}; border-radius:8px; padding:8px 14px;
+    color:{DM_MUTED}; font-size:0.8rem; margin:4px 0 12px; }}
+.asof b {{ color:{DM_TEXT}; }}
+hr {{ border-color:{DM_BORDER}; }}
+#MainMenu, footer {{ visibility:hidden; }}
+.stDeployButton {{ display:none; }}
+{_TABLE_WM_CSS}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1181,135 +1200,91 @@ def main():
     _data_info = _sync_data(_APP_DIR)
     REPO_FILE_PATH = _data_info[DATA_FILENAME]["path"]
     _BRZ_DB_PATH = _data_info["brazil_lineup.db"]["path"]
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        try:
-            st.image(JSA_LOGO, width=150)
-        except Exception:
-            st.markdown("## JPSI")
+    # ── Data file for the legacy views (repo copy, else the OneDrive original, else an upload in that tab) ──
+    file_mtime, file_source, local_available = None, None, False
+    for path in (REPO_FILE_PATH, ONEDRIVE_FILE_PATH):
+        if os.path.exists(path):
+            file_source, local_available = path, True
+            try:
+                file_mtime = os.path.getmtime(path)
+            except Exception:
+                pass
+            break
 
-        st.markdown("## 🚢 Vessel Lineup")
-        st.markdown("---")
-
-        n_months = st.slider(
-            "Shipped History Window",
-            min_value=3, max_value=24, value=12, step=1,
-            help="Number of months of sailed history to display",
+    # ── Header: logo + title on the left, Reload Data and the data status on the right ──
+    head_l, head_r = st.columns([5, 2], vertical_alignment="center")
+    with head_l:
+        st.markdown(
+            f'<div class="dash-header"><img src="{JSA_LOGO}">'
+            '<div class="t"><b>Vessel Line-up</b><div>United States &middot; Brazil &middot; Argentina '
+            '&middot; John Stewart &amp; Associates</div></div></div>',
+            unsafe_allow_html=True,
         )
-        st.markdown("---")
-
-        # ── File source priority ──────────────────────────────────────────────
-        # 1. Repo copy (same folder as app.py) — works on Streamlit Cloud + local
-        # 2. Original OneDrive source path — local fallback
-        # 3. File uploader — last resort
-        file_mtime = None
-
-        if os.path.exists(REPO_FILE_PATH):
-            file_source = REPO_FILE_PATH
-            try:
-                file_mtime = os.path.getmtime(REPO_FILE_PATH)
-                mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
-            except Exception:
-                mod_str = "Unknown"
-            st.caption(f"📂 {DATA_FILENAME}")
-            st.caption(f"File saved: {mod_str}")
-            local_available = True
-
-        elif os.path.exists(ONEDRIVE_FILE_PATH):
-            file_source = ONEDRIVE_FILE_PATH
-            try:
-                file_mtime = os.path.getmtime(ONEDRIVE_FILE_PATH)
-                mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
-            except Exception:
-                mod_str = "Unknown"
-            st.caption(f"📂 OneDrive source")
-            st.caption(f"File saved: {mod_str}")
-            local_available = True
-
-        else:
-            local_available = False
-            st.markdown("**Upload Data File**")
-            uploaded = st.file_uploader(
-                DATA_FILENAME,
-                type=["xlsx"],
-                help="Upload the Vessel Lineup Excel file to load the dashboard",
-            )
-            if uploaded is None:
-                st.warning("Upload the Vessel Lineup Excel file to continue.")
-                st.stop()
-            file_source = io.BytesIO(uploaded.read())
-
-        st.markdown("---")
-
-        if st.button("🔄 Reload Data", use_container_width=True):
+    with head_r:
+        if st.button("Reload data", icon=":material/refresh:", key="reload_data", width="stretch"):
             st.cache_data.clear()
             st.rerun()
-        st.caption(data_sync.describe(_data_info))
+        st.caption(f"{data_sync.describe(_data_info)} · loaded {datetime.now().strftime('%b %d %I:%M %p')}")
 
-        st.markdown("---")
-        st.caption(f"Loaded: {datetime.now().strftime('%b %d · %I:%M %p')}")
-
-    # ── Load ──────────────────────────────────────────────────────────────────
-    with st.spinner("Loading vessel data..."):
-        frames = load_data(file_source, mtime=file_mtime)
-        trends_regions, latest_date = load_trends_snapshot(file_source, mtime=file_mtime)
-
-    # ── Stale-data banner (local only) ────────────────────────────────────────
-    # If the file on disk is newer than what's in cache, prompt a reload.
+    # ── Stale-data banner (local only): the file on disk is newer than what was loaded ──
     if local_available and file_mtime is not None:
         cached_mtime = st.session_state.get("cached_mtime")
         if cached_mtime is not None and file_mtime > cached_mtime:
-            st.warning(
-                "⚠️ The source file has been updated since last load. "
-                "Click **Reload Data** in the sidebar to refresh.",
-                icon="🔄",
-            )
+            st.warning("The source file has been updated since last load. Click **Reload data** to refresh.", icon="🔄")
         st.session_state["cached_mtime"] = file_mtime
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    st.markdown(
-        "<h1 style='margin-bottom:2px;'>🚢 Vessel Lineup Dashboard</h1>"
-        f"<p style='color:{DM_MUTED}; margin-top:0; margin-bottom:18px;'>"
-        "US Gulf &nbsp;·&nbsp; Pacific Northwest &nbsp;·&nbsp; Texas Gulf"
-        " &nbsp;·&nbsp; Brazil</p>",
-        unsafe_allow_html=True,
-    )
-
-    tabs = st.tabs(["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG", "🇧🇷 Brazil", "🧭 Regions"], on_change="rerun")
+    facts_db = _data_info["facts.db"]["path"]
+    tabs = st.tabs(["Summary", "United States", "Brazil", "Argentina", "Forecast & execution", "Legacy views"],
+                   on_change="rerun")
 
     with tabs[0]:
         if tabs[0].open:
-            page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
+            import vl_overview as overview
+            overview.page_summary(facts_db)
 
-    with tabs[1]:
-        if tabs[1].open:
-            st.markdown("<h2>US Gulf &nbsp;(USG)</h2>", unsafe_allow_html=True)
-            page_us(frames["USG"], "USG", n_months)
-
-    with tabs[2]:
-        if tabs[2].open:
-            st.markdown("<h2>Pacific Northwest &nbsp;(PNW)</h2>", unsafe_allow_html=True)
-            page_us(frames["PNW"], "PNW", n_months)
-
-    with tabs[3]:
-        if tabs[3].open:
-            st.markdown("<h2>Texas Gulf &nbsp;(TXG)</h2>", unsafe_allow_html=True)
-            page_us(frames["TXG"], "TXG", n_months)
+    for i, country in ((1, "United States"), (2, "Brazil"), (3, "Argentina")):
+        with tabs[i]:
+            if tabs[i].open:
+                import vl_overview as overview
+                overview.page_country(country, facts_db)
 
     with tabs[4]:
         if tabs[4].open:
-            st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
-            page_brazil(frames_us=frames)
-
-    with tabs[5]:
-        if tabs[5].open:
-            st.markdown("<h2>Regions &nbsp;— line-up, trend &amp; execution</h2>", unsafe_allow_html=True)
+            st.markdown("<h2>Forecast &amp; execution</h2>", unsafe_allow_html=True)
             import vl_region_views as region_views
-            region_views.page_regions(facts_db=_data_info["facts.db"]["path"], ui=dict(
+            region_views.page_regions(facts_db=facts_db, ui=dict(
                 kpi=kpi, sec=sec, layout=BASE_LAYOUT,
                 comm_colors={**COMM_COLORS, "Soybeans": COMM_COLORS["Soybeans/Meal"], "Soybean Meal": JSA_GREEN, "Sugar": COL_ORG},
                 blue=COL_BLUE, amb=COL_AMB, pos=COL_POS, neg=COL_NEG, purp=COL_PURP, green_lt=JSA_GREEN_LT,
             ))
+
+    with tabs[5]:
+        if tabs[5].open:
+            # The original per-region pages, read from the Southport workbook and the Brazil database.
+            if file_source is None:
+                uploaded = st.file_uploader(DATA_FILENAME, type=["xlsx"], help="Upload the Vessel Lineup Excel file to load these views")
+                if uploaded is None:
+                    st.info("Upload the Vessel Lineup Excel file to see the legacy views.")
+                    st.stop()
+                file_source = io.BytesIO(uploaded.read())
+            with st.spinner("Loading vessel data..."):
+                frames = load_data(file_source, mtime=file_mtime)
+                trends_regions, latest_date = load_trends_snapshot(file_source, mtime=file_mtime)
+            n_months = st.slider("Shipped history window (months)", min_value=3, max_value=24, value=12, step=1,
+                                 help="Number of months of sailed history to display", key="legacy_months")
+            legacy = st.tabs(["Summary", "USG", "PNW", "TXG", "Brazil"], on_change="rerun")
+            with legacy[0]:
+                if legacy[0].open:
+                    page_summary(frames, n_months, trends_regions=trends_regions, latest_date=latest_date)
+            for i, (code, name) in enumerate((("USG", "US Gulf (USG)"), ("PNW", "Pacific Northwest (PNW)"), ("TXG", "Texas Gulf (TXG)")), 1):
+                with legacy[i]:
+                    if legacy[i].open:
+                        st.markdown(f"<h2>{name}</h2>", unsafe_allow_html=True)
+                        page_us(frames[code], code, n_months)
+            with legacy[4]:
+                if legacy[4].open:
+                    st.markdown("<h2>Brazil</h2>", unsafe_allow_html=True)
+                    page_brazil(frames_us=frames)
 
     # ── Disclaimer footer ─────────────────────────────────────────────────────
     current_year = datetime.now().year

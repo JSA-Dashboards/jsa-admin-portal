@@ -4,7 +4,7 @@ import streamlit as st
 
 from jsa_risk import state
 from jsa_risk.data.live_iv import lookup_option_iv
-from jsa_risk.pricing.black76 import black76
+from jsa_risk.pricing.black76 import american
 from jsa_risk.pricing.stress import Position
 from jsa_risk.pricing.symbols import canonical_contract_key, contract_display_name, option_expiry_date
 from jsa_risk.state import get_contract_price
@@ -147,7 +147,7 @@ with field_col:
         model_price = F
     else:
         dte = max((draft["expiry"] - date.today()).days, 0) if draft["expiry"] else 0
-        result = black76(F, draft["strike"] or 0.0001, dte / 365, draft["iv"] or 0.01, draft["type"] == "call")
+        result = american(F, draft["strike"] or 0.0001, dte / 365, draft["iv"] or 0.01, draft["type"] == "call")
         model_price = result.price
 
     # Always editable. Starts at the model value (and follows it as strike/IV/etc. change),
@@ -184,7 +184,9 @@ with preview_col:
     c1, c2 = st.columns(2)
     c1.metric("Model price", f"${model_price:.3f}")
     c2.metric(entry_label, f"${entry_price:.3f}")
-    c1.metric(f"Delta ({commodity.unit})", _fmt_unit_signed(delta_d, commodity.unit))
+    # One position being previewed, so "Position", not "Net Position" -- the singular form
+    # the blotter's own per-row column uses. "Delta" is the greek, and is not this.
+    c1.metric(f"Position ({commodity.unit})", _fmt_unit_signed(delta_d, commodity.unit))
     c2.metric("Gamma $", _fmt_dollars_signed(gamma_d))
     c1.metric("Vega $/vol pt", _fmt_dollars_signed(vega_d))
     c2.metric("Theta $/day", _fmt_dollars_signed(theta_d))

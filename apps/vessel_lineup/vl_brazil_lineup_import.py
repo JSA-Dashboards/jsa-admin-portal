@@ -15,7 +15,8 @@ import logging
 import os
 import sys
 import tempfile
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -192,7 +193,7 @@ def _save_state(state):
 # Main
 # ---------------------------------------------------------------------------
 
-def run(backfill=False):
+def run(backfill=False, days=4):
     import vl_brazil_parser as brazil_parser
     import vl_brazil_db as brazil_db
 
@@ -202,29 +203,33 @@ def run(backfill=False):
     inbox_user = os.environ["GRAPH_INBOX_USER"]
     base = f"https://graph.microsoft.com/v1.0/users/{inbox_user}"
 
-    # Fetch top 50 emails (no $filter – Graph 400s on filter+orderby)
+    # Scan by date, not "newest 50": the inbox takes ~200 messages a day, so a PDF that arrived in the
+    # afternoon can be buried by the next morning's run. $filter + $orderby on the SAME property works.
+    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     msgs_url = f"{base}/mailFolders/inbox/messages"
     params = {
-        "$top": 50,
+        "$filter": f"receivedDateTime ge {since}",
         "$orderby": "receivedDateTime desc",
+        "$top": 100,
         "$select": "id,subject,hasAttachments,from,bodyPreview,receivedDateTime",
     }
-    data = _graph_get(token, msgs_url, params)
-    messages = data.get("value", [])
-    log.info(f"Fetched {len(messages)} inbox messages")
+    messages, url = [], msgs_url
+    for _ in range(20):
+        data = _graph_get(token, url, params)
+        messages += data.get("value", [])
+        url, params = data.get("@odata.nextLink"), None
+        if not url:
+            break
+    log.info(f"Fetched {len(messages)} inbox messages from the last {days} days")
 
     state = _load_state()
     last_id = state["last_processed_id"]
 
     processed_ids = []
+    rejected = []          # PDFs that were found but could not be loaded: the run then exits non-zero so cron-alert emails it
 
     for msg in messages:
         msg_id = msg["id"]
-
-        # Non-backfill: stop at previously seen ID
-        if not backfill and last_id and msg_id == last_id:
-            log.info(f"Reached last processed message {msg_id[:16]}…, stopping")
-            break
 
         if not _email_is_candidate(msg):
             continue
@@ -242,6 +247,9 @@ def run(backfill=False):
             if not _attachment_name_matches(att_name):
                 continue
 
+            m = re.search(r"(\d{4})[._-](\d{2})[._-](\d{2})", att_name)
+            if m and brazil_db.date_loaded(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", DB_FILE):
+                continue                                                     # already in the DB: no download, no parse
             log.info(f"Processing attachment: {att_name} (msg {msg_id[:16]}…)")
 
             # Download attachment bytes
@@ -251,6 +259,7 @@ def run(backfill=False):
                 pdf_bytes = _graph_get_bytes(token, att_url_dl)
             except Exception as e:
                 log.error(f"Download failed for {att_name}: {e}")
+                rejected.append(att_name)
                 continue
 
             # Write to temp file and parse
@@ -262,6 +271,7 @@ def run(backfill=False):
                 parsed = brazil_parser.parse_pdf(tmp_path)
             except Exception as e:
                 log.error(f"Parse failed for {att_name}: {e}")
+                rejected.append(att_name)
                 continue
             finally:
                 try:
@@ -281,6 +291,7 @@ def run(backfill=False):
                 loose = brazil_parser.validation_error(parsed, rel_tol=0.01)
                 if loose:
                     log.error(f"{att_name}: NOT loaded - {loose}")
+                    rejected.append(att_name)
                     continue
                 log.warning(f"{att_name}: loaded with a small total mismatch - {strict}")
 
@@ -308,6 +319,7 @@ def run(backfill=False):
         if not last_id:
             state["last_processed_id"] = messages[0]["id"]
             _save_state(state)
+    return rejected
 
 
 if __name__ == "__main__":
@@ -318,12 +330,21 @@ if __name__ == "__main__":
         action="store_true",
         help="Process all matching emails (don't update state)",
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=4,
+        help="How far back in the inbox to look (default 4); raise it to catch up after an outage",
+    )
     args = parser.parse_args()
 
     _load_env()
 
     try:
-        run(backfill=args.backfill)
+        rejected = run(backfill=args.backfill, days=args.days)
+        if rejected:
+            log.error(f"{len(rejected)} PDF(s) NOT loaded: {', '.join(rejected)}")
+            sys.exit(3)
     except Exception as e:
         log.exception(f"Fatal error: {e}")
         sys.exit(1)

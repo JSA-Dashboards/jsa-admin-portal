@@ -26,6 +26,7 @@ if str(REPO) not in sys.path:
 sys.path.insert(0, str(Path(__file__).parent))
 
 import daily_slaughter
+import portal_view  # noqa: E402  -- repo root, like wasde; see portal_view.py
 import wasde  # noqa: E402
 
 # ── JSA Brand Colors ───────────────────────────────────────────────────────────
@@ -904,20 +905,31 @@ weight_unit = st.sidebar.radio("Weight basis", ["Dressed Weight", "Live Weight"]
 unit_filter = "DRESSED" if weight_unit == "Dressed Weight" else "LIVE"
 unit_label  = "dressed basis" if unit_filter == "DRESSED" else "live basis"
 
-st.sidebar.divider()
-st.sidebar.markdown(f'<span style="color:{DM_MUTED};font-size:.72rem;text-transform:uppercase;letter-spacing:.06em">Classes — Snapshot</span>',
-                    unsafe_allow_html=True)
-snap_classes = st.sidebar.multiselect(
+# WHICH SERIES YOU ARE LOOKING AT STAYS; HOW IT IS COMPUTED GOES. That is the
+# line the client view draws across every sidebar on this portal: the weight
+# basis and the trend class choose a reading, so they survive, while the
+# snapshot multiselect and the trend window are tuning — a reader who has to
+# decide between a 26-week and a 34-week trend before the chart means anything
+# has been handed the analyst's job. The defaults below are exactly the state
+# the staff page opens in, so the client sees what Ross sees before he touches
+# anything.
+_SNAP_DEFAULT = ["GE 500 LBS", "STEERS", "HEIFERS", "COWS", "BULLS"]
+
+if portal_view.is_staff():
+    st.sidebar.divider()
+    st.sidebar.markdown(f'<span style="color:{DM_MUTED};font-size:.72rem;text-transform:uppercase;letter-spacing:.06em">Classes — Snapshot</span>',
+                        unsafe_allow_html=True)
+snap_classes = portal_view.pick(_SNAP_DEFAULT, lambda: st.sidebar.multiselect(
     "Snapshot classes", CLASS_ORDER,
-    default=["GE 500 LBS", "STEERS", "HEIFERS", "COWS", "BULLS"],
+    default=_SNAP_DEFAULT,
     format_func=_fmt_cls,
     label_visibility="collapsed",
-)
+))
 if not snap_classes:
     snap_classes = ["GE 500 LBS"]
 
 st.sidebar.divider()
-trend_weeks = st.sidebar.slider("Trend window (weeks)", 8, 52, 26)
+trend_weeks = portal_view.pick(26, lambda: st.sidebar.slider("Trend window (weeks)", 8, 52, 26))
 trend_class = st.sidebar.selectbox("Trend class", CLASS_ORDER, format_func=_fmt_cls)
 
 
@@ -1204,7 +1216,13 @@ _days_thu     = (3 - _today.weekday()) % 7   # 3 = Thursday
 _next_thursday = _today + __import__("datetime").timedelta(days=_days_thu)
 
 # ── Sidebar data info panel ────────────────────────────────────────────────────
-st.sidebar.divider()
+#
+# PROVENANCE, AND THEREFORE STAFF-ONLY. Which MARS report a tile came from and
+# when the cache last turned over is how Ross tells a stale page from a quiet
+# market; to a client it is ninety lines of apparatus in front of a weight.
+# Built either way and rendered only for staff, so the HTML below is not
+# re-indented under a conditional -- a triple-quoted block that gets indented
+# is how this repo's own CSS once ended up inside a comment.
 _ams_wk_str  = _ams_wk_date.strftime('%b %d, %Y')  if _ams_wk_date  else "N/A"
 _ams_rpt_str = _ams_rpt_date.strftime('%b %d, %Y') if _ams_rpt_date else "N/A"
 _vol_color   = '#fbbf24' if vol_latest_date is not None and vol_latest_date != latest_date else DM_TEXT
@@ -1214,7 +1232,7 @@ _fis_wk_s    = _fis_wk_date.strftime('%b %d, %Y') if _fis_wk_date is not None el
 _fis_pub_s   = _fis_pub.strftime('%b %d, %Y') if _fis_pub else 'N/A'
 _fis_stat    = 'Live' if _tile_src == 'AMS' else ('Unavailable — ' + (_fis_err or 'not used on live basis'))
 _fis_stat_c  = '#6fa8c4' if _tile_src == 'AMS' else '#fbbf24'
-st.sidebar.markdown(f"""
+_data_status_html = f"""
 <div style="background:{DM_SURFACE2};border:1px solid {DM_BORDER};
   border-left:3px solid {JSA_GREEN};border-radius:6px;padding:12px 14px;font-size:0.78rem">
   <div style="color:{DM_MUTED};font-size:0.65rem;text-transform:uppercase;
@@ -1292,7 +1310,11 @@ st.sidebar.markdown(f"""
     Cache refreshes every hour
   </div>
 </div>
-""", unsafe_allow_html=True)
+"""
+
+if portal_view.is_staff():
+    st.sidebar.divider()
+    st.sidebar.markdown(_data_status_html, unsafe_allow_html=True)
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
@@ -1535,9 +1557,9 @@ def _render_nass():
 
     # ── Tabs ───────────────────────────────────────────────────────────────────────
 
-    tab_trend, tab_yoy, tab_vol, tab_data = st.tabs([
+    tab_trend, tab_yoy, tab_vol, tab_data = portal_view.tabs([
         "📈 Weekly Trend", "📊 Year-over-Year", "🔢 Slaughter Volume", "📋 Data"
-    ], on_change="rerun")
+    ], hide={"📋 Data"}, on_change="rerun")
 
 
     # ── Tab 1 — Weekly Trend ───────────────────────────────────────────────────────

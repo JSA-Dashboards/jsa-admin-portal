@@ -33,8 +33,11 @@ hand out the API budget with it.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import os
+import time
 
 import streamlit as st
 
@@ -153,6 +156,131 @@ def is_unlocked(secret_name: str = DEFAULT_SECRET) -> bool:
     return bool(st.session_state.get(_session_key(secret_name)))
 
 
+# -- Remembering the unlock across a page load --------------------------------
+#
+# ST.SESSION_STATE IS NOT ENOUGH, and that is what Ross reported on 2026-10-26:
+# "it makes me enter the password every time i click a different dashboard
+# tab." A Streamlit session dies on any FULL page load -- a refresh, a new tab,
+# a deep link pasted in, the Community Cloud iframe re-navigating -- and
+# session_state dies with it. Reproduced under Streamlit 1.64 locally: clicking
+# a top-nav link keeps the session (client-side routing, the gate stays open),
+# but a full navigation to the same URL comes back gated.
+#
+# IT DOES NOT WORK ON STREAMLIT COMMUNITY CLOUD, AND THAT IS MEASURED.
+# `st.context.cookies` returns an EMPTY dict there -- the proxy in front of the
+# app does not forward the browser's cookies to it. Probed on the live app,
+# 2026-10-26, from a page carrying eight cookies the browser could see:
+#
+#     browser (document.cookie) : proxy-tracking-id, _ga, ajs_anonymous_id,
+#                                 jsa_portal_PORTAL_PASSPHRASE, jsa_portal_probe, ...
+#     server  (st.context.cookies) : []
+#
+# So the WRITE below is fine and the READ is blind. The token machinery is kept
+# because it is correct, tested, and reusable by whatever channel replaces the
+# read -- but nothing here can remember an unlock on Community Cloud today, and
+# a reader should not assume otherwise. See CLAUDE.md for the options.
+#
+# So the unlock is remembered in a COOKIE as well. The cookie never contains
+# the passphrase; it holds an expiry and an HMAC of that expiry keyed on the
+# passphrase, so the browser cannot forge one or extend its own.
+#
+# THREE PROPERTIES THAT MATTER, none of them accidental:
+#
+#   * ROTATING THE PASSPHRASE INVALIDATES EVERY TOKEN. The passphrase is the
+#     HMAC key, so changing it changes every signature. That keeps the one
+#     revocation story this gate has ever had -- see this module's header.
+#   * THE TOKEN IS NEVER STRONGER THAN THE PASSPHRASE. It is a bearer token in
+#     a cookie that JavaScript can read, because JavaScript is what sets it;
+#     Streamlit has no API to set a cookie server-side. Anyone who can read it
+#     could equally have been handed the passphrase it stands in for, which is
+#     already shared and forwardable. It buys convenience, not secrecy.
+#   * IT STILL FAILS CLOSED. Verification needs the configured secret, so a
+#     deployment with no secret has nothing to check a token against and the
+#     gate shuts exactly as before.
+#
+# The cookie is per-ORIGIN, so the client app and the staff app keep separate
+# ones on their own subdomains -- and even if a token crossed over it would
+# fail the other app's HMAC, because the two passphrases differ.
+
+REMEMBER_DAYS = 30          # 0 turns the cookie off; the gate reverts to
+                            # session-only and Ross re-enters on every reload.
+COOKIE_PREFIX = "jsa_portal_"
+
+
+def _cookie_name(secret_name: str) -> str:
+    return COOKIE_PREFIX + secret_name
+
+
+def _sign(secret: str, payload: str) -> str:
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def issue_token(secret: str, days: int = REMEMBER_DAYS) -> str:
+    """`<expires>.<hmac>` — the expiry is inside the signature, so a browser
+    cannot push it forward."""
+    expires = str(int(time.time()) + days * 86400)
+    return f"{expires}.{_sign(secret, expires)}"
+
+
+def token_is_valid(token: str, secret: str) -> bool:
+    if not token or not secret:
+        return False
+    expires, _, sig = token.partition(".")
+    if not sig or not expires.isdigit():
+        return False
+    if int(expires) <= time.time():
+        return False
+    return hmac.compare_digest(sig, _sign(secret, expires))
+
+
+def _cookie(name: str) -> str:
+    """st.context.cookies, defensively. It is absent on older Streamlit and can
+    raise when there is no live request context (a bare script run, a test)."""
+    try:
+        return st.context.cookies.get(name) or ""
+    except Exception:
+        return ""
+
+
+def _remember_in_browser(secret_name: str, token: str) -> None:
+    """
+    Write the cookie from the page, because Streamlit cannot write one.
+
+    `Secure` is conditional: on http://localhost a Secure cookie is silently
+    DROPPED, so hard-coding it would make this work on the deployed app and do
+    nothing in local testing -- the shape of bug this repo keeps recording.
+    """
+    max_age = REMEMBER_DAYS * 86400
+    js = (
+        "<script>(function(){try{"
+        f"var v={json.dumps(token)};"
+        f"var n={json.dumps(_cookie_name(secret_name))};"
+        "var s=(location.protocol==='https:')?';Secure':'';"
+        f"document.cookie=n+'='+v+';path=/;max-age={max_age};SameSite=Lax'+s;"
+        "}catch(e){}})();</script>"
+    )
+    try:
+        st.html(js, unsafe_allow_javascript=True)
+    except TypeError:          # older Streamlit without the JS flag
+        import streamlit.components.v1 as _stc
+        _stc.html(js, height=0)
+
+
+def forget_in_browser(secret_name: str = DEFAULT_SECRET) -> None:
+    """Expire the cookie. Nothing calls this yet; it is the sign-out hook."""
+    js = (
+        "<script>(function(){try{"
+        f"document.cookie={json.dumps(_cookie_name(secret_name))}"
+        "+'=;path=/;max-age=0';"
+        "}catch(e){}})();</script>"
+    )
+    try:
+        st.html(js, unsafe_allow_javascript=True)
+    except TypeError:
+        import streamlit.components.v1 as _stc
+        _stc.html(js, height=0)
+
+
 def _shell(title: str, body_html: str) -> None:
     st.markdown(
         f"""
@@ -176,9 +304,24 @@ def require_passphrase(secret_name: str = DEFAULT_SECRET, *,
     st.stop(), so nothing after it ever runs.
     """
     if is_unlocked(secret_name):
+        # The cookie is written on the run AFTER the one that accepted the
+        # passphrase. st.rerun() tears the page down immediately, so a <script>
+        # emitted beside it may never reach the browser -- the token is parked
+        # in session_state and flushed here instead, once, on a page that is
+        # actually rendering.
+        pending = st.session_state.pop(f"_issue__{secret_name}", None)
+        if pending:
+            _remember_in_browser(secret_name, pending)
         return
 
     secret = configured_passphrase(secret_name)
+
+    # A valid cookie unlocks without a prompt. Checked AFTER the session-state
+    # fast path and BEFORE the "not configured" branch, so a deployment with no
+    # secret still has nothing to verify against and still fails closed.
+    if secret and REMEMBER_DAYS and token_is_valid(_cookie(_cookie_name(secret_name)), secret):
+        st.session_state[_session_key(secret_name)] = True
+        return
 
     if not secret:
         _shell(
@@ -204,6 +347,10 @@ def require_passphrase(secret_name: str = DEFAULT_SECRET, *,
             # whatever its first character is.
             if hmac.compare_digest(entered.strip(), secret):
                 st.session_state[_session_key(secret_name)] = True
+                if REMEMBER_DAYS:
+                    # Parked, not written: st.rerun() below ends this run at
+                    # once. The unlocked branch at the top flushes it.
+                    st.session_state[f"_issue__{secret_name}"] = issue_token(secret)
                 # Rerun so the caller continues with the form gone, rather than
                 # rendering the page underneath it.
                 st.rerun()

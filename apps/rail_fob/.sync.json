@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "b89645b125d6acba29f200d096efd224ff17df61",
+ "commit": "3af581ea5cf811eba62141576bbb80017504e35f",
  "files": {
   "app.py": "d0588760f4f9c0d58d52d6b7ecd6796fa204c12a7b17513dcd5ab393c446521d",
   "assets/bnsf_logo.svg": "bd80d9a840b51727b873ae7aaadbb3f1b2619e5db5612da2eb5a215d74a21c52",
@@ -28,11 +28,11 @@
   "net_carry_data.py": "b478d0eacff562e4f442af4169a3c01390a21230ded86677a6a569468cce5175",
   "ns_freight_seed.json": "5b2e797292bd8d0d426951eee07032d4eb03dcc94a494177230d368a7de3de8d",
   "rail_corridors.py": "136240fb8e4027e8ac1dacbf36f3076816fe2357c76e0b436d8bbea895b7b56c",
-  "rail_data.py": "d9ada4b2c13bc0785d2146b087e21fb6ba99c62dc7c21073fd98fe9b45f355a8",
-  "return_to_carry.py": "eb555233341d8ac17f90c038d211f9c08c2b33606fe74343992d2be258f07686",
-  "return_to_carry_block.py": "026f1632473c1dc22ddbad21f536add97a25e40420397170882ae4e7ff576cbf",
-  "return_to_carry_data.py": "a17bb6f87becab77c7802eb7c253d5d2d8092b1325d51954f405da2a6f21ced4",
-  "return_to_carry_view.py": "44f338fdf985e400f69ffaa8c8fffc3506fa85b8d25c85a00ff435042c840bf9",
+  "rail_data.py": "fd264f536061edf2591f76ee400d4e0d3f6ed3d68569cfcafe9a72dc41a7527a",
+  "return_to_carry.py": "c64efa9f1d1c587368df23e6ae78a5fa939afa91aa709aed8503f3235bdf1d25",
+  "return_to_carry_block.py": "8e9439f142a8093d610866e66244523bcb56fd5b3e9d911449c72b1c2721f979",
+  "return_to_carry_data.py": "587eec54ea5d63610cd6421c7ed9202f4faa28e825c9bbcb4cbfc065c223629b",
+  "return_to_carry_view.py": "515d07e6ae72eabcfb3d23567c1045939de5323d6414c10193649e3546c17751",
   "river_data.py": "b3ad643184f69c0fc861c7d1a633c0f00442173daca9382ac2d1652dcf1d93ca",
   "shipment_data.py": "05f8ce8edccea7c401b30943dd477a14dffd005d9300d9df4142ad89508e2b9d",
   "snowflake_setup.sql": "10e7e0e50fdddf1aa52d79a93e0bbd80f8aa9244a329fb7cff7a84958913e97f"

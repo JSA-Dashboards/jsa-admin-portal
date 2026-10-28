@@ -5,6 +5,8 @@ Usage (CLI test):
     python brazil_parser.py "path/to/APS Brz Consolidated line-up 2026.10.06.pdf"
 """
 
+import re
+
 import pdfplumber
 from datetime import datetime, date
 from collections import defaultdict
@@ -178,6 +180,12 @@ def parse_mt(s):
     try:
         return int(cleaned)
     except ValueError:
+        # A long product name can spill into the MT column ('OIL 4.500' for SUNFLOWER OIL): take the trailing number.
+        m = re.search(r"(\d[\d.,]*)\s*$", s)
+        if m:
+            digits = m.group(1).replace(".", "").replace(",", "")
+            if digits.isdigit():
+                return int(digits)
         try:
             return int(float(cleaned))
         except Exception:
@@ -334,9 +342,12 @@ def _is_total_row(texts_set):
     return "Total" in texts_set or "TOTAL" in texts_set
 
 
-def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
+def parse_page_rows(rows, col_boundaries, report_date, always_data=False, carry=None):
     """
     Parse vessel/continuation rows from a pre-grouped rows list.
+
+    `carry` ({'port', 'berth'}) is read at the start and updated at the end: a port that runs onto a headerless
+    continuation page is not named again there, so its rows inherit the port from the page before.
 
     Returns:
         records        – list of row dicts
@@ -347,8 +358,9 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
     port_totals = {}
     grand_total_pdf = None
 
-    current_port = None
-    current_berth = None
+    carry = carry if carry is not None else {}
+    current_port = carry.get("port")
+    current_berth = carry.get("berth")
     prev_record = None
 
     in_data = always_data
@@ -470,6 +482,8 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
                 inferred = infer_status_from_dates(eta_d, etb_d, report_date)
                 if inferred:
                     clean_status = inferred
+            if clean_status not in VALID_STATUSES and not (eta_d or etb_d or product_norm):
+                continue                 # no status, no dates, no cargo: a stats-table row ('Week 47', '% VAR'), not a vessel
 
             record = {
                 "report_date": report_date,
@@ -531,6 +545,7 @@ def parse_page_rows(rows, col_boundaries, report_date, always_data=False):
             }
             records.append(record)
 
+    carry["port"], carry["berth"] = current_port, current_berth
     return records, port_totals, grand_total_pdf
 
 
@@ -571,6 +586,7 @@ def parse_pdf(pdf_path) -> dict:
         cols = {"lineup": LINEUP_COLS, "sailed": SAILED_COLS}
         hdr_ref = {"lineup": LINEUP_HDR_REF, "sailed": SAILED_HDR_REF}
         seen_header = {"lineup": False, "sailed": False}
+        carry = {"lineup": {}, "sailed": {}}      # port / berth still open at the end of the previous page, per section
         for page_idx, page in enumerate(pdf.pages):
             if page_idx == 0:      # page 1 = summary only; no vessel rows
                 continue
@@ -596,9 +612,10 @@ def parse_pdf(pdf_path) -> dict:
                     lineup_summary = extract_lineup_summary(rows, header_top)
             if header_top is not None:
                 seen_header[section] = True
+                carry[section] = {}                  # a headed page starts at a port heading
 
             records, port_totals, grand_total = parse_page_rows(
-                rows, col_boundaries, report_date, always_data=always_data
+                rows, col_boundaries, report_date, always_data=always_data, carry=carry[section]
             )
 
             if is_sailed:
@@ -664,6 +681,10 @@ def parse_pdf(pdf_path) -> dict:
             "lineup_grand_total_parsed": lineup_parsed_total,
             "sailed_grand_total_pdf": sailed_grand_total_pdf,
             "sailed_grand_total_parsed": sailed_parsed_total,
+            # The PDFs normally end each section with a 'Grand Total'; since 2026-10-22 they do not. The per-port totals are still
+            # printed, and their sum is the same number, so validation falls back on it.
+            "lineup_port_total_sum_pdf": sum(lineup_port_totals.values()) if lineup_port_totals else None,
+            "sailed_port_total_sum_pdf": sum(sailed_port_totals.values()) if sailed_port_totals else None,
             "lineup_excluded_pdf_mt": lineup_excluded_pdf,
             "sailed_excluded_pdf_mt": sailed_excluded_pdf,
             "port_mismatches": port_mismatches,
@@ -684,6 +705,8 @@ def validation_error(parsed, rel_tol=0.0, abs_tol=10):
     for label, pdf_key, got in (("lineup", "lineup_grand_total_pdf", v["lineup_grand_total_parsed"] + v.get("lineup_excluded_pdf_mt", 0)),
                                 ("sailed", "sailed_grand_total_pdf", v["sailed_grand_total_parsed"] + v.get("sailed_excluded_pdf_mt", 0))):
         pdf = v[pdf_key]
+        if pdf is None:
+            pdf = v.get(f"{label}_port_total_sum_pdf")           # no Grand Total line: the sum of the port totals stands in
         if pdf is None:
             if label == "lineup":
                 return "no line-up grand total in the PDF"

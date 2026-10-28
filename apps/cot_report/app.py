@@ -36,7 +36,16 @@ import streamlit as st
 
 # A Streamlit page's own directory is never added to sys.path automatically --
 # st.Page runs this file via exec() rather than as a script.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import portal_view  # noqa: E402
 
 # On Streamlit Community Cloud the secrets live in st.secrets rather than in a
 # local .env, and `snowflake_db.get_conn()` reads os.environ only. Forward them.
@@ -832,7 +841,7 @@ def market_panel(series: str):
     )
 
     # -- the numbers ----------------------------------------------------------
-    with st.expander(f"{label} — the last 12 weeks, and the full series to download"):
+    for _ in portal_view.staff_expander(f"{label} — the last 12 weeks, and the full series to download"):
         g = m["frame"].tail(12).iloc[::-1]
         table = pd.DataFrame({
             "Week (Tuesday)": [_us(d.date()) for d in g["report_date"]],

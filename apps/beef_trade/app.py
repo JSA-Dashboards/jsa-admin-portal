@@ -43,6 +43,8 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 import trade_flows as tf          # noqa: E402
 import wasde                      # noqa: E402
 
@@ -1076,7 +1078,7 @@ with tab_net:
 
 st.markdown("<hr style='margin:22px 0 14px;'>", unsafe_allow_html=True)
 
-with st.expander("Sources, basis, and the check that licenses this page"):
+for _ in portal_view.staff_expander("Sources, basis, and the check that licenses this page"):
     chk = None
     if wd:
         last_full = YEAR - 1

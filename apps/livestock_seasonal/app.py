@@ -12,7 +12,16 @@ import streamlit as st
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
 # local massive_api import below raises ModuleNotFoundError.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 from ls_massive_api import MassiveApiError, get_futures_curve, get_settlement_histories
 
@@ -1477,8 +1486,9 @@ def render_chat(massive_key: str, as_of: date):
 
 
 def render_commodity(commodity: dict, api_key: str, as_of: date):
-    tab_futures, tab_spread, tab_matrix, tab_continuous = st.tabs(
-        ["Seasonal futures", "Seasonal spread", "Spread matrix", "Continuous chart"]
+    tab_futures, tab_spread, tab_matrix, tab_continuous = portal_view.tabs(
+        ["Seasonal futures", "Seasonal spread", "Spread matrix", "Continuous chart"],
+        hide={"Spread matrix"},
     )
     with tab_futures:
         render_seasonal_futures(commodity, api_key, as_of)
@@ -1486,8 +1496,14 @@ def render_commodity(commodity: dict, api_key: str, as_of: date):
         render_seasonal_spread(commodity, api_key, as_of)
     with tab_continuous:
         render_continuous_chart(commodity, api_key, as_of)
-    with tab_matrix:
-        render_spread_matrix(commodity, api_key, as_of)
+    # `shown()` rather than `if tab_matrix.open:`, because these tabs do not
+    # pass on_change="rerun" -- a real tab's `.open` is None without it, which
+    # is falsy, so the guard would skip the body on the STAFF view too. Adding
+    # on_change here would make every sibling lazy, and that is not a change to
+    # make while passing through.
+    if portal_view.shown(tab_matrix):
+        with tab_matrix:
+            render_spread_matrix(commodity, api_key, as_of)
 
 
 def main():
@@ -1496,11 +1512,21 @@ def main():
         st.image(JSA_LOGO_FULL, width=140)
     with col_title:
         st.title("Livestock Seasonal Futures & Spreads")
-    st.caption(
-        "Live CME livestock futures, aligned across prior contract years to reveal seasonal "
-        "patterns in outright price and in calendar spreads. "
-        f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
-    )
+    asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+    with asof_col:
+        st.caption(
+            "Live CME livestock futures, aligned across prior contract years to reveal seasonal "
+            "patterns in outright price and in calendar spreads. "
+            f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
+        )
+    with refresh_col:
+        # A cache control, so staff only: a client has no use for one.
+        if portal_view.pick(False, lambda: st.button(
+                "Refresh prices", icon=":material/refresh:", width="stretch",
+                help="Re-read live quotes now instead of waiting out the 5-minute cache. "
+                     "Settlement-history charts are not re-pulled.")):
+            load_curve.clear()
+            st.toast("Fetching fresh prices…")
     st.caption(DATA_START_NOTE)
 
     api_key = get_api_key()
@@ -1513,18 +1539,27 @@ def main():
 
     as_of = date.today()
 
+    # SPREAD BUILDER AND CHAT BOTH COME OUT FOR A CLIENT, for different
+    # reasons. The builder constructs an arbitrary calendar spread -- a tool,
+    # and one that needs you to know which two months you want before it says
+    # anything. Chat is the Ask AI tab: it spends the Anthropic budget and sits
+    # behind CHAT_PASSPHRASE, so on the client deployment it could only ever
+    # render a passphrase box that nobody has the passphrase for. A tab that
+    # cannot answer is worse than no tab.
     labels = [c["label"] for c in COMMODITIES] + ["Spread Builder", "Chat"]
-    tabs = st.tabs(labels)
+    tabs = portal_view.tabs(labels, hide={"Spread Builder", "Chat"})
     for tab, commodity in zip(tabs, COMMODITIES):
         with tab:
             st.caption(commodity["sublabel"])
             if commodity["product_code"] == "LE":
                 st.caption(FND_NOTE)
             render_commodity(commodity, api_key, as_of)
-    with tabs[-2]:
-        render_spread_builder(api_key, as_of)
-    with tabs[-1]:
-        render_chat(api_key, as_of)
+    if portal_view.shown(tabs[-2]):
+        with tabs[-2]:
+            render_spread_builder(api_key, as_of)
+    if portal_view.shown(tabs[-1]):
+        with tabs[-1]:
+            render_chat(api_key, as_of)
 
 
 main()

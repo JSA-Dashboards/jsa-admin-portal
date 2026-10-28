@@ -21,7 +21,16 @@ import streamlit as st
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
 # local nass_cache_client import below raises ModuleNotFoundError.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 DM_BG       = "#f6f8f7"
@@ -517,7 +526,10 @@ if level == "National":
                     unsafe_allow_html=True)
 
     st.markdown("")
-    t_trend, t_yoy, t_data = st.tabs(["📈 Long-Run Trend", "📊 Year-over-Year Change", "📋 Data"], on_change="rerun")
+    # Every tab set on this page carries a raw-frame Data tab. They are the
+    # same cut the client view drops everywhere else on the portal; the maps,
+    # rankings and trends above them are what the page is for.
+    t_trend, t_yoy, t_data = portal_view.tabs(["📈 Long-Run Trend", "📊 Year-over-Year Change", "📋 Data"], hide={"📋 Data"}, on_change="rerun")
 
     with t_trend:
         if t_trend.open:
@@ -597,8 +609,8 @@ elif level == "State":
                     unsafe_allow_html=True)
 
     st.markdown("")
-    t_map, t_rank, t_trend, t_data = st.tabs(
-        ["🗺️ State Map", "🏆 Rankings", "📈 State Trend", "📋 Data"], on_change="rerun")
+    t_map, t_rank, t_trend, t_data = portal_view.tabs(
+        ["🗺️ State Map", "🏆 Rankings", "📈 State Trend", "📋 Data"], hide={"📋 Data"}, on_change="rerun")
 
     with t_map:
         if t_map.open:
@@ -700,8 +712,8 @@ elif level == "County":
                     unsafe_allow_html=True)
 
     st.markdown("")
-    t_map, t_rank, t_trend, t_data = st.tabs(
-        ["🗺️ County Map", "🏆 Rankings", "📈 County Trend", "📋 Data"], on_change="rerun")
+    t_map, t_rank, t_trend, t_data = portal_view.tabs(
+        ["🗺️ County Map", "🏆 Rankings", "📈 County Trend", "📋 Data"], hide={"📋 Data"}, on_change="rerun")
 
     with t_map:
         if t_map.open:
@@ -818,7 +830,7 @@ elif level == "Agricultural District":
                     unsafe_allow_html=True)
 
     st.markdown("")
-    t_map, t_rank, t_data = st.tabs(["🗺️ District Map", "🏆 District Rankings", "📋 Data"], on_change="rerun")
+    t_map, t_rank, t_data = portal_view.tabs(["🗺️ District Map", "🏆 District Rankings", "📋 Data"], hide={"📋 Data"}, on_change="rerun")
 
     with t_map:
         if t_map.open:
