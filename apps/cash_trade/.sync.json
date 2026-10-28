@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "commit": "44aac48b68c7201dad6b70cc4ca3c8e5cd2d6ef3",
  "files": {
-  "app.py": "a288439b0bc4d4bad42f718ce0a4b76e7493cd3915b152d057cdf77f6c97beeb",
+  "app.py": "7917382381a5e413e49328c03b6f31bc77e93430296c3c490232b5317009bf0f",
   "leverage.py": "8bd8ade7774f8572701899fc82317cee7188f556c11e59eb39d643d1fdb54085",
   "scorecard.py": "e59ddb83068f57a25119de97af53497dca1ec6356c970b17251e4c943e4450a7"
  },

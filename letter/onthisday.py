@@ -15,12 +15,20 @@ missed it because every stem in it was written \\bmurder\\b, which does not
 match "murdered". Khashoggi, Mogadishu and the Amish school shooting came
 through the same hole.
 
-Two lessons are baked in below. Stems match as PREFIXES. And a candidate must
-earn its place POSITIVELY -- sport, agriculture, or a US first -- rather than
-being admitted unless something looks wrong. A denylist over an encyclopaedia
-fails open, and failing open here means handing Ross a massacre to pick from.
-Even so, the filter will let something tasteless through eventually. That
-costs a glance, because he picks. It would cost a letter if it did not.
+One lesson is baked in below: stems match as PREFIXES. A second one used to
+be -- that a candidate had to earn its place POSITIVELY, by category, rather
+than be admitted unless something looked wrong -- and Ross retired it on
+2026-10-27, because it was dropping half the feed including the best
+agricultural fact in it. See _keep for the measurement and for the three
+items that came back with it.
+
+That makes the denylist the only filter, which is the arrangement the
+paragraph above warns about: a denylist over an encyclopaedia fails OPEN.
+It is shipped anyway, with eyes open, for the reason the whole module rests
+on -- the filter will let something tasteless through eventually, and that
+costs a glance, because he picks. It would cost a letter if it did not. The
+veto is now the only thing standing between history.com and that glance, so
+treat any stem added to _GRIM as load-bearing rather than tidy-up.
 
 THE FACTS ARE NOT THE PROSE. history.com's blurbs are copyrighted editorial
 writing; the underlying events are facts and are not. So the panel shows the
@@ -269,6 +277,11 @@ def fetch_wikipedia(d: date) -> list:
     return out
 
 
+# NOTE since 2026-10-27: a tag no longer decides ADMISSION, only weight and
+# the caption. So soccer's deliberate absence from _SPORT below no longer
+# keeps a soccer item out of the panel -- it only stops one ranking as sport.
+# Taking a stem out of a positive pattern is not a way to exclude anything
+# any more; _GRIM is.
 def _tags(text: str) -> list:
     tags = []
     if _AG.search(text):
@@ -286,26 +299,70 @@ def _tags(text: str) -> list:
     return tags
 
 
-def _keep(text: str, tags: list) -> bool:
-    if _GRIM.search(text):
-        return False
-    # POSITIVELY, OR NOT AT ALL. "American" on its own admitted Khashoggi and
-    # Mogadishu; "first" on its own admitted Opus Dei and a Vancouver
-    # cathedral. Agriculture, sport, the presidency and military history each
-    # stand alone -- presidents by Ross's call on 2026-10-01 and war on
-    # 2026-10-13, since a fact about either is worth printing whether or not
-    # it is also a "first". Anything else still has to be a US first.
-    #
-    # Standing alone is safe for war for the same reason it is for the
-    # presidency: _GRIM has already run. The tag cannot admit anything the
-    # veto would have caught, so the worst a stray match does is offer one
-    # more piece of military history.
-    return bool(tags) and ("sport" in tags or "ag" in tags or "pres" in tags
-                           or "war" in tags
-                           or ("US" in tags and "first" in tags))
+# A BACKSTOP, NOT A CURATION STEP. It was 8, chosen when a positive tag had
+# to be earned and four or five items was a good day. With the veto as the
+# only filter the feed yields eight to eleven, so 8 would have started
+# cutting the moment the category test came out -- and cutting by WEIGHT,
+# which means the untagged items this change exists to surface would have
+# been the first ones dropped. 40 is above anything history.com has published
+# for a single date (the widest sampled was 15) and is here to bound a
+# runaway parse, not to choose facts.
+DEFAULT_LIMIT = 40
 
 
-def candidates(when: date = None, limit: int = 8) -> dict:
+def _keep(text: str) -> bool:
+    """
+    THE VETO IS THE WHOLE FILTER NOW.
+
+    Ross, 2026-10-27: "i would like to add every on this day that history
+    shows that we are pulling from ... instead of just the few slugs i have
+    told you to show me."
+
+    WHAT STOOD HERE AND WHY IT WENT. A candidate used to have to earn its
+    place POSITIVELY -- sport, agriculture, the presidency, military history,
+    or a US first -- and that test was discarding HALF of what history.com
+    publishes. Measured across six sampled dates before the change: 64 events
+    scraped, 14 blocked by _GRIM, **31 dropped for carrying no tag**, 19 left.
+    The old limit of 8 never once bound; the categories were the entire
+    constraint, and the panel Ross saw was three or four items deep on a day
+    the feed offered eleven.
+
+    What it dropped was not noise. "Joseph Glidden applies for a patent on his
+    barbed wire design" is about as good a close as this letter will ever get,
+    and it carried no tag at all -- the ag pattern knows cattle and crops and
+    not the fence that ended the open range. "First oil-producing well on
+    Osage land" and Khrushchev withdrawing the missiles from Cuba went the
+    same way.
+
+    WHAT THIS GIVES BACK, recorded so nobody reinstates the narrowing by
+    accident thinking it was an oversight. Three items excluded by deliberate
+    earlier calls are now offered again:
+
+      - Pele's farewell game. `soccer` went into _SPORT on 2026-10-01 and Ross
+        took it straight back out, this being a US cattle letter.
+      - Mao proclaiming the PRC, and Gorbachev taking over the USSR -- ruled
+        "a milestone abroad is not a US fun fact" the same week.
+
+    Both calls are superseded. The tags still exist and still rank the list,
+    so a foreign milestone sorts below an agricultural one; it costs a glance
+    rather than a slot.
+
+    _GRIM IS UNTOUCHED AND STILL RUNS FIRST. It is the half that protects a
+    client letter, where the category test was only the half that narrowed it,
+    and widening what is OFFERED was never a reason to widen what gets past
+    the veto. The module docstring's standing rule is unchanged and is now
+    carrying more weight than it was: the human is the safety, the filter is
+    the first pass.
+
+    `tags` is deliberately NOT a parameter any more. It became unused the
+    moment the category test went, and an argument a function ignores is the
+    defect this repo found in `headlines.fetch_usda_narratives(as_of)` on the
+    same day -- it reads as live wiring and silently is not.
+    """
+    return not _GRIM.search(text)
+
+
+def candidates(when: date = None, limit: int = DEFAULT_LIMIT) -> dict:
     """
     {"items": [...], "errors": [...], "source_url": ...} for the pick list.
 
@@ -341,7 +398,7 @@ def candidates(when: date = None, limit: int = 8) -> dict:
         if key in seen:
             continue
         tags = _tags(text)
-        if not _keep(text, tags):
+        if not _keep(text):
             continue
         seen.add(key)
         # Presidents rank with sport, above a bare US item: they are their own

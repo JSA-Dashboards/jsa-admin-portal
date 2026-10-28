@@ -24,7 +24,7 @@ _ACCENT_CSS = """
 _DISCLAIMER_HTML = """
 <div class="jsa-disclaimer">
 <p>All prices, Greeks, P&amp;L, and risk figures on this dashboard are theoretical model outputs
-generated from the Black-76 pricing model and the position data entered or imported by the user.
+generated from the Black-76 pricing model (American early exercise) and the position data entered or imported by the user.
 They are provided for informational and analytical purposes only, do not constitute a guarantee
 of accuracy, and may differ materially from actual market prices, executable levels, or realized
 results. Verify all figures against an official broker or exchange source before making any

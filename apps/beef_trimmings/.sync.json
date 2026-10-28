@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "commit": "44aac48b68c7201dad6b70cc4ca3c8e5cd2d6ef3",
  "files": {
-  "app.py": "f57bfb32c9ec8b7706802eb3eab85605455947bfc96feb56dd094f79aa1a34f1",
+  "app.py": "006cec050bf6d1a178a2ecf88e577317a5e3092be61b45fac3821b022b4a60a8",
   "quota_tracker.py": "1867ff056912cb5794e801eb01c68a7831a445ca757650fa85e24ed78cb70768",
   "trimmings_qc.py": "69d019a7210cb29322e711c7a5c8048826baaeecc65e5054df587fe624210612"
  },

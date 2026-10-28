@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "commit": "44aac48b68c7201dad6b70cc4ca3c8e5cd2d6ef3",
  "files": {
-  "app.py": "54d801e048ef8eeff2fa33b3acdd10274224e0aae50637425ad3c23b7bd7f316",
+  "app.py": "f10b86432c163389ba5945abf9f0f22954aef7675af5d866f8ad518b23b1e6c3",
   "daily_slaughter.py": "83fb94f1513ae78b84e6c7998996728791f2499442b15152b757b6eac1309a00",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
  },

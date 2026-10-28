@@ -5,7 +5,7 @@ the original tool.
 from datetime import date
 from typing import Callable, Dict, List, Optional, Tuple
 
-from jsa_risk.pricing.black76 import black76
+from jsa_risk.pricing.black76 import american
 from jsa_risk.pricing.stress import Position
 
 from .staging import StagingRow, staging_row_valid
@@ -49,7 +49,7 @@ def positions_from_staging(
             else:
                 dte = (row.expiry - date.today()).days if row.expiry else 0
                 T = max(dte, 0) / 365
-                r = black76(contract_f, row.strike, T, iv, row.type == "call")
+                r = american(contract_f, row.strike, T, iv, row.type == "call")
                 entry = r.price
 
         import_mark = row.last_tick if row.last_tick is not None else entry

@@ -31,11 +31,17 @@ import plotly.graph_objects as go
 import plotly.express as px
 import base64
 import os
+import re
+import threading
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import ssl
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from html import escape as _html_escape
 from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 
@@ -135,6 +141,7 @@ def _find(filename: str) -> str:
 
 LOGO_FULL_PATH  = _find("jsa_logo_full.png")
 LOGO_WHITE_PATH = _find("jsa_logo_white.png")
+LOGO_50YR_PATH  = _find("jsa_logo_50yr.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTLY CHART CONFIG  (PNG download button + clean toolbar on every chart)
@@ -148,6 +155,7 @@ _CHART_CONFIG = {
 _orig_plotly_chart = st.plotly_chart
 def _patched_plotly_chart(fig, **kw):
     kw.setdefault("config", _CHART_CONFIG)
+    kw.setdefault("theme", None)        # the figures style themselves; Streamlit's theme would overrule their fonts and legend colours
     return _orig_plotly_chart(fig, **kw)
 st.plotly_chart = _patched_plotly_chart
 
@@ -158,7 +166,44 @@ JSA_GREEN = "#4a6741"
 JSA_CYAN  = "#0693e3"
 JSA_DARK  = "#1e2124"
 JSA_CHAR  = "#32373c"
-JSA_MID   = "#2a2f35"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHART THEME — the light sage palette of the CFTC COT dashboard, shared by every chart
+# ─────────────────────────────────────────────────────────────────────────────
+_CH_SURF, _CH_BORDER, _CH_TEXT, _CH_MUTED = "#ffffff", "#d7e2dc", "#32373c", "#5f7267"
+_CH_SAGE, _CH_BLUE, _CH_TERRA, _CH_LAV, _CH_GOLD, _CH_MIST = "#5e7164", "#6fa8c4", "#c4785a", "#9b89c4", "#c4b456", "#b8c4bc"
+_CH_POS, _CH_NEG = "#16a34a", "#dc2626"                          # above / below a reference
+_CH_EST, _CH_M1, _CH_M2 = "#d9822b", "#c8920d", "#16a34a"        # estimate segment, Model 1 (USDA seasonal), Model 2 (pace)
+_CH_PAL = [_CH_BLUE, _CH_TERRA, _CH_SAGE, _CH_LAV, _CH_GOLD, "#8fa398", "#c0707f", "#5aa59a", "#7b8fb5", "#9c7a62", "#8c9a52", _CH_MIST]
+_CH_FONT = '"Source Sans", "Source Sans Pro", sans-serif'
+_CH_COUNTRY = {                                                   # one colour per country in every comparison chart
+    "US": _CH_TERRA, "Brazil": _CH_SAGE, "Argentina": _CH_BLUE, "Ukraine": _CH_GOLD, "TotalNonUS": _CH_LAV,
+    "MajorExporter": "#9c7a62", "ChinaImports": "#b5586b", "Canada": "#c0707f", "EU": "#4a7ba6", "Russia": "#7b8fb5",
+    "India": "#d9904a", "China": "#a8505a", "Australia": "#5aa59a",
+}
+_CH_AXIS = dict(gridcolor=_CH_BORDER, linecolor=_CH_BORDER, showgrid=True, zeroline=False,
+                tickfont=dict(color=_CH_MUTED, size=11), title_font=dict(color=_CH_MUTED, size=11))
+
+
+def _ch_axis(title: str | None = None) -> dict:
+    """An axis in the shared style. The title goes in as a dict: a plain string would replace the title font set above."""
+    ax = dict(_CH_AXIS)
+    ax.pop("title_font")
+    if title:
+        ax["title"] = dict(text=title, font=dict(color=_CH_MUTED, size=11))
+    return ax
+
+
+def _ch_mix(c1: str, c2: str, t: float) -> str:
+    """The colour a fraction t of the way from c1 to c2 (both '#rrggbb')."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(a[j] + (b[j] - a[j]) * t):02x}" for j in range(3))
+
+
+def _ch_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{alpha})"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MONTH LISTS
@@ -209,22 +254,8 @@ COMMODITY_CONFIG = {
         "non_us_comps":   ["Brazil","Argentina","Ukraine"],
         "major_comps":    ["US","Brazil","Argentina","Ukraine"],
         "tile_order":     ["US","Brazil","Argentina","Ukraine","TotalNonUS","MajorExporter"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Brazil":        "#2e7d32",
-            "Argentina":     "#29b6f6",
-            "Ukraine":       "#fdd835",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-        },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Brazil":        "#1b7e35",
-            "Argentina":     "#4fc3f7",
-            "Ukraine":       "#fdd835",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 56.0,   # lbs per bushel of corn
     },
     "soybeans": {
@@ -255,22 +286,8 @@ COMMODITY_CONFIG = {
         "non_us_comps":   ["Brazil","Argentina"],
         "major_comps":    ["US","Brazil","Argentina"],
         "tile_order":     ["US","Brazil","Argentina","TotalNonUS","MajorExporter","ChinaImports"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Brazil":        "#2e7d32",
-            "Argentina":     "#29b6f6",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-            "ChinaImports":  "#e53935",
-        },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Brazil":        "#1b7e35",
-            "Argentina":     "#4fc3f7",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-            "ChinaImports":  "#e53935",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 60.0,   # lbs per bushel of soybeans
     },
     "soybeanmeal": {
@@ -300,20 +317,8 @@ COMMODITY_CONFIG = {
         "non_us_comps":     ["Brazil","Argentina"],
         "major_comps":      ["US","Brazil","Argentina"],
         "tile_order":       ["US","Brazil","Argentina","TotalNonUS","MajorExporter"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Brazil":        "#43a047",
-            "Argentina":     "#29b6f6",
-            "TotalNonUS":    "#8d6e63",
-            "MajorExporter": "#ef6c00",
-        },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Brazil":        "#43a047",
-            "Argentina":     "#4fc3f7",
-            "TotalNonUS":    "#8d6e63",
-            "MajorExporter": "#ef6c00",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs":  None,   # meal is not measured in bushels
     },
     "wheat": {
@@ -408,34 +413,8 @@ COMMODITY_CONFIG = {
                            "Argentina","Australia","Brazil"],
         "tile_order":     ["US","Canada","EU","Russia","Ukraine","China",
                            "Argentina","Australia","Brazil","TotalNonUS","MajorExporter"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Canada":        "#ef5350",
-            "EU":            "#1565c0",
-            "Russia":        "#78909c",
-            "Ukraine":       "#fdd835",
-            "India":         "#ff6d00",
-            "China":         "#b71c1c",
-            "Argentina":     "#29b6f6",
-            "Australia":     "#00897b",
-            "Brazil":        "#43a047",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef6c00",
-        },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Canada":        "#ef5350",
-            "EU":            "#1565c0",
-            "Russia":        "#78909c",
-            "Ukraine":       "#fdd835",
-            "India":         "#ff6d00",
-            "China":         "#b71c1c",
-            "Argentina":     "#4fc3f7",
-            "Australia":     "#4db6ac",
-            "Brazil":        "#43a047",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef6c00",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 60.0,   # lbs per bushel of wheat
     },
 }
@@ -487,14 +466,20 @@ def _load_logo_b64(path: str, _mtime: float = 0) -> str | None:
         return None
 
 
-def _add_chart_watermark(fig: go.Figure, logo_b64: str | None) -> go.Figure:
-    if logo_b64 is None:
+@st.cache_data(show_spinner=False)
+def _ch_watermark_uri() -> str | None:
+    return _load_logo_b64(LOGO_50YR_PATH)
+
+
+def _add_chart_watermark(fig: go.Figure, logo_b64: str | None = None) -> go.Figure:
+    """The faint 50-year mark behind a chart. logo_b64 is accepted for the older call sites and ignored: the white
+    logo they pass disappears on a light chart."""
+    uri = _ch_watermark_uri()
+    if uri is None:
         return fig
     fig.add_layout_image(dict(
-        source=logo_b64, xref="paper", yref="paper",
-        x=0.5, y=0.5, sizex=0.30, sizey=0.30,
-        xanchor="center", yanchor="middle",
-        opacity=0.10, layer="above",
+        source=uri, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.42, sizey=0.42,
+        xanchor="center", yanchor="middle", sizing="contain", opacity=0.09, layer="below",
     ))
     return fig
 
@@ -1303,79 +1288,140 @@ def pct_color(val) -> str:
 _TABLE_CSS = """
 <style>
 .corn-wrap {
+    /* direction:rtl makes a scroll box open scrolled to its RIGHT end, so the most recent years sit next to the
+       pinned current-year columns; the table inside is set back to ltr below, so nothing else changes */
+    direction: rtl;
     overflow-x: auto; max-height: 580px; overflow-y: auto;
-    border-radius: 6px; border: 1px solid #484f56;
+    border-radius: 8px; border: 1px solid #d7e2dc; background: #ffffff;
     font-family: Arial, sans-serif; font-size: 12.5px;
     line-height: 1.35; margin-bottom: 8px;
 }
-.corn-tbl { border-collapse: collapse; width: max-content; min-width: 100%; }
+.corn-tbl { direction: ltr; border-collapse: collapse; width: max-content; min-width: 100%; }
 .corn-tbl th {
-    background: #1e2124; color: #ffffff; font-weight: 600;
+    background: #eef3ef; color: #32373c; font-weight: 600;
     text-align: center; padding: 7px 10px; white-space: nowrap;
     position: sticky; top: 0; z-index: 3;
-    border-right: 1px solid #484f56; border-bottom: 2px solid #0d0f11;
+    border-right: 1px solid #d7e2dc; border-bottom: 2px solid #c3d3c9;
 }
-.corn-tbl th.stat-hdr  { background: #2a2f35; color: #ffffff; z-index: 5; }
-.corn-tbl th.cy-hdr    { background: #0555a0; color: #ffffff; }
+.corn-tbl th.stat-hdr  { background: #e2ebe5; color: #32373c; z-index: 5; }
+.corn-tbl th.cy-hdr    { background: #6fa8c4; color: #ffffff; }
 .corn-tbl td {
     padding: 5px 10px; text-align: right; white-space: nowrap;
-    border-bottom: 1px solid #484f56; border-right: 1px solid #484f56;
-    background: #32373c; color: #ffffff;
+    border-bottom: 1px solid #e6eee9; border-right: 1px solid #e6eee9;
+    background: #ffffff; color: #32373c;
 }
-.corn-tbl tr:hover td  { filter: brightness(1.2); }
+.corn-tbl tr:hover td  { filter: brightness(0.96); }
 .corn-tbl td.m-cell    { text-align: left; font-weight: 700;
-                          background: #1e2124 !important; color: #ffffff !important; }
-.corn-tbl td.s-cell    { background: #f4f6f8 !important; color: #000000 !important; }
-.corn-tbl td.p-cell    { background: #f4f6f8 !important; font-weight: 700; }
-.corn-tbl td.left-divider { border-left: 2px solid #0693e3 !important; }
-.corn-tbl th.left-divider { border-left: 2px solid #0693e3 !important; }
-.corn-tbl td.cy-cell   { background: #0693e3 !important; font-weight: 600; color: #ffffff !important; }
+                          background: #eef3ef !important; color: #32373c !important; }
+.corn-tbl td.s-cell    { background: #f3f7f4 !important; color: #32373c !important; }
+.corn-tbl td.p-cell    { background: #f3f7f4 !important; font-weight: 700; }
+.corn-tbl td.left-divider { border-left: 2px solid #6fa8c4 !important; }
+.corn-tbl th.left-divider { border-left: 2px solid #6fa8c4 !important; }
+.corn-tbl td.cy-cell   { background: #e1eff6 !important; font-weight: 700; color: #174d69 !important; }
 .corn-tbl tr.total-row td {
-    background: #232729 !important; font-weight: 700;
-    border-top: 2px solid #0693e3; color: #ffffff;
+    background: #eef3ef !important; font-weight: 700;
+    border-top: 2px solid #6fa8c4; color: #32373c;
 }
-.corn-tbl tr.total-row td.cy-cell { background: #0555a0 !important; color: #ffffff !important; }
-.corn-tbl tr.total-row td.s-cell  { background: #2a2f35 !important; color: #ffffff !important; }
-.corn-tbl tr.total-row td.p-cell  { background: #2a2f35 !important; }
-.corn-tbl td.est-cy-cell  { background: #7a5800 !important; color: #ffe082 !important;
-                             font-weight: 600 !important; border-top: 1px dashed #f9a825 !important;
-                             border-bottom: 1px dashed #f9a825 !important; }
-.corn-tbl tr.total-row td.est-cy-cell { background: #5a4000 !important; color: #ffe082 !important; }
-.est-badge { background:#7a5800; border:1px dashed #f9a825; padding:2px 8px;
-             border-radius:3px; color:#ffe082; font-weight:600; }
-.corn-tbl th.m1-hdr { background: #3d3100 !important; color: #fdd835 !important; }
-.corn-tbl th.m2-hdr { background: #003d1a !important; color: #00e676 !important; }
-.corn-tbl td.m1-cell { background: #3d3100 !important; color: #fdd835 !important;
-                        font-weight: 600 !important; border-top: 1px dotted #fdd835 !important;
-                        border-bottom: 1px dotted #fdd835 !important; }
-.corn-tbl td.m2-cell { background: #003d1a !important; color: #00e676 !important;
-                        font-weight: 600 !important; border-top: 1px dashed #00e676 !important;
-                        border-bottom: 1px dashed #00e676 !important; }
-.corn-tbl tr.total-row td.m1-cell { background: #2a2200 !important; color: #fdd835 !important; }
-.corn-tbl tr.total-row td.m2-cell { background: #002a10 !important; color: #00e676 !important; }
-.corn-tbl td.m-dash { background: #1e2124 !important; color: #4a5568 !important; }
-
-/* ── Vessel Lineup tab ── */
-.vl-kpi-wrap {
-    background: #141c18; border: 1px solid #253328;
-    border-radius: 8px; padding: 14px 18px; margin-bottom: 6px;
-}
-.vl-kpi-label {
-    font-size: 10px; font-weight: 600; color: #7a9485;
-    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;
-}
-.vl-kpi-value {
-    font-size: 26px; font-weight: 700; color: #e8ede9;
-    line-height: 1.1; margin: 0;
-}
-.vl-kpi-sub { font-size: 11px; color: #7a9485; margin-top: 2px; }
-.vl-sec-hdr {
-    font-size: 11px; font-weight: 700; color: #7a9485;
-    text-transform: uppercase; letter-spacing: 0.09em;
-    border-bottom: 1px solid #253328; padding-bottom: 6px; margin: 22px 0 14px 0;
-}
+.corn-tbl tr.total-row td.cy-cell { background: #cde3ef !important; color: #174d69 !important; }
+.corn-tbl tr.total-row td.s-cell  { background: #e2ebe5 !important; color: #32373c !important; }
+.corn-tbl tr.total-row td.p-cell  { background: #e2ebe5 !important; }
+.corn-tbl td.est-cy-cell  { background: #fdf0c9 !important; color: #7a5200 !important;
+                             font-weight: 700 !important; border-top: 1px dashed #d9a21b !important;
+                             border-bottom: 1px dashed #d9a21b !important; }
+.corn-tbl tr.total-row td.est-cy-cell { background: #f8e3a6 !important; color: #7a5200 !important; }
+.est-badge { background:#fdf0c9; border:1px dashed #d9a21b; padding:2px 8px;
+             border-radius:3px; color:#7a5200; font-weight:600; }
+.corn-tbl th.m1-hdr { background: #f3ecc0 !important; color: #6b5a00 !important; }
+.corn-tbl th.m2-hdr { background: #d6ecdc !important; color: #14632c !important; }
+.corn-tbl td.m1-cell { background: #fbf6d9 !important; color: #6b5a00 !important;
+                        font-weight: 600 !important; border-top: 1px dotted #c8920d !important;
+                        border-bottom: 1px dotted #c8920d !important; }
+.corn-tbl td.m2-cell { background: #e6f4ea !important; color: #14632c !important;
+                        font-weight: 600 !important; border-top: 1px dashed #16a34a !important;
+                        border-bottom: 1px dashed #16a34a !important; }
+.corn-tbl tr.total-row td.m1-cell { background: #f5edbf !important; color: #6b5a00 !important; }
+.corn-tbl tr.total-row td.m2-cell { background: #d3ebdb !important; color: #14632c !important; }
+.corn-tbl td.m-dash { background: #f3f7f4 !important; color: #a8b8ae !important; }
 </style>
 """
+
+# ── light surfaces for the tiles, info bars and small tables: the sage look of the charts ──────────────────────────────
+_LT_TINT  = "#f3f7f4"                                  # panel and header tint
+_LT_HEAD  = "#eef3ef"                                  # table header
+_LT_AMBER_BG, _LT_AMBER_BD, _LT_AMBER_TX = "#fdf0c9", "#d9a21b", "#7a5200"      # estimates
+_LT_BLUE_BG, _LT_BLUE_TX = "#e1eff6", "#174d69"        # the current year
+_DIVIDER_HTML = f'<div style="border-top:1px solid {_CH_BORDER};margin:4px 0 16px;"></div>'
+
+
+def _stat_card_html(label: str, value: str, unit: str, accent: str) -> str:
+    """A small centred card (the Forecast and Model 3 tiles): white, sage line, a coloured top edge."""
+    return (f'<div style="background:#ffffff;border:1px solid {_CH_BORDER};border-top:3px solid {accent};'
+            f'border-radius:8px;padding:12px 14px;text-align:center;">'
+            f'<div style="font-size:11px;color:{_CH_MUTED};font-family:Arial;margin-bottom:4px;">{label}</div>'
+            f'<div style="font-size:20px;font-weight:700;color:{_CH_TEXT};font-family:Arial;">{value}</div>'
+            f'<div style="font-size:11px;color:{_CH_MUTED};font-family:Arial;margin-top:2px;">{unit}</div></div>')
+
+
+def _note_bar_html(inner: str, style: str = "") -> str:
+    """A one-line bar in the tint with a sage spine (the pace strip, the info strip)."""
+    return (f'<div style="background:{_LT_TINT};padding:8px 16px;border:1px solid {_CH_BORDER};'
+            f'border-left:3px solid {_CH_SAGE};border-radius:6px;font-family:Arial;font-size:12px;'
+            f'color:{_CH_TEXT};{style}">{inner}</div>')
+
+
+def _info_strip_html(field_label: str, is_import: bool, unit_long: str, my_label: str, cy, ly, oly_label: str) -> str:
+    """The line under the country buttons: what is on show, in which unit, and against which years."""
+    imp = f"&nbsp;<span style='color:{_CH_NEG};font-size:11px;'>(import data)</span>" if is_import else ""
+    cyan = f'color:{JSA_CYAN};font-weight:700;'
+    return _note_bar_html(
+        f'<span>📊 <b>Showing:</b> {field_label}{imp}</span>'
+        f'<span>📐 <b>Units:</b> <span style="{cyan}">{unit_long}</span></span>'
+        f'<span>📅 <b>Marketing Year:</b> {my_label}</span>'
+        f'<span>📅 <b>Current Year (CY):</b> <span style="{cyan}">{cy}</span></span>'
+        f'<span>📅 <b>Last Year (LY):</b> {ly or "N/A"}</span>'
+        f'<span>📈 <b>Olympic Avg (prior yrs):</b> {oly_label}</span>',
+        "padding:9px 18px;font-size:13px;margin:10px 0 6px 0;display:flex;gap:28px;flex-wrap:wrap;")
+
+
+def _table_legend_html(cy, has_estimates: bool, est_how: str = "") -> str:
+    """The key under the info strip: what the colours of the shipment table mean."""
+    def chip(bg, fg, text, extra=""):
+        return f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:3px;{extra}">{text}</span>'
+
+    est_extra = f"border:1px dashed {_LT_AMBER_BD};font-weight:600;"
+    stat_extra = f"border:1px solid {_CH_BORDER};"
+    est = (f'<span>{chip(_LT_AMBER_BG, _LT_AMBER_TX, "EST", est_extra)}'
+           f'&nbsp;Estimate (not yet official{est_how})</span>' if has_estimates else "")
+    return (f'<div style="font-family:Arial;font-size:12px;color:{_CH_MUTED};margin:6px 0 14px 0;display:flex;gap:20px;'
+            f'flex-wrap:wrap;padding:7px 14px;background:{_LT_TINT};border:1px solid {_CH_BORDER};border-radius:5px;">'
+            f'<span>{chip("#6fa8c4", "#ffffff", "CY", "font-weight:600;")}&nbsp;Current Year ({cy})</span>'
+            f'{est}'
+            f'<span>{chip("#d6eddc", "#14632c", "&#9632;")}&nbsp;2 Highest (prior yrs)</span>'
+            f'<span>{chip("#f8d9d9", "#9b1c1c", "&#9632;")}&nbsp;2 Lowest (prior yrs)</span>'
+            f'<span>{chip(_LT_TINT, _CH_MUTED, "&#9632;", stat_extra)}&nbsp;Stat Columns (prior yrs only)</span>'
+            f'<span><b style="color:{_CH_POS};">+x.x%</b>&nbsp;Above reference</span>'
+            f'<span><b style="color:{_CH_NEG};">-x.x%</b>&nbsp;Below reference</span></div>')
+
+
+_TITLE_COMMODITY = {"Soybeans": "Soybean"}      # "United States Soybean Exports", not "Soybeans Exports"
+
+
+def _view_title_html(field_label: str, commodity_label: str, is_import: bool, unit_short: str) -> str:
+    """The title above a country / category view, e.g. "United States Corn Exports (TMT)": the country that is
+    filtered, the commodity, exports (imports for China's import field) and the unit the tables are listed in."""
+    flow = "Imports" if is_import else "Exports"
+    who = field_label[:-len(" Imports")] if is_import and field_label.endswith(" Imports") else field_label
+    if who == "Major Exporters":
+        who += "'"                                    # Major Exporters' Corn Exports
+    what = _TITLE_COMMODITY.get(commodity_label, commodity_label)
+    return (
+        f'<div style="margin:18px 0 12px 0;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};'
+        f'font-family:Arial,sans-serif;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+        f'{who} {what} {flow}</span>'
+        f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit_short})</span></div>'
+    )
+
 
 def _show_table(pivot, html: str, key: str) -> None:
     """Render a styled HTML table with a CSV download button above it."""
@@ -1481,9 +1527,9 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
                 continue
             val = year_data.get(year)
             if year in top2:
-                row += f'<td style="background:#2e7d32;color:#fff;font-weight:600;">{fn(val)}</td>'
+                row += f'<td style="background:#d6eddc;color:#14632c;font-weight:700;">{fn(val)}</td>'
             elif year in bot2:
-                row += f'<td style="background:#c62828;color:#fff;font-weight:600;">{fn(val)}</td>'
+                row += f'<td style="background:#f8d9d9;color:#9b1c1c;font-weight:700;">{fn(val)}</td>'
             else:
                 row += f'<td>{fn(val)}</td>'
 
@@ -1552,36 +1598,50 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
 # ─────────────────────────────────────────────────────────────────────────────
 # CHARTS
 # ─────────────────────────────────────────────────────────────────────────────
+def _ch_title(title: str, subtitle: str | None = None) -> dict:
+    """A left-aligned chart title (with an optional muted second line), pinned 14 px below the top edge."""
+    text = f"<b>{title}</b>" + (f"<br><span style='font-size:12px;color:{_CH_MUTED}'>{subtitle}</span>" if subtitle else "")
+    return dict(text=text, x=0, xanchor="left", y=1, yanchor="top", pad=dict(t=14), font=dict(size=15, color=_CH_TEXT))
+
+
+def _ch_layout(title: str | None = None, subtitle: str | None = None, x_title: str | None = None,
+               y_title: str | None = None, height: int | None = None, legend: bool = True,
+               hover: str = "x unified", margin: dict | None = None) -> dict:
+    """Layout for the light COT look: white surface, sage gridlines, muted tick text. Every chart starts from this."""
+    lay = dict(
+        template="plotly_white", paper_bgcolor=_CH_SURF, plot_bgcolor=_CH_SURF,
+        font=dict(family=_CH_FONT, color=_CH_TEXT, size=12), hovermode=hover,
+        hoverlabel=dict(bgcolor="#ffffff", bordercolor=_CH_BORDER, font=dict(color=_CH_TEXT, size=12)),
+        showlegend=legend,
+        legend=dict(bgcolor="rgba(255,255,255,0.92)", bordercolor=_CH_BORDER, borderwidth=1,
+                    font=dict(size=11, color=_CH_MUTED)),
+        margin=margin or dict(l=70, r=20, t=(88 if subtitle else 64) if title else 24, b=60),
+        xaxis=_ch_axis(x_title), yaxis=_ch_axis(y_title),
+    )
+    if title:
+        lay["title"] = _ch_title(title, subtitle)
+    if height:
+        lay["height"] = height
+    return lay
+
+
 def _base_layout(title_text, x_title, y_title) -> dict:
-    axis = dict(
-        gridcolor="#484f56", linecolor="#484f56",
-        tickcolor="#aaaaaa", tickfont=dict(color="#cccccc"),
-        title_font=dict(color="#ffffff"), zerolinecolor="#484f56",
-    )
-    return dict(
-        title=dict(text=title_text, font=dict(color="#ffffff", size=15, family="Arial")),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#32373c",
-        font=dict(family="Arial", color="#ffffff", size=12),
-        legend=dict(bgcolor="rgba(30,33,36,0.92)", bordercolor="#484f56",
-                    borderwidth=1, font=dict(size=11)),
-        margin=dict(l=70, r=20, t=55, b=60),
-        hovermode="x unified",
-        xaxis=dict(**axis, title=x_title),
-        yaxis=dict(**axis, title=y_title, tickformat=","),
-    )
+    lay = _ch_layout(title_text, None, x_title, y_title)
+    lay["yaxis"]["tickformat"] = ","
+    return lay
 
 
 def _year_style(year, cy, ly, all_years) -> tuple:
+    """(colour, width, opacity) of a marketing-year line: this year blue, last year terracotta, earlier years in sage
+    shades that darken toward the present."""
     if year == cy:
-        return "#0693e3", 4.5, 1.0
+        return _CH_BLUE, 4.5, 1.0
     if year == ly:
-        return "#ffffff", 3.0, 0.92
+        return _CH_TERRA, 3.0, 1.0
     other = [y for y in all_years if y != cy and y != ly]
     idx   = other.index(year) if year in other else 0
-    n     = max(len(other) - 1, 1)
-    t     = idx / n
-    return (f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})",
-            round(1.0 + 0.4 * t, 1), round(0.18 + 0.45 * t, 2))
+    t     = idx / max(len(other) - 1, 1)
+    return _ch_mix("#cdd9d1", "#5f7267", t), round(1.0 + 0.6 * t, 1), 1.0
 
 
 def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
@@ -1620,7 +1680,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 band_lower.append(None)
         fig.add_trace(go.Scatter(
             x=months + months[::-1], y=band_upper + band_lower[::-1],
-            fill="toself", fillcolor="rgba(6,147,227,0.10)",
+            fill="toself", fillcolor=_ch_rgba(_CH_SAGE, 0.12),
             line=dict(color="rgba(0,0,0,0)"),
             name=f"±1 Std Dev ({len(hist_8)} yr)",
             hoverinfo="skip", showlegend=True,
@@ -1637,8 +1697,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         fig.add_trace(go.Scatter(
             x=months, y=oly_vals, mode="lines+markers",
             name="6-Yr Olympic Avg",
-            line=dict(color="#0693e3", width=2.5, dash="dash"),
-            marker=dict(symbol="diamond", size=6, color="#0693e3"),
+            line=dict(color=_CH_SAGE, width=2.5, dash="dash"),
+            marker=dict(symbol="diamond", size=6, color=_CH_SAGE),
             legendrank=800,
             customdata=oly_hover,
             hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
@@ -1700,8 +1760,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=est_months_seq, y=est_vals,
                     mode="lines+markers", name=f"{cy} (Estimate)",
-                    line=dict(color="#f9a825", width=width, dash="dash"),
-                    marker=dict(size=5, color="#f9a825", symbol="diamond"),
+                    line=dict(color=_CH_EST, width=width, dash="dash"),
+                    marker=dict(size=5, color=_CH_EST, symbol="diamond"),
                     opacity=opacity, connectgaps=False,
                     legendrank=2,
                     customdata=est_hover,
@@ -1715,13 +1775,13 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                     x0=months[boundary], x1=months[boundary],
                     y0=0, y1=1,
                     xref="x", yref="paper",
-                    line=dict(color="#f9a825", width=1, dash="dot"),
+                    line=dict(color=_CH_EST, width=1, dash="dot"),
                 )
                 fig.add_annotation(
                     x=months[boundary], y=1.02,
                     xref="x", yref="paper",
                     text="Est →",
-                    font=dict(color="#f9a825", size=10),
+                    font=dict(color=_CH_EST, size=10),
                     showarrow=False,
                     xanchor="left", yanchor="bottom",
                 )
@@ -1746,8 +1806,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             fig.add_trace(go.Scatter(
                 x=months, y=vals, mode="lines+markers", name=year,
                 line=dict(color=color, width=width),
-                marker=dict(size=5 if is_key else 3, color=color,
-                            line=dict(width=1.2, color="#32373c") if year == ly else None),
+                marker=dict(size=5 if is_key else 3, color=color),
                 opacity=opacity, connectgaps=False,
                 legendrank=legend_rank.get(year, 500),
                 customdata=yr_hover,
@@ -1787,7 +1846,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=band_x + band_x[::-1],
                     y=band_hi + band_lo[::-1],
-                    fill="toself", fillcolor="rgba(255,193,7,0.18)",
+                    fill="toself", fillcolor=_ch_rgba(_CH_M1, 0.16),
                     line=dict(color="rgba(0,0,0,0)"),
                     name="Forecast ±0.5σ",
                     hoverinfo="skip", showlegend=True, legendrank=950,
@@ -1806,9 +1865,9 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             fig.add_trace(go.Scatter(
                 x=m1_x, y=m1_y, mode="lines+markers",
                 name="Forecast — USDA Seasonal",
-                line=dict(color="#fdd835", width=2.5, dash="dot"),
-                marker=dict(symbol="diamond-open", size=7, color="#fdd835",
-                            line=dict(width=2, color="#fdd835")),
+                line=dict(color=_CH_M1, width=2.5, dash="dot"),
+                marker=dict(symbol="diamond-open", size=7, color=_CH_M1,
+                            line=dict(width=2, color=_CH_M1)),
                 connectgaps=True, legendrank=5,
                 customdata=m1_hover,
                 hovertemplate="%{x}: %{customdata}<extra>USDA Seasonal Fcst</extra>",
@@ -1830,9 +1889,9 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=m2_x, y=m2_y, mode="lines+markers",
                     name=f"Forecast — Pace Adj ({adj_lbl})",
-                    line=dict(color="#00e676", width=2.0, dash="dashdot"),
-                    marker=dict(symbol="triangle-up-open", size=7, color="#00e676",
-                                line=dict(width=2, color="#00e676")),
+                    line=dict(color=_CH_M2, width=2.0, dash="dashdot"),
+                    marker=dict(symbol="triangle-up-open", size=7, color=_CH_M2,
+                                line=dict(width=2, color=_CH_M2)),
                     connectgaps=True, legendrank=6,
                     customdata=m2_hover,
                     hovertemplate="%{x}: %{customdata}<extra>Pace-Adj Fcst</extra>",
@@ -1842,17 +1901,11 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         f"Seasonal {lbl}Shipments — {field_label} ({unit_short})",
         "Month", f"{lbl}Volume ({unit_short})",
     ))
-    fig.update_layout(legend=dict(bgcolor="#ffffff", bordercolor="#c9ced3", borderwidth=1,
-                                  font=dict(size=11, color="#32373c")))
     _add_chart_watermark(fig, logo_b64)
     return fig
 
 
-_BAR_COLORS = [
-    "#1565c0","#2e7d32","#6a1b9a","#ad1457",
-    "#00695c","#e65100","#37474f","#4527a0",
-    "#558b2f","#00838f","#4e342e","#283593",
-]
+_BAR_COLORS = _CH_PAL[1:]          # the selected year takes the lead blue; the others follow in palette order
 
 
 def make_column_chart(data_pivot, stats, selected_years, cy,
@@ -1867,7 +1920,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     maxs = [stats[m]["max"] for m in months]
     fig.add_trace(go.Scatter(
         x=months + months[::-1], y=maxs + mins[::-1],
-        fill="toself", fillcolor="rgba(6,147,227,0.08)",
+        fill="toself", fillcolor=_ch_rgba(_CH_SAGE, 0.12),
         line=dict(color="rgba(0,0,0,0)"),
         name="Hist. Min–Max Range", hoverinfo="skip",
     ))
@@ -1878,8 +1931,8 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     ]
     fig.add_trace(go.Scatter(
         x=months, y=olys, mode="lines+markers", name="6-Yr Olympic Avg",
-        line=dict(color="#0693e3", width=2.5, dash="dot"),
-        marker=dict(symbol="diamond", size=7, color="#0693e3"),
+        line=dict(color=_CH_SAGE, width=2.5, dash="dot"),
+        marker=dict(symbol="diamond", size=7, color=_CH_SAGE),
         customdata=oly_hover,
         hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
     ))
@@ -1887,7 +1940,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     color_idx = 0
     for year in selected_years:
         vals  = [data_pivot[m].get(year) for m in months]
-        color = "#f9a825" if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
+        color = _CH_BLUE if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
         if year != cy:
             color_idx += 1
         bar_hover = [
@@ -1896,7 +1949,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
         ]
         fig.add_trace(go.Bar(
             x=months, y=vals, name=year,
-            marker_color=color, opacity=0.85,
+            marker_color=color, opacity=0.92,
             customdata=bar_hover,
             hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
         ))
@@ -1938,7 +1991,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
     pct_lys  = [d.get("pct_ly")  for d in sorted_data]
 
     def _colors(vals):
-        return ["#4caf50" if (v is not None and v >= 0) else "#ef5350" for v in vals]
+        return [_CH_POS if (v is not None and v >= 0) else _CH_NEG for v in vals]
 
     n     = len(labels)
     fig_h = max(400, n * 58 + 160)
@@ -1961,7 +2014,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
     fig.add_trace(go.Bar(
         x=pct_avgs, y=labels,
         orientation="h",
-        name="% vs Olympic Avg",
+        name="% vs Olympic Avg", showlegend=False,
         marker_color=_colors(pct_avgs),
         marker_line_width=0,
         opacity=1.0,
@@ -1976,7 +2029,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
     fig.add_trace(go.Bar(
         x=pct_lys, y=labels,
         orientation="h",
-        name="% vs Last Year",
+        name="% vs Last Year", showlegend=False,
         marker_color=_colors(pct_lys),
         marker_line_width=0,
         opacity=0.55,
@@ -1987,44 +2040,24 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         hovertemplate="%{y}: %{customdata}<extra>% vs Last Year</extra>",
     ))
 
-    # Single zero-reference line across the whole chart
-    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2)
+    # The bars are green / red by sign, so the legend swatches are neutral (scatter traces: they take no bar slot)
+    for nm, op in (("% vs Olympic Avg", 1.0), ("% vs Last Year", 0.45)):
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=nm, hoverinfo="skip",
+                                 marker=dict(symbol="square", size=11, color=_CH_SAGE, opacity=op)))
 
+    # Single zero-reference line across the whole chart
+    fig.add_vline(x=0, line_color=_CH_MUTED, line_width=1.2)
+
+    fig.update_layout(**_ch_layout(f"{commodity_label} — Cumulative Shipment Snapshot", selected_year_label,
+                                   height=fig_h, hover="closest", margin=dict(l=10, r=120, t=88, b=50)))
     fig.update_layout(
-        barmode="group",
-        height=fig_h,
-        title=dict(
-            text=(f"{commodity_label} — Cumulative Shipment Snapshot"
-                  f"  ·  {selected_year_label}"),
-            font=dict(size=14, color="#ffffff", family="Arial"),
-            x=0.01,
-        ),
-        paper_bgcolor="#181c20",
-        plot_bgcolor="#1d2227",
-        font=dict(family="Arial", color="#d0d8e0", size=11),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom", y=1.02,
-            xanchor="left", x=0,
-            font=dict(color="#aab4c0", size=11),
-            bgcolor="rgba(0,0,0,0)",
-            itemsizing="constant",
-        ),
-        margin=dict(l=10, r=120, t=80, b=20),
-        bargap=0.28,
-        bargroupgap=0.06,
+        barmode="group", bargap=0.28, bargroupgap=0.06,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                    font=dict(color=_CH_MUTED, size=11), bgcolor="rgba(0,0,0,0)",
+                    bordercolor="rgba(0,0,0,0)", itemsizing="constant"),
     )
-    fig.update_xaxes(
-        ticksuffix="%",
-        gridcolor="#2e353d", gridwidth=0.5,
-        zeroline=False,
-        tickfont=dict(size=10),
-        range=x_range,
-    )
-    fig.update_yaxes(
-        gridcolor="#2e353d", gridwidth=0.5,
-        tickfont=dict(size=11),
-    )
+    fig.update_xaxes(ticksuffix="%", zeroline=False, tickfont=dict(size=10, color=_CH_MUTED), range=x_range)
+    fig.update_yaxes(showgrid=False, tickfont=dict(size=11, color=_CH_TEXT))
 
     # Annotation note at bottom explaining opacity difference
     fig.add_annotation(
@@ -2034,7 +2067,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         x=0.0, y=-0.04,
         xanchor="left", yanchor="top",
         showarrow=False,
-        font=dict(size=10, color="#5a6878", family="Arial"),
+        font=dict(size=10, color=_CH_MUTED),
     )
 
     _add_chart_watermark(fig, logo_b64)
@@ -2044,9 +2077,85 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
 # ─────────────────────────────────────────────────────────────────────────────
 # STAT TILES
 # ─────────────────────────────────────────────────────────────────────────────
+def _aggregate_progress(df, cfg, field, year, use_bushels, unit_factor,
+                        us_est_months=frozenset()):
+    """Where an Oct–Sep aggregate (Total Non-US / Major Exporters) really stands for `year`.
+
+    The aggregate only counts a month once EVERY component has reported, so one late reporter
+    (Argentina's TDM data lags a month) makes the total stop a month early and read like a full
+    year. Returns None for a non-aggregate field or a year with no data, else a dict:
+        strict_thru / strict_cum   last month all components reported, and the total through it
+        thru / cum                 the same plus the months only some components have reported
+                                   (summing just the components that have)
+        missing                    components absent from those extra months ([] = nothing pending)
+        est                        True when a pending month leans on an estimated US month
+    """
+    comps = {"TotalNonUS": cfg.get("non_us_comps"),
+             "MajorExporter": cfg.get("major_comps")}.get(field)
+    if not comps or field not in df.columns or any(c not in df.columns for c in comps):
+        return None
+
+    def _pv(f):
+        pv, _ = build_pivot(df, f)
+        return _apply_unit(pv, unit_factor) if use_bushels else pv
+
+    agg = _pv(field)
+    comp = {c: _pv(c) for c in comps}
+    strict_thru, strict_cum = None, 0.0
+    for m in OCT_SEP_MONTHS:
+        v = agg[m].get(year)
+        if v is not None:
+            strict_thru, strict_cum = m, strict_cum + v
+    if strict_thru is None:
+        return None
+    cum, thru, missing, est = strict_cum, strict_thru, [], False
+    for m in OCT_SEP_MONTHS[OCT_SEP_MONTHS.index(strict_thru) + 1:]:
+        have = {c: comp[c][m].get(year) for c in comps if comp[c][m].get(year) is not None}
+        if not have:
+            break        # nothing reported for this month, so no later month is pending either
+        cum += sum(have.values())
+        thru = m
+        missing += [c for c in comps if c not in have and c not in missing]
+        est = est or ("US" in have and m in us_est_months)
+    return dict(strict_thru=strict_thru, strict_cum=strict_cum, thru=thru, cum=cum,
+                missing=missing, est=est)
+
+
+def _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
+                     unit_short, unit_decimals) -> str:
+    """One line under the USDA forecast of an Oct–Sep aggregate: where last year actually stands, so
+    the forecast is read against the right base and a late reporter isn't mistaken for a full year."""
+    if not ly or field not in ("TotalNonUS", "MajorExporter"):
+        return ""
+    try:
+        est = _us_fgis_est_months(commodity, ly, OCT_SEP_MONTHS, my_start_month=10)
+    except Exception:
+        est = set()
+    pg = _aggregate_progress(df, cfg, field, ly, use_bushels, unit_factor, us_est_months=est)
+    if not pg:
+        return ""
+    fn = lambda v: fmt_num(v, unit_decimals)
+    if pg["strict_thru"] == "Sep":
+        base = f"{fn(pg['strict_cum'])} {unit_short} (full year)"
+    elif pg["missing"]:
+        base = (f"{fn(pg['cum'])} {unit_short} thru {pg['thru']}, excl. "
+                f"{', '.join(pg['missing'])} {pg['thru']} (pending)")
+    else:
+        base = f"{fn(pg['strict_cum'])} {unit_short} thru {pg['strict_thru']}"
+    try:
+        raw = load_forecast_config(ly).get((commodity, field))
+        usda_ly = (float(raw) * unit_factor if use_bushels else float(raw)) if raw else None
+    except Exception:
+        usda_ly = None
+    tail = f" · USDA est. {fn(usda_ly)}" if usda_ly else ""
+    return (f'<div style="font-family:Arial;font-size:11px;color:#5f6b76;margin-top:6px;">'
+            f'Last year ({ly}): <b style="color:#32373c;">{base}</b>{tail}</div>')
+
+
 def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
                         arbr_local_my: bool = True,
-                        us_local_my: bool = True) -> list:
+                        us_local_my: bool = True,
+                        commodity: str | None = None) -> list:
     cutoffs = load_cutoff_config()   # cached — no performance cost
     tiles = []
     for field in cfg["tile_order"]:
@@ -2099,6 +2208,16 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
         # Months in the current MY that are estimates — skip these on tiles
         est_months = _cy_estimate_months(field, cutoffs, months_list)
 
+        # US months Census hasn't published yet are filled by an estimate. They stay on the tile
+        # (it is the newest read) but are flagged, instead of passing as official.
+        us_est = set()
+        if field == "US" and commodity:
+            try:
+                us_est = _us_fgis_est_months(commodity, cy, months_list,
+                                             my_start_month=9 if us_local_my else 10)
+            except Exception:
+                us_est = set()
+
         latest_month = latest_val = None
         for m in reversed(months_list):
             if m in est_months:          # only show official data on tiles
@@ -2119,6 +2238,18 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
         ly_cum  = cum_piv[latest_month].get(ly) if ly else None
         oly_cum = olympic_avg([cum_piv[latest_month].get(y) for y in oly_years])
 
+        # An aggregate stops at the last month EVERY component has reported. Say what is still
+        # pending, so e.g. Oct–Aug doesn't read like a full Oct–Sep year.
+        pending = None
+        if field in ("TotalNonUS", "MajorExporter") and my_label == "USDA (Oct–Sep)":
+            try:
+                _agg_est = (_us_fgis_est_months(commodity, cy, OCT_SEP_MONTHS, my_start_month=10)
+                            if commodity else set())
+                pending = _aggregate_progress(df, cfg, field, cy, use_bushels, unit_factor,
+                                              us_est_months=_agg_est)
+            except Exception:
+                pending = None
+
         tiles.append(dict(
             field        = field,
             label        = cfg["fields"][field],
@@ -2133,14 +2264,16 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
             cum_val      = cy_cum,
             pct_ly_c     = _pct(cy_cum, ly_cum),
             pct_oly_c    = _pct(cy_cum, oly_cum),
+            est          = latest_month in us_est,
+            pending      = pending,
         ))
     return tiles
 
 
 def _pct_chip(val, label) -> str:
     if val is None:
-        return f'<span style="color:#3d4a58;">{label}&thinsp;—</span>'
-    color = "#4caf50" if val >= 0 else "#ef5350"
+        return f'<span style="color:#9aa8a0;">{label}&thinsp;—</span>'
+    color = _CH_POS if val >= 0 else _CH_NEG
     sign  = "+" if val >= 0 else ""
     return f'<span style="color:{color};font-weight:700;">{label}&thinsp;{sign}{val:.1f}%</span>'
 
@@ -2149,78 +2282,102 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
     """
     Render stat tiles as unified per-country cards (Monthly + MYTD seamlessly
     stacked inside one card), all cards flush against each other and centred.
+    White cards on sage lines, the country's chart colour along the top.
     """
     cards_html = ""
     total      = sum(1 for t in tiles if t is not None)
     idx        = 0   # position among non-None tiles
+    line       = _CH_BORDER
+    faint      = "#8a9a90"
 
     for t in tiles:
         if t is None:
             continue
 
         accent   = t.get("accent", JSA_CYAN)
-        imp_note = (' <span style="font-size:9px;color:#8a9aaa;font-weight:400;">'
+        imp_note = (f' <span style="font-size:9px;color:{faint};font-weight:400;">'
                     '(imports)</span>'
                     if t.get("is_import") else "")
 
         # rounded corners only on the outer edges of the first/last card
-        br_tl = "6px" if idx == 0 else "0"
-        br_bl = "6px" if idx == 0 else "0"
-        br_tr = "6px" if idx == total - 1 else "0"
-        br_br = "6px" if idx == total - 1 else "0"
+        br_tl = "8px" if idx == 0 else "0"
+        br_bl = "8px" if idx == 0 else "0"
+        br_tr = "8px" if idx == total - 1 else "0"
+        br_br = "8px" if idx == total - 1 else "0"
         border_radius = f"{br_tl} {br_tr} {br_br} {br_bl}"
 
         # right border only on non-last cards (avoids double border)
-        right_border = "" if idx == total - 1 else "border-right:1px solid #2e353d;"
+        right_border = "" if idx == total - 1 else f"border-right:1px solid {line};"
 
         m_vol = fmt_num(t["monthly_val"], unit_decimals) if t["monthly_val"] is not None else "—"
         c_vol = fmt_num(t["cum_val"],     unit_decimals) if t["cum_val"]     is not None else "—"
 
+        # "2025/26 (USDA (Oct–Sep))" wraps on a narrow card and has nested brackets: show "(Oct–Sep)"
+        my_disp = t["my_label"].replace("USDA (Oct–Sep)", "Oct–Sep")
+
+        # EST: the newest month is an estimate, not an official figure (US months Census hasn't published)
+        est_tag = (f'&nbsp;<span style="background:{_LT_AMBER_BG};border:1px dashed {_LT_AMBER_BD};padding:0 4px;'
+                   f'border-radius:3px;color:{_LT_AMBER_TX};font-size:8px;font-weight:700;">EST</span>'
+                   if t.get("est") else "")
+
+        # Aggregates stop at the last month every component reported: say what is still pending
+        pend      = t.get("pending") or {}
+        pend_html = ""
+        if pend.get("missing"):
+            pend_html = (
+                f'<div style="margin:7px 2px 0;padding:4px 5px;background:#fff8e6;'
+                f'border:1px dashed {_LT_AMBER_BD};border-radius:4px;font-size:9px;line-height:1.4;'
+                f'color:{_LT_AMBER_TX};text-align:center;">'
+                f'<b>{fmt_num(pend["cum"], unit_decimals)}</b> {unit_short} thru {pend["thru"]}'
+                f'<br>ex-{", ".join(pend["missing"])} {pend["thru"]} (pending)'
+                f'{"<br>incl. US estimate" if pend.get("est") else ""}</div>'
+            )
+
         card = (
             # ── outer card ──────────────────────────────────────────────────
-            f'<div style="flex:1;min-width:140px;background:#21262c;'
+            f'<div style="flex:1;min-width:140px;background:#ffffff;'
             f'border-top:3px solid {accent};'
-            f'border-bottom:1px solid #2e353d;border-left:1px solid #2e353d;'
+            f'border-bottom:1px solid {line};border-left:1px solid {line};'
             f'{right_border}'
             f'border-radius:{border_radius};overflow:hidden;">'
 
             # ── country header ───────────────────────────────────────────────
             f'<div style="text-align:center;font-size:10.5px;font-weight:700;'
-            f'color:#ffffff;text-transform:uppercase;letter-spacing:0.7px;'
-            f'padding:6px 8px 5px;background:#1a1e22;'
-            f'border-bottom:1px solid #2e353d;">'
+            f'color:{_CH_TEXT};text-transform:uppercase;letter-spacing:0.7px;'
+            f'padding:6px 8px 5px;background:{_LT_TINT};'
+            f'border-bottom:1px solid {line};">'
             f'{t["label"]}{imp_note}</div>'
 
             # ── monthly section ──────────────────────────────────────────────
             f'<div style="padding:9px 10px 8px;text-align:center;">'
-            f'<div style="font-size:8.5px;font-weight:700;color:#5a6878;'
+            f'<div style="font-size:8.5px;font-weight:700;color:{_CH_MUTED};'
             f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">Monthly</div>'
-            f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
-            f'line-height:1.1;font-family:Arial;">{m_vol}</div>'
-            f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
+            f'<div style="color:{_CH_TEXT};font-size:19px;font-weight:700;'
+            f'line-height:1.1;font-family:Arial;">{m_vol}{est_tag}</div>'
+            f'<div style="font-size:9px;color:{faint};margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
-            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}</span></div>'
+            f'<span style="color:{_CH_MUTED};">{t["latest_month"]}</span>'
+            f'&nbsp;<span>{t["cy"]}</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_m"],"LY")}&nbsp;{_pct_chip(t["pct_oly_m"],"Avg")}'
             f'</div></div>'
 
             # ── divider ──────────────────────────────────────────────────────
-            f'<div style="border-top:1px solid #2e353d;margin:0;"></div>'
+            f'<div style="border-top:1px solid {line};margin:0;"></div>'
 
             # ── MYTD section ─────────────────────────────────────────────────
             f'<div style="padding:9px 10px 8px;text-align:center;">'
-            f'<div style="font-size:8.5px;font-weight:700;color:{accent};'
+            f'<div style="font-size:8.5px;font-weight:700;color:{_CH_MUTED};'
             f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">MYTD</div>'
-            f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
-            f'line-height:1.1;font-family:Arial;">{c_vol}</div>'
-            f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
+            f'<div style="color:{_CH_TEXT};font-size:19px;font-weight:700;'
+            f'line-height:1.1;font-family:Arial;">{c_vol}{est_tag}</div>'
+            f'<div style="font-size:9px;color:{faint};margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
-            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({t["my_label"]})</span></div>'
+            f'<span style="color:{_CH_MUTED};">thru&nbsp;{t["latest_month"]}</span>'
+            f'&nbsp;<span>{t["cy"]}&nbsp;({my_disp})</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_c"],"LY")}&nbsp;{_pct_chip(t["pct_oly_c"],"Avg")}'
-            f'</div></div>'
+            f'</div>{pend_html}</div>'
 
             f'</div>'  # close card
         )
@@ -2430,7 +2587,7 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
     fn       = lambda v: fmt_num(v, dec) if v is not None else "—"
     has_ytd  = pi.get("has_ytd", False)
     pace_pct = pi.get("pace_pct", 0.0)
-    pace_col = "#4caf50" if pace_pct >= 0 else "#ef5350"
+    pace_col = _CH_POS if pace_pct >= 0 else _CH_NEG
     pace_sign= "+" if pace_pct >= 0 else ""
     adj_pct  = (pi.get("adj_factor", 1.0) - 1.0) * 100.0
     _cy_lbl  = pi.get("cy") or "the current marketing year"
@@ -2440,68 +2597,44 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
 
     cols = st.columns(5)
     metrics = [
-        ("USDA MY Total",          fn(pi["usda_total"]),    unit_short, JSA_CYAN),
+        ("USDA MY Total",          fn(pi["usda_total"]),    unit_short, _CH_BLUE),
         ("YTD Official",
          fn(pi["ytd_actual"]) if has_ytd else "—",
-         unit_short if has_ytd else "",                      "#f9a825"),
+         unit_short if has_ytd else "",                      _CH_TERRA),
         ("YTD Seasonal Expected",
          fn(pi["ytd_expected"]) if has_ytd else "—",
-         unit_short if has_ytd else "",                      "#78909c"),
-        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, "#fdd835"),
+         unit_short if has_ytd else "",                      "#8fa398"),
+        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, _CH_M1),
         ("Model 2 — Pace Adjusted",
          fn(pi["model2_total"]) if has_ytd else "—",
-         unit_short if has_ytd else "Needs 1st official month", "#00e676"),
+         unit_short if has_ytd else "Needs 1st official month", _CH_M2),
     ]
 
     for col, (label, val, unit, accent) in zip(cols, metrics):
         with col:
-            st.markdown(f"""
-            <div style="background:#1e2124;border-top:3px solid {accent};
-                        border-radius:6px;padding:12px 14px;text-align:center;">
-              <div style="font-size:11px;color:#8a9aaa;font-family:Arial;
-                          margin-bottom:4px;">{label}</div>
-              <div style="font-size:20px;font-weight:700;color:#ffffff;
-                          font-family:Arial;">{val}</div>
-              <div style="font-size:11px;color:{accent};font-family:Arial;
-                          margin-top:2px;">{unit}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(_stat_card_html(label, val, unit, accent), unsafe_allow_html=True)
 
     # Pace strip
     if has_ytd:
         m1_vs_usda = pi["model1_total"] - pi["usda_total"]
         m2_vs_usda = pi["model2_total"] - pi["usda_total"]
-        m1_col = "#4caf50" if m1_vs_usda >= 0 else "#ef5350"
-        m2_col = "#4caf50" if m2_vs_usda >= 0 else "#ef5350"
+        m1_col = _CH_POS if m1_vs_usda >= 0 else _CH_NEG
+        m2_col = _CH_POS if m2_vs_usda >= 0 else _CH_NEG
         m1_sign= "+" if m1_vs_usda >= 0 else ""
         m2_sign= "+" if m2_vs_usda >= 0 else ""
-        st.markdown(f"""
-        <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
-                    margin-top:10px;font-family:Arial;font-size:12px;
-                    display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;">
-          <span>📊 <b style="color:#fff;">YTD Pace:</b>
-            <span style="color:{pace_col};font-weight:700;">
-              {pace_sign}{pace_pct:.1f}% vs seasonal baseline</span></span>
-          <span>🟡 <b style="color:#fdd835;">Model 1</b> implies
-            <span style="color:{m1_col};font-weight:600;">
-              {m1_sign}{fn(m1_vs_usda)} {unit_short}</span>
-            vs USDA total</span>
-          <span>🟢 <b style="color:#00e676;">Model 2</b>
-            ({adj_pct:+.1f}% pace adj) implies
-            <span style="color:{m2_col};font-weight:600;">
-              {m2_sign}{fn(m2_vs_usda)} {unit_short}</span>
-            vs USDA total</span>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(_note_bar_html(
+            f'<span>📊 <b>YTD Pace:</b> '
+            f'<span style="color:{pace_col};font-weight:700;">{pace_sign}{pace_pct:.1f}% vs seasonal baseline</span></span>'
+            f'<span>🟡 <b style="color:{_CH_M1};">Model 1</b> implies '
+            f'<span style="color:{m1_col};font-weight:600;">{m1_sign}{fn(m1_vs_usda)} {unit_short}</span> vs USDA total</span>'
+            f'<span>🟢 <b style="color:{_CH_M2};">Model 2</b> ({adj_pct:+.1f}% pace adj) implies '
+            f'<span style="color:{m2_col};font-weight:600;">{m2_sign}{fn(m2_vs_usda)} {unit_short}</span> vs USDA total</span>',
+            "margin-top:10px;display:flex;gap:28px;flex-wrap:wrap;"), unsafe_allow_html=True)
     else:
-        st.markdown(f"""
-        <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
-                    margin-top:10px;font-family:Arial;font-size:12px;color:#8a9aaa;">
-          ℹ️ Pace-Adjusted forecast (Model 2) needs at least one official month of
-          {_cy_lbl}. The first official month normally arrives 5–9 weeks after the
-          marketing year begins; until then Model 1 is the only forecast.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(_note_bar_html(
+            f'ℹ️ Pace-Adjusted forecast (Model 2) needs at least one official month of {_cy_lbl}. The first official '
+            f'month normally arrives 5–9 weeks after the marketing year begins; until then Model 1 is the only forecast.',
+            f"margin-top:10px;color:{_CH_MUTED};"), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2562,7 +2695,7 @@ def _render_ytd_scatter(
     projected   = slope * cy_ytd + intercept
     hist_avg    = float(np.mean(y_arr))
     proj_delta  = projected - hist_avg
-    proj_col    = "#4caf50" if proj_delta >= 0 else "#ef5350"
+    proj_col    = _CH_POS if proj_delta >= 0 else _CH_NEG
     proj_sign   = "+" if proj_delta >= 0 else ""
     fit_label   = "Strong" if r2 >= 0.70 else ("Moderate" if r2 >= 0.40 else "Weak")
 
@@ -2577,14 +2710,14 @@ def _render_ytd_scatter(
     for yr, ytd_h, final_h in points:
         idx      = yr_sorted.index(yr)
         t        = idx / max(n - 1, 1)   # 0 = oldest, 1 = newest
-        dot_col  = f"rgb({int(80+80*t)},{int(100+80*t)},{int(140+70*t)})"
+        dot_col  = _ch_mix(_CH_MIST, "#5f7267", t)
         fig.add_trace(go.Scatter(
             x=[ytd_h], y=[final_h],
             mode="markers+text",
             marker=dict(size=9, color=dot_col,
-                        line=dict(color="#1e2124", width=1)),
+                        line=dict(color="#ffffff", width=1)),
             text=[yr], textposition="top center",
-            textfont=dict(size=9, color=dot_col),
+            textfont=dict(size=9, color=_CH_MUTED),
             hovertemplate=(
                 f"<b>{yr}</b><br>"
                 f"MYTD thru {ytd_thru}: <b>{fn(ytd_h)}</b> {unit_short}<br>"
@@ -2602,7 +2735,7 @@ def _render_ytd_scatter(
         y=[slope * x_lo + intercept, slope * x_hi + intercept],
         mode="lines",
         name=f"OLS Fit  (R²={r2:.2f})",
-        line=dict(color="#78909c", width=1.5, dash="dot"),
+        line=dict(color="#8fa398", width=1.5, dash="dot"),
         hoverinfo="skip",
         showlegend=True,
         legendrank=800,
@@ -2618,9 +2751,9 @@ def _render_ytd_scatter(
         x=cy_ytd, y=0.98, yref="paper",
         text=f"CY MYTD<br>{fn(cy_ytd)} {unit_short}",
         showarrow=False,
-        font=dict(size=9, color=accent_color, family="Arial"),
+        font=dict(size=9, color=accent_color),
         xanchor="left", yanchor="top",
-        bgcolor="rgba(30,33,36,0.75)",
+        bgcolor="rgba(255,255,255,0.88)",
     )
 
     # M3 projected final horizontal line — same accent color as MYTD vertical
@@ -2635,9 +2768,9 @@ def _render_ytd_scatter(
         y=projected,
         text=f"<b>M3 Projection</b> {fn(projected)}",
         showarrow=False,
-        font=dict(size=9, color=accent_color, family="Arial"),
+        font=dict(size=9, color=accent_color),
         xanchor="left", yanchor="bottom",
-        bgcolor="rgba(30,33,36,0.75)",
+        bgcolor="rgba(255,255,255,0.88)",
     )
 
     # Projected CY star on regression line
@@ -2646,7 +2779,7 @@ def _render_ytd_scatter(
         mode="markers",
         marker=dict(size=14, symbol="star",
                     color=accent_color,
-                    line=dict(color="#ffffff", width=1.5)),
+                    line=dict(color=_CH_TEXT, width=1)),
         name=f"M3 Projection: {fn(projected)} {unit_short}",
         hovertemplate=(
             "<b>CY Model 3 Projection</b><br>"
@@ -2663,11 +2796,11 @@ def _render_ytd_scatter(
     pi = pace_info or {}
     _ref_lines = []
     if pi.get("usda_total"):
-        _ref_lines.append((pi["usda_total"],  "USDA Total",  "#ff1744", "dash"))
+        _ref_lines.append((pi["usda_total"],  "USDA Total",  _CH_NEG, "dash"))
     if pi.get("model1_total"):
-        _ref_lines.append((pi["model1_total"], "M1 Seasonal", "#fdd835", "dot"))
+        _ref_lines.append((pi["model1_total"], "M1 Seasonal", _CH_M1, "dot"))
     if pi.get("has_ytd") and pi.get("model2_total"):
-        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", "#00e676", "dashdot"))
+        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", _CH_M2, "dashdot"))
 
     for ref_val, ref_lbl, ref_col, ref_dash in _ref_lines:
         fig.add_shape(
@@ -2681,9 +2814,9 @@ def _render_ytd_scatter(
             y=ref_val,
             text=f"<b>{ref_lbl}</b> {fn(ref_val)}",
             showarrow=False,
-            font=dict(size=9, color=ref_col, family="Arial"),
+            font=dict(size=9, color=ref_col),
             xanchor="right", yanchor="bottom",
-            bgcolor="rgba(30,33,36,0.75)",
+            bgcolor="rgba(255,255,255,0.88)",
         )
 
     layout = _base_layout(
@@ -2700,50 +2833,22 @@ def _render_ytd_scatter(
 
     c1, c2, c3, _ = st.columns([1, 1, 1, 1])
     with c1:
-        st.markdown(
-            f'<div style="background:#1e2124;border-top:3px solid {accent_color};'
-            f'border-radius:6px;padding:12px 14px;text-align:center;">'
-            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
-            f'margin-bottom:4px;">Model 3 — MYTD Regression</div>'
-            f'<div style="font-size:20px;font-weight:700;color:#fff;'
-            f'font-family:Arial;">{fn(projected)}</div>'
-            f'<div style="font-size:11px;color:{accent_color};font-family:Arial;'
-            f'margin-top:2px;">{unit_short}</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_stat_card_html("Model 3 — MYTD Regression", fn(projected), unit_short, accent_color),
+                    unsafe_allow_html=True)
     with c2:
-        st.markdown(
-            f'<div style="background:#1e2124;border-top:3px solid #78909c;'
-            f'border-radius:6px;padding:12px 14px;text-align:center;">'
-            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
-            f'margin-bottom:4px;">Fit Quality (R²)</div>'
-            f'<div style="font-size:20px;font-weight:700;color:#fff;'
-            f'font-family:Arial;">{r2:.3f}</div>'
-            f'<div style="font-size:11px;color:#78909c;font-family:Arial;'
-            f'margin-top:2px;">{fit_label}</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_stat_card_html("Fit Quality (R²)", f"{r2:.3f}", fit_label, "#8fa398"), unsafe_allow_html=True)
     with c3:
-        st.markdown(
-            f'<div style="background:#1e2124;border-top:3px solid #f9a825;'
-            f'border-radius:6px;padding:12px 14px;text-align:center;">'
-            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
-            f'margin-bottom:4px;">MYTD Thru / Sample</div>'
-            f'<div style="font-size:20px;font-weight:700;color:#fff;'
-            f'font-family:Arial;">{ytd_thru}</div>'
-            f'<div style="font-size:11px;color:#f9a825;font-family:Arial;'
-            f'margin-top:2px;">{n} prior years</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_stat_card_html("MYTD Thru / Sample", ytd_thru, f"{n} prior years", _CH_TERRA),
+                    unsafe_allow_html=True)
 
     st.plotly_chart(fig, use_container_width=True)
 
     # Context note
     st.markdown(
-        f'<div style="font-family:Arial;font-size:11px;color:#5a6878;'
+        f'<div style="font-family:Arial;font-size:11px;color:{_CH_MUTED};'
         f'padding:4px 0 12px 2px;">'
         f'Each dot = one prior marketing year positioned at its cumulative '
-        f'shipments through <b style="color:#8a9aaa;">{ytd_thru}</b> (x-axis) '
+        f'shipments through <b style="color:{_CH_TEXT};">{ytd_thru}</b> (x-axis) '
         f'vs its full MY total (y-axis). The OLS line projects where the '
         f'current year\'s MYTD of <b style="color:{accent_color};">'
         f'{fn(cy_ytd)} {unit_short}</b> implies a final total of '
@@ -2810,15 +2915,28 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     MAR_FEB_FIELDS = cfg["mar_feb_fields"]
 
     # ── Stat tiles ────────────────────────────────────────────────────────
+    # One year for every tile by default. On each market's own year the row mixes years (the US
+    # already on 2026/27 while Brazil and Argentina are still on 2025/26), which reads as a
+    # mismatch next to Total Non-US and Major Exporters, which are always Oct–Sep.
+    _tile_basis = st.radio(
+        "Tiles",
+        ["USDA Oct–Sep — one year for every tile", "Each market's own marketing year"],
+        index=0, horizontal=True, key=f"{pfx}_tile_basis",
+        help=(
+            "**USDA Oct–Sep** (default) puts every tile on the same year, so they compare with each "
+            "other and with Total Non-US and Major Exporters, which are always Oct–Sep.\n\n"
+            "**Each market's own year** follows the two toggles above (US Sep–Aug, Brazil/Argentina "
+            f"{cfg['arbr_label']}), so the tiles can sit on different years."
+        ),
+    )
+    _tiles_common = _tile_basis.startswith("USDA")
     tile_stats = _compute_tile_stats(df, use_bushels, unit_factor, cfg,
-                                     arbr_local_my=arbr_local_my,
-                                     us_local_my=us_local_my)
+                                     arbr_local_my=arbr_local_my and not _tiles_common,
+                                     us_local_my=us_local_my and not _tiles_common,
+                                     commodity=commodity)
     st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
                 unsafe_allow_html=True)
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── Snapshot Chart ────────────────────────────────────────────────────
     st.markdown("### 📸 Export Snapshot — All Countries")
@@ -2826,12 +2944,17 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # Build year list from USDA MY on first available tile field
     _snap_ref_field = cfg["tile_order"][0]
     try:
-        _, _snap_all_years = build_pivot(df, _snap_ref_field)
+        _snap_ref_pivot, _snap_all_years = build_pivot(df, _snap_ref_field)
     except Exception:
-        _snap_all_years = []
+        _snap_ref_pivot, _snap_all_years = {}, []
 
-    _snap_cy     = _snap_all_years[-1] if _snap_all_years else None
-    _snap_prior  = list(reversed(_snap_all_years[:-1])) if len(_snap_all_years) > 1 else []
+    # Right after a rollover the newest MY is an empty shell (2026/27 in October): the current
+    # year is the latest one that has data, and only EARLIER years are offered as prior years.
+    _snap_filled = [y for y in _snap_all_years
+                    if any(_snap_ref_pivot[m].get(y) is not None for m in OCT_SEP_MONTHS)]
+    _snap_cy     = (_snap_filled[-1] if _snap_filled
+                    else (_snap_all_years[-1] if _snap_all_years else None))
+    _snap_prior  = [y for y in reversed(_snap_all_years) if _snap_cy and y < _snap_cy]
     _snap_opts   = [f"Current Year YTD ({_snap_cy})"] + _snap_prior if _snap_cy else []
 
     if _snap_opts:
@@ -2851,24 +2974,31 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         with _snap_ctrl2:
             _snap_local_my = st.toggle(
                 "Local MY",
-                value=True,
+                value=False,
                 key=f"{pfx}_snap_local_my",
                 help=(
-                    "**ON** (default) — US uses Sep–Aug; "
-                    f"AR/BR use {cfg['arbr_label']} (local harvest MY).\n\n"
-                    "**OFF** — USDA Oct–Sep for all countries."
+                    "**OFF** (default) — USDA Oct–Sep for all countries, so every bar is the same "
+                    "year and they compare with Total Non-US and Major Exporters.\n\n"
+                    "**ON** — each market's own year: US uses Sep–Aug; "
+                    f"AR/BR use {cfg['arbr_label']} (local harvest MY). The bars then sit on different years."
                 ),
             )
 
         _is_cy_snap = _snap_sel.startswith("Current Year")
         _sel_yr     = None if _is_cy_snap else _snap_sel
         _my_tag     = f"Local MY" if _snap_local_my else "USDA Oct–Sep"
-        _snap_label = (f"CY {_snap_cy} (YTD, {_my_tag})"
-                       if _is_cy_snap else f"Full MY {_snap_sel} ({_my_tag})")
 
         _snap_data = _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
                                             selected_year=_sel_yr,
                                             use_local_my=_snap_local_my)
+        # Title from the years actually drawn: on local years the bars can sit on different ones
+        _snap_yrs   = sorted({d["year"] for d in _snap_data})
+        if not _is_cy_snap:
+            _snap_label = f"Full MY {_snap_sel} ({_my_tag})"
+        elif len(_snap_yrs) == 1:
+            _snap_label = f"CY {_snap_yrs[0]} (YTD, {_my_tag})"
+        else:
+            _snap_label = f"Latest year per market (YTD, {_my_tag})"
         if _snap_data:
             st.plotly_chart(
                 make_snapshot_chart(_snap_data, cfg["label"], _snap_label,
@@ -2897,6 +3027,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     field       = st.session_state[field_key]
     field_label = FIELDS[field]
+    st.markdown(_view_title_html(field_label, cfg["label"], field in cfg["import_fields"], unit_short),
+                unsafe_allow_html=True)
 
     # Determine marketing year convention for the selected field
     if field == "US" and us_local_my:
@@ -2983,60 +3115,13 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     _fc_lookup      = f"{field}_Local" if _is_local_field else field
     _usda_saved     = forecast_cfg.get((commodity, _fc_lookup))   # Excel default, may be None
 
-    # ── Info strip ────────────────────────────────────────────────────────
+    # ── Info strip and legend ─────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
-    flow_type = "Import" if is_import_field else "Export"
-    st.markdown(f"""
-    <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
-                margin:10px 0 6px 0;font-family:Arial;font-size:13px;
-                display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;
-                border-left:3px solid {JSA_GREEN};">
-        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}
-          {"&nbsp;<span style='color:#e57373;font-size:11px;'>(import data)</span>"
-           if is_import_field else ""}</span>
-        <span>📐 <b style="color:#fff;">Units:</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{unit_long}</span></span>
-        <span>📅 <b style="color:#fff;">Marketing Year:</b> {my_label}</span>
-        <span>📅 <b style="color:#fff;">Current Year (CY):</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{cy}</span></span>
-        <span>📅 <b style="color:#fff;">Last Year (LY):</b> {ly or "N/A"}</span>
-        <span>📈 <b style="color:#fff;">Olympic Avg (prior yrs):</b> {oly_label}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Legend ────────────────────────────────────────────────────────────
-    # Use inline styles for EST badge — CSS class (.est-badge) lives inside
-    # _TABLE_CSS which is injected with the table, not available yet here.
-    _est_badge_style = (
-        "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
-        "border-radius:3px;color:#ffe082;font-weight:600;"
-    )
+    st.markdown(_info_strip_html(field_label, is_import_field, unit_long, my_label, cy, ly, oly_label),
+                unsafe_allow_html=True)
     _est_how = (" — USDA export shipments scaled to Census"
                 if field == "US" and commodity in _US_ESR_CODE else "")
-    _est_legend_item = (
-        f'<span><span style="{_est_badge_style}">EST</span>'
-        f'&nbsp;Estimate (not yet official{_est_how})</span>'
-        if has_estimates else ""
-    )
-    st.markdown(
-        f'<div style="font-family:Arial;font-size:12px;color:#aab4c0;'
-        f'margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;'
-        f'padding:7px 14px;background:#252a2f;border-radius:5px;">'
-        f'<span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;'
-        f'color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>'
-        f'{_est_legend_item}'
-        f'<span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>'
-        f'<span><span style="background:#c62828;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>'
-        f'<span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;'
-        f'color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>'
-        f'<span style="color:#4caf50;font-weight:600;">+x.x%</span>'
-        f'&nbsp;Above reference&nbsp;'
-        f'<span style="color:#ef5350;font-weight:600;">-x.x%</span>'
-        f'&nbsp;Below reference</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_table_legend_html(cy, has_estimates, _est_how), unsafe_allow_html=True)
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     # Soybeans / Meal: all components share USDA Oct-Sep → safe to auto-derive
@@ -3062,13 +3147,13 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         else {}
     )
     _model_legend_html = (
-        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
-        f'<b style="color:#fdd835;">●</b> Dotted yellow line = <b>USDA Seasonal</b>'
+        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:{_CH_MUTED};">'
+        f'<b style="color:{_CH_M1};">●</b> Dotted gold line = <b>USDA Seasonal</b>'
         f' — distributes total via historical monthly share %<br>'
-        f'<b style="color:#00e676;">●</b> Green dash-dot line = <b>Pace-Adjusted</b>'
+        f'<b style="color:{_CH_M2};">●</b> Green dash-dot line = <b>Pace-Adjusted</b>'
         f' — shifts forecast based on YTD pace vs seasonal baseline'
         f' (activates once official data exists)<br>'
-        f'<b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band ='
+        f'<b style="color:{_CH_M1}; opacity:0.5;">▓</b> Shaded band ='
         f' <b>±0.5σ likely range</b> from historical variance in seasonal shares'
         f'</div>'
     )
@@ -3093,15 +3178,20 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 _src_lbl = _wasde_source_label(cy)
                 st.markdown(
                     f'<div style="font-family:Arial;font-size:13px;">'
-                    f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
-                    f'<span style="font-size:24px;font-weight:700;color:#e8ede9;">'
+                    f'<span style="color:{_CH_MUTED};">WASDE {cy} MY Total ({unit_short})</span><br>'
+                    f'<span style="font-size:24px;font-weight:700;color:{_CH_TEXT};">'
                     f'{usda_total:,.0f}</span><br>'
-                    f'<span style="color:#555;font-size:11px;">{_src_lbl}</span>'
+                    f'<span style="color:{_CH_MUTED};font-size:11px;">{_src_lbl}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
             else:
                 st.caption("No WASDE forecast available for this field.")
+            # Where last year actually stands, so the forecast is read against the right base
+            _ly_note = _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
+                                        unit_short, unit_decimals)
+            if _ly_note:
+                st.markdown(_ly_note, unsafe_allow_html=True)
         with _fc2:
             st.markdown(_model_legend_html, unsafe_allow_html=True)
 
@@ -3184,7 +3274,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     _render_ytd_scatter(
         monthly_pivot, complete_years, cy, months, cy_est_months,
         field_label, unit_short, unit_decimals, logo_white_b64,
-        accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+        accent_color=cfg["country_colors"].get(field, _CH_BLUE),
         pace_info=pace_info,
     )
 
@@ -3468,10 +3558,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     )
     st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
                 unsafe_allow_html=True)
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── Wheat Snapshot Chart ──────────────────────────────────────────────
     st.markdown("### 📸 Export Snapshot — All Countries")
@@ -3541,6 +3628,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
     field       = st.session_state[field_key]
     field_label = FIELDS[field]
+    st.markdown(_view_title_html(field_label, cfg["label"], field in cfg["import_fields"], unit_short),
+                unsafe_allow_html=True)
 
     months, prev_months, last_month, my_label = _get_wheat_field_my(
         field, cfg, nh_compare, sh_compare
@@ -3590,52 +3679,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     _share_years_w  = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares_w        = _compute_seasonal_shares(monthly_pivot, _share_years_w, months)
 
-    # ── Info strip ───────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
-                margin:10px 0 6px 0;font-family:Arial;font-size:13px;
-                display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;
-                border-left:3px solid {JSA_GREEN};">
-        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}</span>
-        <span>📐 <b style="color:#fff;">Units:</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{unit_long}</span></span>
-        <span>📅 <b style="color:#fff;">Marketing Year:</b> {my_label}</span>
-        <span>📅 <b style="color:#fff;">Current Year (CY):</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{cy}</span></span>
-        <span>📅 <b style="color:#fff;">Last Year (LY):</b> {ly or "N/A"}</span>
-        <span>📈 <b style="color:#fff;">Olympic Avg (prior yrs):</b> {oly_label}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Legend ───────────────────────────────────────────────────────────
-    _est_badge_style = (
-        "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
-        "border-radius:3px;color:#ffe082;font-weight:600;"
-    )
-    _est_legend_w_item = (
-        f'<span><span style="{_est_badge_style}">EST</span>'
-        f'&nbsp;Estimate (not yet official)</span>'
-        if has_estimates else ""
-    )
-    st.markdown(
-        f'<div style="font-family:Arial;font-size:12px;color:#aab4c0;'
-        f'margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;'
-        f'padding:7px 14px;background:#252a2f;border-radius:5px;">'
-        f'<span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;'
-        f'color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>'
-        f'{_est_legend_w_item}'
-        f'<span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>'
-        f'<span><span style="background:#c62828;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>'
-        f'<span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;'
-        f'color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>'
-        f'<span style="color:#4caf50;font-weight:600;">+x.x%</span>'
-        f'&nbsp;Above reference&nbsp;'
-        f'<span style="color:#ef5350;font-weight:600;">-x.x%</span>'
-        f'&nbsp;Below reference</div>',
-        unsafe_allow_html=True,
-    )
+    # ── Info strip and legend ────────────────────────────────────────────
+    st.markdown(_info_strip_html(field_label, False, unit_long, my_label, cy, ly, oly_label),
+                unsafe_allow_html=True)
+    st.markdown(_table_legend_html(cy, has_estimates), unsafe_allow_html=True)
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     # Wheat aggregate tabs (TotalNonUS, MajorExporter) are skipped — too many
@@ -3644,11 +3691,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     _W_SKIP_AGGREGATE = {"TotalNonUS", "MajorExporter"}
 
     _w_legend_html = (
-        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
-        f'<b style="color:#fdd835;">●</b> Dotted yellow = <b>USDA Seasonal</b> forecast<br>'
-        f'<b style="color:#00e676;">●</b> Green dash-dot = <b>Pace-Adjusted</b>'
+        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:{_CH_MUTED};">'
+        f'<b style="color:{_CH_M1};">●</b> Dotted gold = <b>USDA Seasonal</b> forecast<br>'
+        f'<b style="color:{_CH_M2};">●</b> Green dash-dot = <b>Pace-Adjusted</b>'
         f' (activates once official data exists)<br>'
-        f'<b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range'
+        f'<b style="color:{_CH_M1}; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range'
         f'</div>'
     )
 
@@ -3673,10 +3720,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                     _src_lbl_w = _wasde_source_label(cy, use_ty=False)
                     st.markdown(
                         f'<div style="font-family:Arial;font-size:13px;">'
-                        f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
-                        f'<span style="font-size:24px;font-weight:700;color:#e8ede9;">'
+                        f'<span style="color:{_CH_MUTED};">WASDE {cy} MY Total ({unit_short})</span><br>'
+                        f'<span style="font-size:24px;font-weight:700;color:{_CH_TEXT};">'
                         f'{usda_total_w:,.0f}</span><br>'
-                        f'<span style="color:#555;font-size:11px;">{_src_lbl_w}</span>'
+                        f'<span style="color:{_CH_MUTED};font-size:11px;">{_src_lbl_w}</span>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
@@ -3761,7 +3808,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     _render_ytd_scatter(
         monthly_pivot, complete_years, cy, months, cy_est_months,
         field_label, unit_short, unit_decimals, logo_white_b64,
-        accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+        accent_color=cfg["country_colors"].get(field, _CH_BLUE),
         pace_info=pace_info_w,
     )
 
@@ -3963,17 +4010,17 @@ def _fetch_tdm_exports_cached(reporter: str, product_code: str, password: str) -
 
 # Consistent colors per partner
 _PARTNER_COLORS = {
-    "United States": "#0693e3",
-    "Brazil":        "#4caf50",
-    "Argentina":     "#f9a825",
-    "Ukraine":       "#ef5350",
-    "Russia":        "#ab47bc",
-    "Australia":     "#26c6da",
-    "Canada":        "#ff7043",
+    "United States": _CH_BLUE,
+    "Brazil":        _CH_SAGE,
+    "Argentina":     _CH_GOLD,
+    "Ukraine":       "#c0707f",
+    "Russia":        _CH_LAV,
+    "Australia":     "#5aa59a",
+    "Canada":        _CH_TERRA,
 }
 _FALLBACK_COLORS = [
-    "#78909c","#a5d6a7","#ffe082","#ef9a9a",
-    "#ce93d8","#80deea","#ffab91","#b0bec5",
+    "#8fa398", "#d7c98a", "#dba3ab", "#c3b8dc",
+    "#9fcfc6", "#e0b49e", "#a9b6c4", _CH_MIST,
 ]
 
 
@@ -3981,9 +4028,10 @@ _FALLBACK_COLORS = [
 def _fetch_tdm_china(product_code: str, password: str) -> pd.DataFrame:
     """Fetch China import data from TDM; cached 1 hour."""
     import urllib.request
+    now = pd.Timestamp.now()
     url = (
         f"{TDM_BASE}?username={TDM_USER}&password={password}"
-        f"&reporter=CN&periodBegin=201401&periodEnd=202601"
+        f"&reporter=CN&periodBegin=201401&periodEnd={now.year}{now.month:02d}"
         f"&flow=I&partners=All&frequency=M&productCode={product_code}"
         f"&levelDetail=6&levelDetailGroup=P&currency=USD&includeUnits=UNIT1"
         f"&isoCountryCode=NONE&conv=1&separator=T&includeFlow=Y"
@@ -4128,10 +4176,7 @@ def _run_china_imports_tab(logo_b64=None):
     ))
 
     # ── Divider ───────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── MYTD Stat Tiles ───────────────────────────────────────────────────────
     # Per-partner MYTD totals for current MY vs Olympic avg and vs LY
@@ -4173,26 +4218,26 @@ def _run_china_imports_tab(logo_b64=None):
         pct_ly  = ((cy_val / ly_val  - 1) * 100) if cy_val and ly_val  else None
 
         def _pct_color(v):
-            return "#4caf50" if v is not None and v >= 0 else "#ef5350"
+            return _CH_POS if v is not None and v >= 0 else _CH_NEG
 
         def _fmt(v, dec=0):
             return f"{v:,.{dec}f}" if v is not None else "—"
 
-        color = _PARTNER_COLORS.get(partner, "#8a9aaa")
+        color = _PARTNER_COLORS.get(partner, "#8fa398")
         tiles_html += f"""
-        <div style="background:#1e2124;border:1px solid #2e353d;border-top:3px solid {color};
-                    border-radius:6px;padding:12px 16px;min-width:160px;flex:1;">
-          <div style="font-family:Arial;font-size:11px;font-weight:700;color:#8a9aaa;
+        <div style="background:#ffffff;border:1px solid {_CH_BORDER};border-top:3px solid {color};
+                    border-radius:8px;padding:12px 16px;min-width:160px;flex:1;">
+          <div style="font-family:Arial;font-size:11px;font-weight:700;color:{_CH_MUTED};
                       text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
             {partner}
           </div>
-          <div style="font-family:Arial;font-size:18px;font-weight:700;color:#fff;
-                      margin-bottom:4px;">{_fmt(cy_val)} <span style="font-size:11px;color:#8a9aaa;">TMT</span></div>
+          <div style="font-family:Arial;font-size:18px;font-weight:700;color:{_CH_TEXT};
+                      margin-bottom:4px;">{_fmt(cy_val)} <span style="font-size:11px;color:{_CH_MUTED};">TMT</span></div>
           <div style="display:flex;gap:10px;margin-top:4px;">
-            <span style="font-family:Arial;font-size:11px;color:{_pct_color(pct_avg)};">
+            <span style="font-family:Arial;font-size:11px;font-weight:600;color:{_pct_color(pct_avg)};">
               Avg: {('+' if pct_avg and pct_avg>=0 else '')}{_fmt(pct_avg,1)}%
             </span>
-            <span style="font-family:Arial;font-size:11px;color:{_pct_color(pct_ly)};">
+            <span style="font-family:Arial;font-size:11px;font-weight:600;color:{_pct_color(pct_ly)};">
               LY: {('+' if pct_ly and pct_ly>=0 else '')}{_fmt(pct_ly,1)}%
             </span>
           </div>
@@ -4203,10 +4248,7 @@ def _run_china_imports_tab(logo_b64=None):
         f'{tiles_html}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── Chart 1: Seasonal monthly imports (MY-ordered x-axis) ────────────────
     st.markdown(f"### 📈 Monthly Imports — Seasonal Comparison (TMT)")
@@ -4236,7 +4278,7 @@ def _run_china_imports_tab(logo_b64=None):
         oly_y = [oly_by_pos[p]  for p in sorted(oly_by_pos)]
         fig1.add_trace(go.Scatter(
             x=oly_x, y=oly_y, mode="lines", name="Olympic Avg",
-            line=dict(color="#8a9aaa", width=2, dash="dot"),
+            line=dict(color=_CH_SAGE, width=2.2, dash="dash"),
             customdata=[f"{v:,.0f} TMT" for v in oly_y],
             hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
         ))
@@ -4254,14 +4296,14 @@ def _run_china_imports_tab(logo_b64=None):
         y_vals = sub["TMT"].tolist()
 
         if my_s == cur_my_start:
-            color, lw, op = "#0693e3", 4.0, 1.0
+            color, lw, op = _CH_BLUE, 4.0, 1.0
         elif my_s == ly_start:
-            color, lw, op = "#ffffff", 2.5, 0.92
+            color, lw, op = _CH_TERRA, 2.5, 1.0
         else:
             idx = sorted_chart_starts.index(my_s)
             t   = idx / max(len(sorted_chart_starts) - 1, 1)
-            color = f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})"
-            lw, op = 1.5, 0.22 + 0.42 * t
+            color = _ch_mix("#cdd9d1", "#5f7267", t)
+            lw, op = 1.2 + 0.5 * t, 1.0
 
         fig1.add_trace(go.Scatter(
             x=x_vals, y=y_vals, mode="lines+markers", name=lbl,
@@ -4272,21 +4314,10 @@ def _run_china_imports_tab(logo_b64=None):
         ))
 
     my_conv = "Oct–Sep" if not is_wheat else "Jul–Jun"
-    fig1.update_layout(
-        height=420,
-        plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
-        font=dict(color="#c8d4e0", family="Arial", size=11),
-        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10),
-                   categoryorder="array", categoryarray=my_labels),
-        yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        margin=dict(l=60, r=20, t=30, b=40),
-        hovermode="x unified",
-        title=dict(
-            text=f"Marketing Year convention: {my_conv}",
-            font=dict(size=10, color="#8a9aaa"), x=1, xanchor="right", y=0.01,
-        ),
-    )
+    fig1.update_layout(**_ch_layout("Monthly imports by marketing year (TMT)", f"Marketing year convention: {my_conv}",
+                                    None, "TMT", height=420, margin=dict(l=60, r=20, t=88, b=40)))
+    fig1.update_xaxes(tickfont=dict(size=10, color=_CH_MUTED), categoryorder="array", categoryarray=my_labels)
+    fig1.update_yaxes(tickformat=",.0f")
     _add_chart_watermark(fig1, logo_b64)
     st.plotly_chart(fig1, use_container_width=True)
 
@@ -4315,17 +4346,11 @@ def _run_china_imports_tab(logo_b64=None):
             hovertemplate="%{x}: %{customdata}<extra>" + partner + "</extra>",
         ))
 
-    fig2.update_layout(
-        barmode="stack", height=380,
-        plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
-        font=dict(color="#c8d4e0", family="Arial", size=11),
-        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10),
-                   categoryorder="array", categoryarray=my_labels),
-        yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        margin=dict(l=60, r=20, t=30, b=40),
-        hovermode="x unified",
-    )
+    fig2.update_layout(**_ch_layout(f"Imports by source country, {sel_my_label} (TMT)", None,
+                                    None, "TMT", height=380, margin=dict(l=60, r=20, t=64, b=40)))
+    fig2.update_layout(barmode="stack")
+    fig2.update_xaxes(tickfont=dict(size=10, color=_CH_MUTED), categoryorder="array", categoryarray=my_labels)
+    fig2.update_yaxes(tickformat=",.0f")
     _add_chart_watermark(fig2, logo_b64)
     st.plotly_chart(fig2, use_container_width=True)
 
@@ -4348,26 +4373,27 @@ def _run_china_imports_tab(logo_b64=None):
     )
 
     # Highlight current MY column
-    def _cell(val, is_cur=False, bold=False):
+    def _cell(val, is_cur=False, bold=False, row_bg="#ffffff", cur_bg=_LT_BLUE_BG):
         fmt = f"{val:,.0f}" if val else "—"
-        bg  = "#0693e3" if is_cur else "#32373c"
+        bg  = cur_bg if is_cur else row_bg
+        fg  = _LT_BLUE_TX if is_cur else _CH_TEXT
         fw  = "700" if (is_cur or bold) else "400"
         return (f'<td style="padding:5px 10px;text-align:right;white-space:nowrap;'
-                f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
-                f'background:{bg};color:#fff;font-weight:{fw};">{fmt}</td>')
+                f'border-bottom:1px solid #e6eee9;border-right:1px solid #e6eee9;'
+                f'background:{bg};color:{fg};font-weight:{fw};">{fmt}</td>')
 
     hdr_cells = "".join(
-        f'<th style="background:{"#0555a0" if col==cur_my_label else "#1e2124"};'
-        f'color:#fff;font-weight:600;text-align:center;padding:7px 10px;'
-        f'white-space:nowrap;border-right:1px solid #484f56;'
-        f'border-bottom:2px solid #0d0f11;font-family:Arial;font-size:12px;">'
+        f'<th style="background:{"#6fa8c4" if col==cur_my_label else _LT_HEAD};'
+        f'color:{"#ffffff" if col==cur_my_label else _CH_TEXT};font-weight:600;text-align:center;padding:7px 10px;'
+        f'white-space:nowrap;border-right:1px solid {_CH_BORDER};'
+        f'border-bottom:2px solid #c3d3c9;font-family:Arial;font-size:12px;">'
         f'{col}</th>'
         for col in my_col_order
     )
     hdr = (
-        f'<th style="background:#2a2f35;color:#fff;font-weight:600;text-align:left;'
-        f'padding:7px 10px;white-space:nowrap;border-right:1px solid #484f56;'
-        f'border-bottom:2px solid #0d0f11;font-family:Arial;font-size:12px;'
+        f'<th style="background:#e2ebe5;color:{_CH_TEXT};font-weight:600;text-align:left;'
+        f'padding:7px 10px;white-space:nowrap;border-right:1px solid {_CH_BORDER};'
+        f'border-bottom:2px solid #c3d3c9;font-family:Arial;font-size:12px;'
         f'position:sticky;left:0;z-index:3;">Country</th>'
         + hdr_cells
     )
@@ -4375,41 +4401,41 @@ def _run_china_imports_tab(logo_b64=None):
     tbl_rows = ""
     totals   = {col: 0.0 for col in my_col_order}
     for i, (partner, row) in enumerate(ann_pivot.iterrows()):
-        bg = "#32373c" if i % 2 == 0 else "#2a2f35"
+        bg = "#ffffff" if i % 2 == 0 else "#f8faf8"
         cells = ""
         for col in my_col_order:
             v = float(row.get(col, 0))
             totals[col] += v
             is_cur = (col == cur_my_label)
-            cells += _cell(v, is_cur=is_cur)
+            cells += _cell(v, is_cur=is_cur, row_bg=bg)
         tbl_rows += (
             f'<tr>'
             f'<td style="padding:5px 10px;text-align:left;white-space:nowrap;'
-            f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
-            f'background:{bg};color:#fff;font-weight:700;font-family:Arial;'
+            f'border-bottom:1px solid #e6eee9;border-right:1px solid {_CH_BORDER};'
+            f'background:{_LT_HEAD};color:{_CH_TEXT};font-weight:700;font-family:Arial;'
             f'font-size:12px;position:sticky;left:0;z-index:2;">{partner}</td>'
             f'{cells}</tr>'
         )
 
     # Total row
     tot_cells = "".join(
-        _cell(totals[col], is_cur=(col == cur_my_label), bold=True)
+        _cell(totals[col], is_cur=(col == cur_my_label), bold=True, row_bg=_LT_HEAD, cur_bg="#cde3ef")
         for col in my_col_order
     )
     tbl_rows += (
-        f'<tr style="border-top:2px solid #0693e3;">'
+        f'<tr style="border-top:2px solid #6fa8c4;">'
         f'<td style="padding:5px 10px;text-align:left;white-space:nowrap;'
-        f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
-        f'background:#232729;color:#fff;font-weight:700;font-family:Arial;'
+        f'border-bottom:1px solid #e6eee9;border-right:1px solid {_CH_BORDER};'
+        f'background:#e2ebe5;color:{_CH_TEXT};font-weight:700;font-family:Arial;'
         f'font-size:12px;position:sticky;left:0;z-index:2;">Total</td>'
         f'{tot_cells}</tr>'
     )
 
     st.markdown(
-        f'<div style="overflow-x:auto;border-radius:6px;border:1px solid #484f56;'
+        f'<div style="overflow-x:auto;border-radius:8px;border:1px solid {_CH_BORDER};background:#ffffff;'
         f'font-family:Arial;font-size:12px;margin-bottom:12px;">'
         f'<table style="border-collapse:collapse;width:max-content;min-width:100%;">'
-        f'<thead><tr style="background:#1e2124;">{hdr}</tr></thead>'
+        f'<thead><tr style="background:{_LT_HEAD};">{hdr}</tr></thead>'
         f'<tbody>{tbl_rows}</tbody>'
         f'</table></div>',
         unsafe_allow_html=True,
@@ -4430,34 +4456,34 @@ def _render_my_reference_tab():
     def _ref_table(title, rows):
         """rows: list of (Country, Hemisphere, USDA MY, Local MY)"""
         hdr = "".join(
-            f'<th style="padding:9px 16px;text-align:left;color:#aab4c0;'
+            f'<th style="padding:9px 16px;text-align:left;color:{_CH_MUTED};'
             f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
-            f'border-bottom:2px solid #0693e3;white-space:nowrap;">{h}</th>'
+            f'border-bottom:2px solid #6fa8c4;white-space:nowrap;">{h}</th>'
             for h in ["Country", "Hemisphere", "USDA MY", "Local MY"]
         )
         tbl_rows = ""
         for i, (country, hemi, usda_my, local_my) in enumerate(rows):
-            bg = "#21262c" if i % 2 == 0 else "#1d2227"
+            bg = "#ffffff" if i % 2 == 0 else "#f8faf8"
             same = local_my == usda_my
             local_cell = (
                 local_my if same else
-                f'<b style="color:#f9a825;">{local_my}</b>'
+                f'<b style="color:#b45309;">{local_my}</b>'
             )
             tbl_rows += (
                 f'<tr style="background:{bg};">'
-                f'<td style="padding:8px 16px;color:#e0e8f0;font-size:12.5px;">{country}</td>'
-                f'<td style="padding:8px 16px;color:#8a9aaa;font-size:12.5px;">{hemi}</td>'
-                f'<td style="padding:8px 16px;color:#d0d8e0;font-size:12.5px;">{usda_my}</td>'
-                f'<td style="padding:8px 16px;font-size:12.5px;">{local_cell}</td>'
+                f'<td style="padding:8px 16px;color:{_CH_TEXT};font-size:12.5px;border-bottom:1px solid #e6eee9;">{country}</td>'
+                f'<td style="padding:8px 16px;color:{_CH_MUTED};font-size:12.5px;border-bottom:1px solid #e6eee9;">{hemi}</td>'
+                f'<td style="padding:8px 16px;color:{_CH_TEXT};font-size:12.5px;border-bottom:1px solid #e6eee9;">{usda_my}</td>'
+                f'<td style="padding:8px 16px;font-size:12.5px;color:{_CH_TEXT};border-bottom:1px solid #e6eee9;">{local_cell}</td>'
                 f'</tr>'
             )
         return f"""
         <div style="font-family:Arial;margin-bottom:24px;">
-          <div style="font-size:13px;font-weight:700;color:#fff;
+          <div style="font-size:13px;font-weight:700;color:{_CH_TEXT};
                       margin-bottom:8px;">{title}</div>
-          <div style="border-radius:6px;border:1px solid #2e353d;overflow:hidden;">
+          <div style="border-radius:8px;border:1px solid {_CH_BORDER};overflow:hidden;background:#ffffff;">
             <table style="border-collapse:collapse;width:100%;">
-              <thead><tr style="background:#151a1f;">{hdr}</tr></thead>
+              <thead><tr style="background:{_LT_HEAD};">{hdr}</tr></thead>
               <tbody>{tbl_rows}</tbody>
             </table>
           </div>
@@ -4465,10 +4491,10 @@ def _render_my_reference_tab():
         """
 
     st.markdown(
-        '<p style="font-family:Arial;font-size:12.5px;color:#8a9aaa;margin-bottom:20px;">'
+        f'<p style="font-family:Arial;font-size:12.5px;color:{_CH_MUTED};margin-bottom:20px;">'
         'Local MY (highlighted in amber) differs from the USDA standard. '
         'Toggle <em>Local MY</em> off on any commodity tab to align all countries '
-        'to <b style="color:#0693e3;">USDA Oct–Sep</b> for cross-country comparisons.'
+        f'to <b style="color:{JSA_CYAN};">USDA Oct–Sep</b> for cross-country comparisons.'
         '</p>',
         unsafe_allow_html=True,
     )
@@ -4518,13 +4544,13 @@ def _render_my_reference_tab():
 
     # ── USDA PSD link ─────────────────────────────────────────────────────
     st.markdown(f"""
-    <div style="background:#1a1e22;border:1px solid #2e353d;
+    <div style="background:{_LT_TINT};border:1px solid {_CH_BORDER};
                 border-left:4px solid {JSA_CYAN};border-radius:6px;
                 padding:12px 18px;font-family:Arial;margin-top:4px;">
-      <span style="color:#fff;font-weight:700;font-size:12.5px;">
+      <span style="color:{_CH_TEXT};font-weight:700;font-size:12.5px;">
         🌐 USDA PSD Database
       </span>
-      <span style="color:#8a9aaa;font-size:12px;margin:0 12px;">
+      <span style="color:{_CH_MUTED};font-size:12px;margin:0 12px;">
         — Authoritative source for marketing year definitions &amp; export data.
       </span>
       <a href="https://apps.fas.usda.gov/psdonline/app/index.html#/app/downloads"
@@ -4537,555 +4563,974 @@ def _render_my_reference_tab():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXPORT INSPECTIONS TAB  (USDA FGIS Socrata – enhanced)
+# US EXPORT INSPECTIONS TAB  (USDA FGIS "Grain Inspections", weekly)
+#   Source: USDA AMS AgTransport Socrata dataset sruw-w49i = Federal Grain Inspection Service export inspections,
+#   one row per certificate: week ending (Thursday), certificate month/year, carrier, class, destination, port,
+#   region, tonnes, pounds. Layout follows jpsi.com/export-inspections-dashboard (filters, pie, origin, destination,
+#   weekly series, multi-year overlay; its destination map is left out) plus this dashboard's pace comparisons and unit toggle.
+#   Marketing years split a week that straddles the 1st by certificate date (as jpsi.com does), so MYTD = USDA's.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_FGIS_PORT_GROUP = {
-    "MISSISSIPPI R.": "Gulf", "S. TEXAS": "Gulf", "N. TEXAS": "Gulf",
-    "COLUMBIA R.": "Pacific", "PUGET SOUND": "Pacific",
-    "S. ATLANTIC": "Atlantic",
-    "INTERIOR": "Interior", "TOLEDO": "Interior",
+# label -> (dataset grain, marketing-year start month, pounds per bushel or None when USDA defines none)
+_INSP_GRAINS = {
+    "Corn":      ("CORN",      9, 56),
+    "Soybeans":  ("SOYBEANS",  9, 60),
+    "Wheat":     ("WHEAT",     6, 60),
+    "Sorghum":   ("SORGHUM",   9, 56),
+    "Barley":    ("BARLEY",    6, 48),
+    "Oats":      ("OATS",      6, 32),
+    "Canola":    ("CANOLA",    8, 50),
+    "Sunflower": ("SUNFLOWER", 9, None),
+    "Flaxseed":  ("FLAXSEED",  6, 56),
 }
-_PORT_GROUP_COLORS = {
-    "Gulf": "#0693e3", "Pacific": "#4a6741",
-    "Atlantic": "#f9a825", "Interior": "#78909c", "Other": "#ab47bc",
+_INSP_LBS_PER_MT = 2204.62262
+_INSP_REGION = {"GULF": "Gulf", "PACIFIC": "Pacific", "INTERIOR": "Interior", "ATLANTIC": "Atlantic",
+                "LAKES": "Great Lakes", "ST LAWR SWY": "St. Lawrence Seaway"}
+_INSP_CLASS = {
+    "YC": "Yellow", "WHC": "White", "XC": "Mixed", "YSB": "Yellow", "XSB": "Mixed",
+    "HRW": "Hard red winter", "HRS": "Hard red spring", "SRW": "Soft red winter", "SWW": "Soft white",
+    "DUWH": "Durum", "WW": "White (all)", "HDWH": "Hard white", "XWHT": "Mixed", "UNCL": "Unclassed",
+    "S": "Sorghum", "YS": "Yellow", "WHS": "White", "XS": "Mixed", "TANS": "Tan",
+    "BAR": "Barley", "MBLY": "Malting barley", "K": "Canola", "O": "Oats", "OATS": "Oats",
 }
-_CARRIER_COLORS = {
-    "VESSEL": "#0693e3", "SHIP": "#0693e3",
-    "CONTAINER": "#4caf50", "RAIL": "#f9a825",
-    "TRUCK": "#ef5350", "BARGE": "#ab47bc",
-}
-_INSP_GRAINS = {"Corn": "CORN", "Soybeans": "SOYBEANS", "Wheat": "WHEAT"}
+
+# FGIS destination label -> display name
+_FGIS_DEST_TABLE = """
+JAPAN|Japan
+CHINA|China
+MEXICO|Mexico
+KOREA REP|South Korea
+TAIWAN|Taiwan
+EGYPT|Egypt
+USSR|USSR (historical)
+COLOMBIA|Colombia
+NETHERLANDS|Netherlands
+SPAIN|Spain
+PHILIPPINES|Philippines
+INDONESIA|Indonesia
+CANADA|Canada
+NIGERIA|Nigeria
+VENEZUELA|Venezuela
+ALGERIA|Algeria
+ISRAEL|Israel
+SAUDI ARABIA|Saudi Arabia
+ITALY|Italy
+PERU|Peru
+MOROCCO|Morocco
+DOMINICN REP|Dominican Republic
+THAILAND|Thailand
+GERMANY|Germany
+COSTA RICA|Costa Rica
+GUATEMALA|Guatemala
+PORTUGAL|Portugal
+BRAZIL|Brazil
+PAKISTAN|Pakistan
+BELGIUM|Belgium
+EL SALVADOR|El Salvador
+TURKEY|Turkey
+BANGLADESH|Bangladesh
+VIETNAM|Vietnam
+HONDURAS|Honduras
+IRAQ|Iraq
+MALAYSIA|Malaysia
+TUNISIA|Tunisia
+YEMEN|Yemen
+REP S AFRICA|South Africa
+PANAMA|Panama
+CHILE|Chile
+JAMAICA|Jamaica
+RUSSIA|Russia
+UN KINGDOM|United Kingdom
+ECUADOR|Ecuador
+JORDAN|Jordan
+SYRIA|Syria
+ETHIOPIA|Ethiopia
+SRI LANKA|Sri Lanka
+TRINIDAD|Trinidad and Tobago
+CUBA|Cuba
+FRANCE|France
+NICARAGUA|Nicaragua
+SUDAN|Sudan
+GERM FR (W)|West Germany (historical)
+INDIA|India
+IRAN|Iran
+LEBANON|Lebanon
+POLAND|Poland
+KENYA|Kenya
+MOZAMBIQUE|Mozambique
+ROMANIA|Romania
+HAITI|Haiti
+GERM DR (E)|East Germany (historical)
+GREECE|Greece
+YUGOSLAVIA|Yugoslavia (historical)
+BULGARIA|Bulgaria
+NORWAY|Norway
+GHANA|Ghana
+UZBEKISTAN|Uzbekistan
+UN ARAB EM|United Arab Emirates
+CYPRUS|Cyprus
+BARBADOS|Barbados
+IRELAND|Ireland
+SINGAPORE|Singapore
+ARGENTINA|Argentina
+BOLIVIA|Bolivia
+HONG KONG|Hong Kong
+UKRAINE|Ukraine
+DENMARK|Denmark
+ZAIRE|DR Congo
+NORTH KOREA|North Korea
+ERITREA|Eritrea
+GEORGIA|Georgia
+SOMALIA|Somalia
+GUYANA|Guyana
+AFGHANISTAN|Afghanistan
+ZIMBABWE|Zimbabwe
+LIBYA|Libya
+ANGOLA|Angola
+KUWAIT|Kuwait
+AUSTRALIA|Australia
+TANZANIA|Tanzania
+NIGER|Niger
+FINLAND|Finland
+ST. VINCENT|St. Vincent and the Grenadines
+ARMENIA|Armenia
+CANARY IS|Canary Islands
+MALTA|Malta
+NEW ZEALAND|New Zealand
+DJIBOUTI|Djibouti
+SURINAME|Suriname
+CAMEROON|Cameroon
+ZAMBIA|Zambia
+MALAWI|Malawi
+BURMA|Myanmar
+SENEGAL|Senegal
+OMAN|Oman
+YEMEN (SANA)|Yemen
+TOGO|Togo
+BELIZE|Belize
+NEPAL|Nepal
+KYRGYZSTAN|Kyrgyzstan
+UGANDA|Uganda
+NAMIBIA|Namibia
+MAURITANIA|Mauritania
+GRENADA|Grenada
+MOLDOVA|Moldova
+BOSNIA-HERC|Bosnia and Herzegovina
+CONGO (KINS)|DR Congo
+CHAD|Chad
+BENIN|Benin
+SLOVENIA|Slovenia
+CONGO (BRAZ)|Republic of the Congo
+CAPE VERDE|Cape Verde
+LITHUANIA|Lithuania
+SIERRA LEONE|Sierra Leone
+LIBERIA|Liberia
+ESTONIA|Estonia
+TURKMENISTAN|Turkmenistan
+RWANDA|Rwanda
+MONGOLIA|Mongolia
+COTE DIVOIRE|Cote d'Ivoire
+TAJIKISTAN|Tajikistan
+BELARUS|Belarus
+NETH ANTIL|Netherlands Antilles
+ALBANIA|Albania
+HUNGARY|Hungary
+ST. LUCIA|St. Lucia
+MADAGASCAR|Madagascar
+URUGUAY|Uruguay
+CROATIA|Croatia
+ICELAND|Iceland
+SWITZERLAND|Switzerland
+BURUNDI|Burundi
+GUINEA|Guinea
+BOTSWANA|Botswana
+MALI|Mali
+LATVIA|Latvia
+LEE WIND IS|Leeward and Windward Islands
+BAHRAIN|Bahrain
+YEMEN (ADEN)|Yemen
+OTH WST AFR|Other West Africa
+MACEDONIA|North Macedonia
+SOUTH SUDAN|South Sudan
+CAMBODIA|Cambodia
+GUADELOUPE|Guadeloupe
+BURKINA|Burkina Faso
+UNKNOWN|Unknown
+GABON|Gabon
+ESWATINI|Eswatini
+AZERBAIJAN|Azerbaijan
+LESOTHO|Lesotho
+WEST BANK|West Bank
+MAURITIUS|Mauritius
+NEW GUINEA|Papua New Guinea
+MARTINIQUE|Martinique
+S WST AFRICA|South West Africa (historical)
+COMOROS|Comoros
+CZECH REP|Czech Republic
+SWEDEN|Sweden
+GAMBIA|Gambia
+FR WST IND|French West Indies
+QATAR|Qatar
+FRENCH POLY|French Polynesia
+UPPER VOLTA|Burkina Faso
+SO PAC IS|South Pacific Islands
+BAHAMAS|Bahamas
+MAYOTTE|Mayotte
+FR PAC IS|French Pacific Islands
+OTHER PAC IS|Other Pacific Islands
+CEN AFR REP|Central African Republic
+OTH SO ASIA|Other South Asia
+VANUATU|Vanuatu
+BRUNEI|Brunei
+FR GUIANA|French Guiana
+AUSTRIA|Austria
+BHUTAN|Bhutan
+MACAO|Macao
+LAOS|Laos
+VATICAN CITY|Vatican City
+MALDIVES|Maldives
+COCOS IS|Cocos Islands
+SAO TOME&PR|Sao Tome and Principe
+ST.KITTS&NEV|St. Kitts and Nevis
+FIJI|Fiji
+VIRGIN ISLAN|Virgin Islands
+REUNION|Reunion
+TOKELAU|Tokelau
+"""
+_FGIS_DEST = dict(line.split("|") for line in _FGIS_DEST_TABLE.strip().splitlines())
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_fgis_detail(grain_code: str) -> pd.DataFrame:
-    """FGIS Socrata detailed inspections → DataFrame(year,month,week,dest,port,carrier,mt)."""
-    import http.client
-    out = []
-    limit = 50_000
-    for offset in range(0, 200_000, limit):
-        params = urllib.parse.urlencode({
-            "$select": "year,month,week,destination,port,type_carrier_text,sum(mt) as total_mt",
-            "$where":  f"grain='{grain_code}'",
-            "$group":  "year,month,week,destination,port,type_carrier_text",
-            "$limit":  str(limit),
-            "$offset": str(offset),
-        })
-        try:
-            ctx  = ssl.create_default_context()
-            conn = http.client.HTTPSConnection(_SOCRATA_HOST, 443, context=ctx, timeout=30)
-            conn.request("GET", f"{_SOCRATA_PATH}?{params}",
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
-                         "Connection": "close"})
-            resp = conn.getresponse()
-            body = resp.read(10_000_000)
-            conn.close()
-            if resp.status != 200:
+def _insp_first_thu(my: int, start_month: int) -> pd.Timestamp:
+    """Week ending (Thursday) of week 1 of a marketing year: the first Thursday on or after its first day."""
+    d = pd.Timestamp(year=int(my), month=int(start_month), day=1)
+    return d + pd.Timedelta(days=(3 - d.weekday()) % 7)
+
+
+def _fgis_fetch_raw(grain_code: str) -> pd.DataFrame:
+    """One grain's weekly FGIS inspections, grouped by week ending, certificate month, destination, region, port,
+    carrier and class, straight from the AgTransport Socrata API (CSV, 50,000 rows a page). Raises on any failure."""
+    import io
+    import time
+    import requests
+    url = f"https://{_SOCRATA_HOST}{_SOCRATA_PATH.replace('.json', '.csv')}"
+    group = "date, year, month, destination, ams_reg, port, type_carrier_text, class"
+    select = "date as week_end, year, month, destination, ams_reg, port, type_carrier_text, class, sum(mt) as mt, sum(pounds) as lbs"
+    page, parts, offset = 50_000, [], 0
+    while True:
+        params = {"$select": select, "$where": f"grain='{grain_code}'", "$group": group, "$order": group,
+                  "$limit": str(page), "$offset": str(offset)}
+        for attempt in (1, 2, 3):
+            try:
+                r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=(10, 120))
+                if r.status_code in (429, 500, 502, 503, 504):
+                    raise requests.HTTPError(f"HTTP {r.status_code}")
+                r.raise_for_status()
                 break
-            rows = json.loads(body.decode("utf-8"))
-            if not rows:
-                break
-            for r in rows:
-                try:
-                    out.append({
-                        "year":    int(r["year"]),
-                        "month":   int(r["month"]),
-                        "week":    int(r["week"]),
-                        "dest":    r.get("destination", "OTHER").strip().title(),
-                        "port":    r.get("port", "").strip(),
-                        "carrier": r.get("type_carrier_text", "").strip().upper(),
-                        "mt":      float(r["total_mt"]),
-                    })
-                except Exception:
-                    pass
-            if len(rows) < limit:
-                break
-        except Exception:
+            except requests.RequestException:
+                if attempt == 3:
+                    raise
+                time.sleep(2 * attempt)
+        part = pd.read_csv(io.StringIO(r.text))
+        parts.append(part)
+        if len(part) < page:
             break
-    if not out:
+        offset += page
+    return pd.concat(parts, ignore_index=True)
+
+
+def _fgis_prepare(raw: pd.DataFrame, start_month: int) -> pd.DataFrame:
+    """Raw grouped rows -> week_end, my (marketing-year start year), my_week, dest, region, port, carrier,
+    cls, mt, lbs. A marketing year runs from its start month by certificate date; its week n ends on the first
+    Thursday on or after the 1st plus 7 x (n-1) days, so a straddling week is split between two years."""
+    if raw is None or raw.empty:
         return pd.DataFrame()
-    df = pd.DataFrame(out)
-    df["port_group"] = df["port"].map(_FGIS_PORT_GROUP).fillna("Other")
-    return df
+    df = raw.copy()
+    df["week_end"] = pd.to_datetime(df["week_end"], errors="coerce").dt.normalize()
+    for c in ("year", "month"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["mt"] = pd.to_numeric(df["mt"], errors="coerce").fillna(0.0)
+    lbs = pd.to_numeric(df["lbs"], errors="coerce")
+    df["lbs"] = lbs.where(lbs > 0, df["mt"] * _INSP_LBS_PER_MT)        # a handful of old rows carry no pounds
+    df = df.dropna(subset=["week_end", "year", "month"])
+    year, month = df["year"].astype(int), df["month"].astype(int)
+    df["my"] = np.where(month >= start_month, year, year - 1)
+    first = pd.to_datetime({"year": df["my"], "month": start_month, "day": 1})
+    first_thu = first + pd.to_timedelta((3 - first.dt.weekday) % 7, unit="D")
+    df["my_week"] = ((df["week_end"] - first_thu).dt.days // 7) + 1
+    df = df[df["my_week"] >= 1].copy()
+    dest = df["destination"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
+    df["dest"] = dest.map(lambda k: _FGIS_DEST.get(k, k.title()))
+    reg = df["ams_reg"].fillna("").astype(str).str.upper().str.strip()
+    df["region"] = reg.map(lambda k: _INSP_REGION.get(k, k.title() or "Other"))
+    df["port"] = df["port"].fillna("").astype(str).str.strip().str.title().replace("", "Unknown")
+    df["carrier"] = df["type_carrier_text"].fillna("OTHER").astype(str).str.strip().str.title()
+    cls = df["class"].fillna("").astype(str).str.upper().str.strip()
+    df["cls"] = cls.map(lambda k: _INSP_CLASS.get(k, k.title() if k else "Unclassed"))
+    return df[["week_end", "my", "my_week", "dest", "region", "port", "carrier", "cls", "mt", "lbs"]].reset_index(drop=True)
 
 
-def _fgis_add_my(df: pd.DataFrame, grain_label: str) -> pd.DataFrame:
-    """Add 'my' (marketing year start) and 'my_week' (1-52/53) columns."""
-    df = df.copy()
-    is_wheat = grain_label.lower() == "wheat"
-    if is_wheat:
-        df["my"] = df.apply(lambda r: r["year"] if r["month"] >= 7 else r["year"] - 1, axis=1)
-        my_months_map = {7:1,8:2,9:3,10:4,11:5,12:6,1:7,2:8,3:9,4:10,5:11,6:12}
+@st.cache_resource(ttl=3600, show_spinner=False)
+def _insp_store() -> dict:
+    """Prepared weekly inspections, kept for an hour: {grain code: DataFrame}. A resource rather than st.cache_data, so the three
+    grains of the snapshot can be fetched on parallel threads and the detail view shares what the snapshot loaded. A frame taken
+    from it is shared: never modify one in place."""
+    return {"lock": threading.Lock(), "frames": {}}
+
+
+def _insp_frames(grains: list, store: dict | None = None) -> dict:
+    """{grain code: prepared frame, or the Exception that stopped it} for [(grain code, marketing-year start month), ...]. A frame
+    not held yet is fetched (the grains in parallel); a failure is handed back and never stored, so a bad Socrata moment is not
+    kept for an hour."""
+    store = store if store is not None else _insp_store()
+    with store["lock"]:
+        todo = [g for g in grains if g[0] not in store["frames"]]
+    failed: dict = {}
+    if todo:
+        with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+            futures = {code: pool.submit(lambda c=code, m=month: _fgis_prepare(_fgis_fetch_raw(c), m)) for code, month in todo}
+        for code, fut in futures.items():                       # the with-block has waited for every fetch
+            try:
+                frame = fut.result()
+            except Exception as e:
+                failed[code] = e
+            else:
+                with store["lock"]:
+                    store["frames"][code] = frame
+    with store["lock"]:
+        return {code: failed.get(code, store["frames"].get(code)) for code, _month in grains}
+
+
+def _load_inspections(grain_code: str, start_month: int) -> pd.DataFrame:
+    """Prepared weekly inspections for one grain (shared with the snapshot). Raises on a failed fetch."""
+    got = _insp_frames([(grain_code, start_month)])[grain_code]
+    if isinstance(got, Exception):
+        raise got
+    return got
+
+
+# ── presentation: the shared light theme (CHART THEME, above) plus this tab's own colour maps ──
+_INSP_SURF, _INSP_BORDER, _INSP_TEXT, _INSP_MUTED, _INSP_SAGE = _CH_SURF, _CH_BORDER, _CH_TEXT, _CH_MUTED, _CH_SAGE
+_INSP_BLUE, _INSP_TERRA, _INSP_LAV, _INSP_GOLD, _INSP_MIST = _CH_BLUE, _CH_TERRA, _CH_LAV, _CH_GOLD, _CH_MIST
+_INSP_POS, _INSP_NEG = _CH_POS, _CH_NEG
+_INSP_PAL = _CH_PAL[:8]
+_INSP_REGION_COLOR = {"Gulf": _INSP_BLUE, "Pacific": _INSP_SAGE, "Interior": _INSP_TERRA, "Atlantic": _INSP_LAV,
+                      "Great Lakes": _INSP_GOLD, "St. Lawrence Seaway": "#8fa398"}
+_INSP_CARRIER_COLOR = {"Ship": _INSP_BLUE, "Rail": _INSP_TERRA, "Container": _INSP_LAV, "Barge": _INSP_SAGE,
+                       "Truck": _INSP_GOLD, "Other": _INSP_MIST}
+_INSP_SEG_COL = {"Origin": "region", "Destination": "dest", "Carrier": "carrier"}
+_INSP_CSS = """
+<style>
+.insp-sec { color:#5f7267; font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; padding:10px 0 4px;
+            border-bottom:1px solid #d7e2dc; margin:24px 0 12px; }
+.insp-tile { background:#fff; border:1px solid #d7e2dc; border-top:3px solid #5e7164; border-radius:10px;
+             padding:14px 16px 12px; min-height:164px; }
+.insp-tile-label { color:#5f7267; font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; margin-bottom:6px; }
+.insp-tile-value { color:#32373c; font-size:1.65rem; font-weight:700; line-height:1.1; }
+.insp-tile-unit { color:#5f7267; font-size:.8rem; font-weight:600; margin-left:5px; }
+.insp-line { color:#5f7267; font-size:.78rem; margin-top:5px; }
+.insp-note { color:#5f7267; font-size:.78rem; line-height:1.5; margin-top:8px; }
+/* the filter panel of the Inspections and Export Sales tabs: always open, tinted, with a sage spine */
+.st-key-insp_filters, .st-key-esr_filters, .st-key-flash_filters { background:#f3f7f4; border:1px solid #c9d8cf !important;
+    border-left:5px solid #5e7164 !important; border-radius:10px; padding:2px 8px 8px; margin-bottom:4px; }
+.st-key-insp_reset, .st-key-esr_reset, .st-key-flash_reset { display:flex; justify-content:flex-end; }
+.fp-title { color:#32373c; font-size:.92rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+.fp-sub { color:#5f7267; font-size:.82rem; margin-left:12px; }
+.fp-group { color:#5f7267; font-size:.74rem !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; margin:8px 0 calc(1rem - 8px) !important; }
+.fp-chips { margin:0 0 1rem !important; line-height:1.9; }
+.fp-lead, .fp-none { color:#5f7267; font-size:.8rem; margin-right:8px; }
+.fp-none { font-style:italic; }
+.fp-chip { display:inline-block; background:#e1ece5; color:#2d4636; border:1px solid #b9cfc0; border-radius:999px;
+    padding:1px 11px; margin:2px 6px 2px 0; font-size:.8rem; font-weight:600; }
+/* the Export Sales summary table */
+.esr-wrap { overflow-x:auto; }
+.esr-sum { width:100%; border-collapse:collapse; font-size:.86rem; }
+.esr-sum th { color:#5f7267; font-size:.66rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600; text-align:right;
+    padding:8px 10px; border-bottom:2px solid #d7e2dc; white-space:nowrap; }
+.esr-sum td { text-align:right; padding:7px 10px; border-bottom:1px solid #e8eeea; color:#32373c; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.esr-sum th:first-child, .esr-sum td:first-child { text-align:left; }
+.esr-sum tr.cur td { background:#eef4f0; font-weight:700; }
+.esr-sum tr.chg td { color:#5f7267; }
+.esr-sum tr.gap td { padding:3px; border:0; }
+.esr-sum tr td.pos { color:#16a34a; font-weight:600; }
+.esr-sum tr td.neg { color:#dc2626; font-weight:600; }
+/* the summary snapshots: one card per commodity */
+.snap-card { background:#fff; border:1px solid #d7e2dc; border-top:3px solid #5e7164; border-radius:10px; overflow:hidden; }
+.snap-head { background:#f3f7f4; border-bottom:1px solid #d7e2dc; padding:9px 14px 8px; }
+.snap-head b { display:block; color:#32373c; font-size:.98rem; }
+.snap-head span { display:block; color:#5f7267; font-size:.7rem; line-height:1.35; margin-top:2px; }
+.snap-kpi { padding:9px 14px 8px; border-bottom:1px solid #e8eeea; }
+.snap-kpi:last-child { border-bottom:0; }
+.snap-val { color:#32373c; font-size:1.45rem; font-weight:700; line-height:1.15; }
+.snap-top { color:#32373c; font-size:1.1rem; font-weight:700; line-height:1.2; }
+.snap-off { color:#5f7267; font-size:.8rem; padding:12px 14px; }
+</style>
+"""
+_INSP_RESET_KEYS = ("insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg", "insp_units_")
+# every widget of the Detail view that can hold a value (not the buttons): kept alive while the snapshot is showing
+_INSP_KEEP = ("insp_grain", "insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg",
+              "insp_years", "insp_smooth", "insp_topn", "insp_lvl")
+
+
+def _fp_reset(prefixes: tuple) -> None:
+    """on_click of a 'Reset filters' button: forget the widget state kept under these key prefixes, so every filter is back
+    at its default on the rerun this click triggers."""
+    for k in [k for k in st.session_state.keys() if str(k).startswith(prefixes)]:
+        del st.session_state[k]
+
+
+def _keep_state(prefixes: tuple) -> None:
+    """Streamlit forgets a widget's value on any run that does not draw the widget. While a tab shows its snapshot the Detail widgets
+    are not drawn, so their values are re-assigned here and are still there when the user is back."""
+    for k in [k for k in st.session_state.keys() if str(k).startswith(prefixes)]:
+        st.session_state[k] = st.session_state[k]
+
+
+def _view_row(prefix: str, use_bushels: bool):
+    """The two switches above a tab: Detail or the Summary snapshot, and the unit. The unit starts from the page-wide Million Bushels
+    toggle: its key carries that setting, so flipping the page toggle hands this switch a fresh default, and a choice made here never
+    outlives it. Returns (snapshot showing?, Mbu?)."""
+    c_mode, c_unit, _ = st.columns([2.1, 1.5, 3.4])
+    mode = c_mode.segmented_control("Show", ["Detail", "Summary snapshot"], default="Detail", key=f"{prefix}_mode") or "Detail"
+    start = "Mbu" if use_bushels else "TMT"
+    unit = c_unit.segmented_control(
+        "Units", ["TMT", "Mbu"], default=start, key=f"{prefix}_units_{int(use_bushels)}",
+        help="TMT = thousand metric tons. Mbu = million bushels (corn and sorghum 56 lb, soybeans and wheat 60 lb). "
+             "Meal, oil, rice, beef, pork and sunflower have no bushel weight and stay in TMT.") or start
+    return mode == "Summary snapshot", unit == "Mbu"
+
+
+def _fp_group(text: str) -> None:
+    st.markdown(f'<p class="fp-group">{text}</p>', unsafe_allow_html=True)
+
+
+def _fp_chips(chips: list, none_text: str) -> str:
+    """What is narrowing the page right now, as pills; one quiet line when nothing is."""
+    if not chips:
+        return f'<p class="fp-chips"><span class="fp-none">{_html_escape(none_text)}</span></p>'
+    return ('<p class="fp-chips"><span class="fp-lead">Narrowed to</span>'
+            + "".join(f'<span class="fp-chip">{_html_escape(c)}</span>' for c in chips) + "</p>")
+
+
+def _insp_pct(a, b):
+    if a is None or b is None or pd.isna(a) or pd.isna(b) or b == 0:
+        return None
+    return (a / b - 1.0) * 100.0
+
+
+def _insp_fmt(v, unit: str) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{v:,.{_insp_dec(unit, v)}f}"
+
+
+def _insp_dec(unit: str, ref) -> int:
+    """Decimals that suit the size of the numbers: volumes run from thousands of TMT down to a few kilograms of oats."""
+    ref = 0.0 if ref is None or pd.isna(ref) else abs(float(ref))
+    steps = ((100, 0), (1, 1), (0.1, 2), (0.01, 3)) if unit == "TMT" else ((10, 1), (1, 2), (0.1, 3), (0.01, 4))
+    return next((d for floor, d in steps if ref >= floor), steps[-1][1] + 1 if ref > 0 else steps[1][1])
+
+
+def _insp_plot(fig: go.Figure, key: str) -> None:
+    """st.plotly_chart across Streamlit versions: width="stretch" where it exists, else use_container_width."""
+    try:
+        st.plotly_chart(fig, width="stretch", theme=None, key=key)
+    except TypeError:
+        st.plotly_chart(fig, use_container_width=True, theme=None, key=key)
+
+
+def _insp_table(data, height: int) -> None:
+    try:
+        st.dataframe(data, width="stretch", height=height)
+    except TypeError:
+        st.dataframe(data, use_container_width=True, height=height)
+
+
+def _insp_sec(text: str) -> None:
+    st.markdown(f'<div class="insp-sec">{text}</div>', unsafe_allow_html=True)
+
+
+def _insp_delta_line(p, text: str) -> str:
+    if p is None:
+        return f'<div class="insp-line">— {text}</div>'
+    col, arrow = (_INSP_POS, "▲") if p >= 0 else (_INSP_NEG, "▼")
+    return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(p):,.1f}%</b> {text}</div>'
+
+
+def _insp_tile(label: str, value: str, unit: str, lines: list) -> str:
+    return (f'<div class="insp-tile"><div class="insp-tile-label">{label}</div>'
+            f'<div class="insp-tile-value">{value}<span class="insp-tile-unit">{unit}</span></div>'
+            f'{"".join(lines)}</div>')
+
+
+def _insp_style(fig: go.Figure, height: int, title: str | None = None, subtitle: str | None = None,
+                legend: bool = True, hover: str = "x unified", logo: str | None = None,
+                x_title: str | None = None, y_title: str | None = None) -> go.Figure:
+    """This tab's charts: the shared light layout with the legend laid along the top, and the 50-year mark when asked."""
+    fig.update_layout(**_ch_layout(title, subtitle, x_title, y_title, height=height, legend=legend, hover=hover,
+                                   margin=dict(l=10, r=10, t=(88 if subtitle else 64) if title else 24, b=10)))
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                  bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+    if logo:
+        _add_chart_watermark(fig)
+    return fig
+
+
+def _insp_seg_labels(frame: pd.DataFrame, seg: str, top: int = 7) -> pd.Series:
+    """The stacking label of each row: region / carrier as they are, destinations folded to a top few plus 'Other'."""
+    s = frame[_INSP_SEG_COL[seg]]
+    if seg == "Destination":
+        keep = frame.groupby("dest")["v"].sum().nlargest(top).index
+        s = s.where(s.isin(keep), "Other")
+    return s
+
+
+def _insp_seg_color(name: str, seg: str, i: int) -> str:
+    if name == "Other":
+        return _INSP_MIST
+    if seg == "Origin":
+        return _INSP_REGION_COLOR.get(name, _INSP_PAL[i % len(_INSP_PAL)])
+    if seg == "Carrier":
+        return _INSP_CARRIER_COLOR.get(name, _INSP_PAL[i % len(_INSP_PAL)])
+    return _INSP_PAL[i % len(_INSP_PAL)]
+
+
+def _insp_matrices(df_all: pd.DataFrame, df_f: pd.DataFrame):
+    """Weekly (M) and cumulative (C) volume, one row per marketing year, columns = marketing-year week. Weeks a year
+    never reached are NaN; weeks it reached with nothing inspected (after filtering) are 0."""
+    last_w = df_all.groupby("my")["my_week"].max().sort_index()
+    cols = list(range(1, int(last_w.max()) + 1))
+    wk = df_f.groupby(["my", "my_week"])["v"].sum().unstack("my_week")
+    M = wk.reindex(index=last_w.index, columns=cols)
+    in_range = pd.DataFrame(np.arange(1, len(cols) + 1)[None, :] <= last_w.to_numpy()[:, None],
+                            index=last_w.index, columns=cols)
+    M = M.where(~in_range | M.notna(), 0.0).where(in_range)
+    C = M.fillna(0.0).cumsum(axis=1).where(in_range)
+    return M, C
+
+
+def _insp_olympic(mat: pd.DataFrame, years: list, week: int):
+    return olympic_avg([float(mat.at[y, week]) for y in years if week in mat.columns and pd.notna(mat.at[y, week])])
+
+
+def _insp_pace(M: pd.DataFrame, C: pd.DataFrame, sel_my: int, sel_week: int) -> dict:
+    """The selected week and the marketing year to date against the prior week, the same week last year and the 6-year Olympic average."""
+    prior6 = [y for y in M.index if y < sel_my][-6:]
+
+    def cell(mat, y, n):
+        return None if (y not in mat.index or n not in mat.columns or pd.isna(mat.at[y, n])) else float(mat.at[y, n])
+
+    return dict(w_cur=cell(M, sel_my, sel_week), c_cur=cell(C, sel_my, sel_week),
+                w_prev=cell(M, sel_my, sel_week - 1) if sel_week > 1 else None,
+                w_ly=cell(M, sel_my - 1, sel_week), c_ly=cell(C, sel_my - 1, sel_week),
+                w_oly=_insp_olympic(M, prior6, sel_week), c_oly=_insp_olympic(C, prior6, sel_week))
+
+
+def _insp_month_ticks(first_thu: pd.Timestamp, n_weeks: int):
+    """Marketing-year week numbers that open a calendar month, labelled with the month, for the week-number axis."""
+    vals, text, prev = [], [], None
+    for n in range(1, n_weeks + 1):
+        d = first_thu + pd.Timedelta(weeks=n - 1)
+        if d.month != prev:
+            vals.append(n)
+            text.append(f"{d:%b}")
+            prev = d.month
+    return vals, text
+
+
+def _insp_fig_weekly(dff, M, C, sel_my, sel_week, last_w, first_thu, view, seg, unit, grain, my_label, logo):
+    """Weekly bars (or cumulative lines) for the selected marketing year, against last year and the 6-year Olympic
+    average; stacked by the chosen segment."""
+    weeks = list(range(1, last_w + 1))
+    dates = [first_thu + pd.Timedelta(weeks=n - 1) for n in weeks]
+    mat = M if view == "Weekly" else C
+    prior6 = [y for y in mat.index if y < sel_my][-6:]
+    cur_row = mat.loc[sel_my].reindex(weeks)
+    ly_row = mat.loc[sel_my - 1].reindex(weeks) if (sel_my - 1) in mat.index else pd.Series(np.nan, index=weeks)
+    oly = [_insp_olympic(mat, prior6, n) for n in weeks]
+    dec = _insp_dec(unit, cur_row.max())
+    hov = lambda name: f"Wk %{{customdata}}: %{{y:,.{dec}f}} {unit}<extra>{name}</extra>"
+    cur = dff[dff["my"] == sel_my]
+    fig = go.Figure()
+
+    if view == "Weekly":
+        if seg == "None":
+            fig.add_trace(go.Bar(x=dates, y=cur_row.fillna(0.0), name=my_label, customdata=weeks, hovertemplate=hov(my_label),
+                                 marker_color=["#3b7fa3" if n == sel_week else _INSP_BLUE for n in weeks]))
+        else:
+            labels = _insp_seg_labels(cur, seg)
+            pv = (cur.assign(seg=labels).groupby(["seg", "my_week"])["v"].sum().unstack("my_week")
+                  .reindex(columns=weeks).fillna(0.0))
+            for i, name in enumerate(pv.sum(axis=1).sort_values(ascending=False).index):
+                fig.add_trace(go.Bar(x=dates, y=pv.loc[name], name=name, customdata=weeks, hovertemplate=hov(name),
+                                     marker_color=_insp_seg_color(name, seg, i)))
+            fig.update_layout(barmode="stack")
+        fig.add_trace(go.Scatter(x=dates, y=ly_row, mode="lines", name="Last year", customdata=weeks,
+                                 line=dict(color=_INSP_TERRA, width=1.8), hovertemplate=hov("Last year")))
+        fig.add_trace(go.Scatter(x=dates, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
+                                 line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
+        sub = "Weekly, week ending Thursday. Last year and the 6-year Olympic average are the same marketing-year week."
     else:
-        df["my"] = df.apply(lambda r: r["year"] if r["month"] >= 10 else r["year"] - 1, axis=1)
-        my_months_map = {10:1,11:2,12:3,1:4,2:5,3:6,4:7,5:8,6:9,7:10,8:11,9:12}
-    df["my_month_pos"] = df["month"].map(my_months_map)
-    df["my_label"] = df["my"].apply(lambda y: f"{y}/{str(y+1)[-2:]}")
-    return df
+        rng = [i for i, n in enumerate(weeks)
+               if sum(1 for y in prior6 if n in C.columns and pd.notna(C.at[y, n])) >= 2]
+        if rng:
+            hi = [max(C.at[y, weeks[i]] for y in prior6 if pd.notna(C.at[y, weeks[i]])) for i in rng]
+            lo = [min(C.at[y, weeks[i]] for y in prior6 if pd.notna(C.at[y, weeks[i]])) for i in rng]
+            xs = [dates[i] for i in rng]
+            fig.add_trace(go.Scatter(x=xs + xs[::-1], y=hi + lo[::-1], fill="toself", mode="lines", line=dict(width=0),
+                                     fillcolor=_ch_rgba(_INSP_SAGE, 0.13), name="6-yr range", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=dates, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
+                                 line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
+        fig.add_trace(go.Scatter(x=dates, y=ly_row, mode="lines", name="Last year", customdata=weeks,
+                                 line=dict(color=_INSP_TERRA, width=1.8), hovertemplate=hov("Last year")))
+        if seg == "None":
+            fig.add_trace(go.Scatter(x=dates, y=cur_row, mode="lines", name=my_label, customdata=weeks,
+                                     line=dict(color=_INSP_BLUE, width=3.4), hovertemplate=hov(my_label)))
+        else:
+            labels = _insp_seg_labels(cur, seg)
+            pv = (cur.assign(seg=labels).groupby(["seg", "my_week"])["v"].sum().unstack("my_week")
+                  .reindex(columns=weeks).fillna(0.0).cumsum(axis=1))
+            for i, name in enumerate(pv.iloc[:, -1].sort_values(ascending=False).index):
+                col = _insp_seg_color(name, seg, i)
+                fig.add_trace(go.Scatter(x=dates, y=pv.loc[name], mode="lines", name=name, stackgroup="seg",
+                                         customdata=weeks, hovertemplate=hov(name), line=dict(width=0.6, color=col),
+                                         fillcolor=_ch_rgba(col, 0.75)))
+        sub = "Marketing year to date by week ending Thursday, against last year and the 6-year range."
+    if sel_week < last_w:
+        x = dates[sel_week - 1].strftime("%Y-%m-%d")
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=1, xref="x", yref="paper",
+                      line=dict(color=_INSP_SAGE, width=1, dash="dot"))
+    word = "weekly" if view == "Weekly" else "cumulative"
+    _insp_style(fig, 400, f"{grain} export inspections, {my_label}: {word} volume ({unit})", sub, logo=logo,
+                y_title=unit if view == "Weekly" else f"Cumulative {unit}")
+    if last_w <= 14:                                        # early in a marketing year: a tick for every week
+        fig.update_xaxes(tickformat="%b %d", dtick=7 * 86_400_000, tickmode="linear", tick0=dates[0].strftime("%Y-%m-%d"),
+                         hoverformat="%b %d, %Y")
+    else:
+        fig.update_xaxes(tickformat="%b %y", dtick="M1", hoverformat="%b %d, %Y")
+    fig.update_yaxes(tickformat=",")
+    return fig
 
 
-def _insp_tile(label, value, sub="", delta=None, accent=None):
-    accent = accent or JSA_CYAN
-    d = ""
-    if delta is not None:
-        c = "#4caf50" if delta >= 0 else "#ef5350"
-        s = "+" if delta >= 0 else ""
-        d = f'<div style="font-size:10px;color:{c};font-weight:700;margin-top:3px;">{s}{delta:.1f}%</div>'
-    return (
-        f'<div style="background:#1e2124;border:1px solid #2e353d;'
-        f'border-top:3px solid {accent};border-radius:6px;'
-        f'padding:12px 16px;text-align:center;flex:1;min-width:140px;">'
-        f'<div style="font-size:9px;font-weight:700;color:#5a6878;'
-        f'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">{label}</div>'
-        f'<div style="font-size:22px;font-weight:700;color:{JSA_CYAN};'
-        f'line-height:1.1;font-family:Arial;">{value}</div>'
-        f'<div style="font-size:10px;color:#5a6878;margin-top:2px;">{sub}</div>'
-        f'{d}</div>'
-    )
+def _insp_fig_multi(M, C, sel_my, view, years_mode, smooth, first_thu, unit, grain, start_month, logo):
+    """One line per marketing year over the marketing-year weeks: the selected year in blue, last year terracotta,
+    older years in sage shades (darker = more recent), plus the 6-year Olympic average."""
+    mat = M if view == "Weekly" else C
+    prior = [y for y in mat.index if y < sel_my]
+    pick = {"5 prior years": prior[-5:], "10 prior years": prior[-10:], "All years": prior}.get(years_mode, prior[-5:]) + [sel_my]
+    weeks = list(mat.columns)
+    prior6 = [y for y in mat.index if y < sel_my][-6:]
+    fig = go.Figure()
+    older = sorted(y for y in pick if y not in (sel_my, sel_my - 1))
+    dec = _insp_dec(unit, mat.loc[sel_my].max())
+    for y in sorted(pick):
+        row = mat.loc[y].dropna()
+        if view == "Weekly" and smooth:
+            row = row.rolling(4, min_periods=1).mean()
+        lbl = f"{y}/{str(y + 1)[-2:]}"
+        if y == sel_my:
+            style = dict(color=_INSP_BLUE, width=3.6)
+        elif y == sel_my - 1:
+            style = dict(color=_INSP_TERRA, width=2.2)
+        else:
+            style = dict(color=_ch_mix("#d7e2dc", "#5f7267", older.index(y) / max(len(older) - 1, 1)), width=1.3)
+        fig.add_trace(go.Scatter(x=row.index, y=row.values, mode="lines", name=lbl, line=style,
+                                 hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>{lbl}</extra>"))
+    oly = [_insp_olympic(mat, prior6, n) for n in weeks]
+    if view == "Weekly" and smooth:
+        oly = pd.Series(oly, dtype="float").rolling(4, min_periods=1).mean().tolist()
+    fig.add_trace(go.Scatter(x=weeks, y=oly, mode="lines", name="6-yr Olympic avg", line=dict(color=_INSP_SAGE, width=2.2, dash="dash"),
+                             hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>6-yr Olympic avg</extra>"))
+    vals, text = _insp_month_ticks(first_thu, len(weeks))
+    word = "weekly (4-week average)" if (view == "Weekly" and smooth) else ("weekly" if view == "Weekly" else "cumulative")
+    _insp_style(fig, 420, f"{grain} export inspections by marketing-year week: {word} ({unit})",
+                f"Marketing years overlaid; months on the axis follow {sel_my}/{str(sel_my + 1)[-2:]}.", logo=logo,
+                x_title="Marketing-year week", y_title=unit if view == "Weekly" else f"Cumulative {unit}")
+    fig.update_xaxes(tickmode="array", tickvals=vals, ticktext=[f"{t}" for t in text], range=[0.5, len(weeks) + 0.5])
+    fig.update_yaxes(tickformat=",")
+    return fig
 
 
-def _run_export_inspections_tab():
-    """Enhanced FGIS Export Inspections tab — full drill-down filters."""
+def _insp_fig_hbar(frame, by, seg, top_n, unit, title, subtitle, logo=None):
+    """Horizontal bars of volume by `by` (a column of `frame`), largest on top, stacked by the segment dimension
+    unless that is the same thing as `by`."""
+    tot = frame.groupby(by)["v"].sum().sort_values(ascending=False).head(top_n)
+    tot = tot[tot > 0]
+    if tot.empty:
+        return None
+    order = list(tot.index[::-1])
+    sub_frame = frame[frame[by].isin(order)]
+    seg_on = seg != "None" and _INSP_SEG_COL.get(seg) != by
+    fig = go.Figure()
+    if seg_on:
+        labels = _insp_seg_labels(sub_frame, seg, top=6)
+        pv = sub_frame.assign(seg=labels).groupby([by, "seg"])["v"].sum().unstack("seg").reindex(order).fillna(0.0)
+        for i, name in enumerate(pv.sum(axis=0).sort_values(ascending=False).index):
+            fig.add_trace(go.Bar(x=pv[name], y=pv.index, orientation="h", name=name, marker_color=_insp_seg_color(name, seg, i),
+                                 hovertemplate=f"%{{y}}: %{{x:,.1f}} {unit}<extra>{name}</extra>"))
+        fig.update_layout(barmode="stack")
+    else:
+        if by == "region":
+            colors = [_INSP_REGION_COLOR.get(o, _INSP_BLUE) for o in order]
+        elif by == "port":                                  # a port wears its region's colour
+            reg = frame.drop_duplicates("port").set_index("port")["region"]
+            colors = [_INSP_REGION_COLOR.get(reg.get(o), _INSP_BLUE) for o in order]
+        else:
+            colors = _INSP_BLUE
+        fig.add_trace(go.Bar(x=[tot[o] for o in order], y=order, orientation="h", marker_color=colors, name="Volume",
+                             hovertemplate=f"%{{y}}: %{{x:,.1f}} {unit}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[tot[o] for o in order], y=order, mode="text", text=[_insp_fmt(tot[o], unit) for o in order],
+                             textposition="middle right", textfont=dict(size=11, color=_INSP_MUTED), showlegend=False,
+                             hoverinfo="skip", cliponaxis=False))
+    _insp_style(fig, max(300, 27 * len(order) + 110), title, subtitle, legend=seg_on, hover="closest", logo=logo,
+                x_title=unit)
+    fig.update_xaxes(range=[0, float(tot.max()) * 1.2], tickformat=",")
+    fig.update_yaxes(showgrid=False, automargin=True)
+    return fig
 
-    _DIV = '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>'
 
-    # ── Top controls ──────────────────────────────────────────────────────────
-    c1, c2 = st.columns([2, 2])
-    with c1:
-        grain_label = st.selectbox("Commodity", list(_INSP_GRAINS.keys()),
-                                   key="insp_grain")
-    grain_code = _INSP_GRAINS[grain_label]
+def _insp_fig_donut(frame, by, unit, title, subtitle, colors=None, top_n=8, min_label=0.0):
+    tot = frame.groupby(by)["v"].sum().sort_values(ascending=False)
+    tot = tot[tot > 0]
+    if tot.empty:
+        return None
+    if len(tot) > top_n:
+        tot = pd.concat([tot.head(top_n), pd.Series({"Other": tot.iloc[top_n:].sum()})])
+    cols = [(colors or {}).get(n) or (_INSP_MIST if n == "Other" else _INSP_PAL[i % len(_INSP_PAL)])
+            for i, n in enumerate(tot.index)]
+    fig = go.Figure(go.Pie(labels=list(tot.index), values=tot.values, hole=0.56, sort=False, direction="clockwise",
+                           marker=dict(colors=cols, line=dict(color="#ffffff", width=2)),
+                           textinfo="label+percent" if not min_label else "text", textposition="outside",
+                           text=None if not min_label else [f"{n}<br>{v / tot.sum() * 100:.0f}%" if v / tot.sum() * 100 >= min_label else ""
+                                                            for n, v in tot.items()],
+                           textfont=dict(size=11, color=_INSP_TEXT),
+                           hovertemplate=f"%{{label}}: %{{value:,.1f}} {unit} (%{{percent}})<extra></extra>"))
+    fig.add_annotation(text=f"<b>{_insp_fmt(float(tot.sum()), unit)}</b><br><span style='font-size:11px'>{unit}</span>",
+                       x=0.5, y=0.5, showarrow=False, font=dict(size=16, color=_INSP_TEXT))
+    _insp_style(fig, 360, title, subtitle, legend=False, hover="closest")
+    fig.update_layout(margin=dict(l=40, r=40, t=96, b=20))
+    return fig
 
-    with st.spinner(f"Loading {grain_label} inspection data…"):
-        raw = _load_fgis_detail(grain_code)
 
-    if raw.empty:
-        st.warning("No FGIS inspection data available. Try refreshing.")
+def _insp_render(use_bushels: bool) -> None:
+    st.markdown(_INSP_CSS, unsafe_allow_html=True)
+    logo = _load_logo_b64(LOGO_50YR_PATH)
+    snapshot, use_bushels = _view_row("insp", use_bushels)
+    if snapshot:
+        _keep_state(_INSP_KEEP)
+        _insp_snapshot(use_bushels)
         return
 
-    df = _fgis_add_my(raw, grain_label)
+    # ── filters: always on show, and they apply to the tiles, the table and every chart ──────────────────────────────
+    with st.container(border=True, key="insp_filters"):
+        top_l, top_r = st.columns([5, 1.1])
+        top_l.markdown('<span class="fp-title">Filters</span><span class="fp-sub">apply to every tile, chart and table below</span>',
+                       unsafe_allow_html=True)
+        top_r.button("Reset filters", key="insp_reset", on_click=_fp_reset, args=(_INSP_RESET_KEYS,))
+        _fp_group("What to show")
+        c_grain, c_my, c_wk, c_view = st.columns([1.1, 1.1, 3.0, 1.4])
+        with c_grain:
+            grain = st.selectbox("Grain", list(_INSP_GRAINS), key="insp_grain")
+        code, start_month, lb = _INSP_GRAINS[grain]
+        try:
+            with st.spinner(f"Loading {grain.lower()} inspections…"):
+                df = _load_inspections(code, start_month)
+        except Exception as e:
+            st.error(f"**The FGIS inspections could not be read.** `{e}` Click **Refresh Data** above to try again.")
+            return
+        if df.empty:
+            st.info(f"No {grain.lower()} export inspections are on file.")
+            return
 
-    all_my = sorted(df["my"].unique(), reverse=True)
-    cur_my = all_my[0]
-    my_labels = [
-        f"Current MY YTD ({cur_my}/{str(cur_my+1)[-2:]})" if m == cur_my
-        else f"{m}/{str(m+1)[-2:]}"
-        for m in all_my
-    ]
-    with c2:
-        my_sel_label = st.selectbox("Marketing Year", my_labels, key="insp_my")
-    sel_my = all_my[my_labels.index(my_sel_label)]
+        years = sorted((int(y) for y in df["my"].unique()), reverse=True)
+        my_name = {y: f"{y}/{str(y + 1)[-2:]}" for y in years}
+        with c_my:
+            picked = st.selectbox("Marketing year", [my_name[y] for y in years], key=f"insp_my_{code}")
+        sel_my = next(y for y in years if my_name[y] == picked)
+        my_label = my_name[sel_my]
+        last_w = int(df.loc[df["my"] == sel_my, "my_week"].max())
+        first_thu = _insp_first_thu(sel_my, start_month)
 
-    # ── Filter panel ──────────────────────────────────────────────────────────
-    df_my_full = df[df["my"] == sel_my].copy()
+        def week_end(n) -> pd.Timestamp:
+            return first_thu + pd.Timedelta(weeks=int(n) - 1)
 
-    all_dests    = sorted(df_my_full["dest"].dropna().unique().tolist())
-    all_ports    = sorted(df_my_full["port_group"].dropna().unique().tolist())
-    all_carriers = sorted(df_my_full["carrier"].dropna().unique().tolist())
-    all_weeks    = sorted(df_my_full["week"].dropna().unique().tolist())
+        with c_wk:
+            if last_w > 1:
+                sel_week = int(st.select_slider("Week (ending Thursday)", options=list(range(1, last_w + 1)), value=last_w,
+                                                format_func=lambda n: f"Wk {n} · {week_end(n):%b %d}",
+                                                key=f"insp_week_{code}_{sel_my}"))
+            else:
+                sel_week = 1                               # a slider needs two positions: only one week is in so far
+                st.caption(f"Week 1 · {week_end(1):%b %d}: the only week reported so far in {my_label}.")
+        with c_view:
+            view = st.segmented_control("View", ["Weekly", "Cumulative"], default="Weekly", key="insp_view") or "Weekly"
 
-    with st.expander("🔽  Filters", expanded=True):
-        fa, fb, fc = st.columns(3)
-        with fa:
-            sel_dests = st.multiselect(
-                "Destination", all_dests, default=[],
-                key="insp_dest",
-                help="Leave blank to include all destinations",
-            )
-        with fb:
-            sel_ports = st.multiselect(
-                "Port Region", all_ports, default=[],
-                key="insp_port",
-                help="Leave blank to include all port regions",
-            )
-        with fc:
-            sel_carriers = st.multiselect(
-                "Carrier Type", all_carriers, default=[],
-                key="insp_carrier",
-                help="Leave blank to include all carrier types",
-            )
-        fd, fe = st.columns(2)
-        with fd:
-            _wk_lo = int(min(all_weeks)) if all_weeks else 1
-            _wk_hi = int(max(all_weeks)) if all_weeks else 52
-            if _wk_lo < _wk_hi:
-                week_range = st.slider(
-                    "Week Range (ISO week)",
-                    min_value=_wk_lo, max_value=_wk_hi, value=(_wk_lo, _wk_hi),
-                    key="insp_week_range",
-                )
-            else:       # a slider needs min < max: early in a marketing year only one week is in
-                week_range = (_wk_lo, _wk_hi)
-                st.caption(f"Week range: ISO week {_wk_lo} (only one week reported so far)")
-        with fe:
-            top_n_dests = st.slider("Top N destinations", 5, 40, 20,
-                                    key="insp_top_n")
+        _fp_group("Narrow it down")
+        by_dest = df.groupby("dest")["mt"].sum().sort_values(ascending=False)
+        f1, f2, f3, f4 = st.columns(4)
+        sel_cls = f1.multiselect("Class", sorted(df["cls"].unique()), key=f"insp_cls_{code}", placeholder="All classes")
+        sel_car = f2.multiselect("Carrier", sorted(df["carrier"].unique()), key=f"insp_car_{code}", placeholder="All carriers")
+        sel_reg = f3.multiselect("Origin region", sorted(df["region"].unique()), key=f"insp_reg_{code}", placeholder="All regions")
+        sel_dst = f4.multiselect("Destination", list(by_dest.index), key=f"insp_dst_{code}", placeholder="All destinations")
+        sg, _ = st.columns([2.4, 2.6])
+        seg = sg.segmented_control("Split the charts by", ["None", "Origin", "Destination", "Carrier"], default="None",
+                                   key="insp_seg") or "None"
+        chips = [f"{lab}: {', '.join(chosen[:4])}" + (f" +{len(chosen) - 4} more" if len(chosen) > 4 else "") for lab, chosen in
+                 (("Class", sel_cls), ("Carrier", sel_car), ("Origin", sel_reg), ("Destination", sel_dst)) if chosen]
+        st.markdown(_fp_chips(chips, "No narrowing: every certificate is counted"), unsafe_allow_html=True)
 
-    # Apply filters
-    df_my = df_my_full.copy()
-    if sel_dests:
-        df_my = df_my[df_my["dest"].isin(sel_dests)]
-    if sel_ports:
-        df_my = df_my[df_my["port_group"].isin(sel_ports)]
-    if sel_carriers:
-        df_my = df_my[df_my["carrier"].isin(sel_carriers)]
-    df_my = df_my[(df_my["week"] >= week_range[0]) & (df_my["week"] <= week_range[1])]
+    mask = pd.Series(True, index=df.index)
+    for col, chosen in (("cls", sel_cls), ("carrier", sel_car), ("region", sel_reg), ("dest", sel_dst)):
+        if chosen:
+            mask &= df[col].isin(chosen)
+    dff = df[mask].copy()
 
-    active_filters = bool(sel_dests or sel_ports or sel_carriers
-                          or week_range != (min(all_weeks, default=1),
-                                            max(all_weeks, default=52)))
-    if active_filters:
-        st.caption(
-            f"Filters active — showing {len(df_my):,} rows "
-            f"({df_my['mt'].sum()/1000:,.0f} TMT)"
-        )
-
-    if df_my.empty:
-        st.warning("No data matches current filters.")
-        return
-
-    # ── Stat tiles (always from unfiltered MY for context; filtered for value) ─
-    latest_week = int(df_my_full["week"].max())
-    prev_week   = latest_week - 1 if latest_week > 1 else None
-
-    cur_wk_mt  = df_my[df_my["week"] == latest_week]["mt"].sum() / 1000
-    prev_wk_mt_raw = df_my_full[df_my_full["week"] == prev_week]["mt"].sum() / 1000 if prev_week else None
-    ytd_mt     = df_my["mt"].sum() / 1000
-
-    prior_my   = sel_my - 1
-    df_prior_full = df[(df["my"] == prior_my) & (df["week"] <= latest_week)]
-    if sel_dests:
-        df_prior_full = df_prior_full[df_prior_full["dest"].isin(sel_dests)]
-    if sel_ports:
-        df_prior_full = df_prior_full[df_prior_full["port_group"].isin(sel_ports)]
-    if sel_carriers:
-        df_prior_full = df_prior_full[df_prior_full["carrier"].isin(sel_carriers)]
-    prior_ytd = df_prior_full["mt"].sum() / 1000 if not df_prior_full.empty else None
-
-    wow_delta = ((cur_wk_mt / prev_wk_mt_raw - 1) * 100) if prev_wk_mt_raw else None
-    ytd_delta = ((ytd_mt / prior_ytd - 1) * 100) if prior_ytd else None
-
-    dest_totals = df_my.groupby("dest")["mt"].sum()
-    top_dest    = dest_totals.idxmax() if not dest_totals.empty else "—"
-    top_dest_mt = dest_totals.max() / 1000 if not dest_totals.empty else 0
-
-    tiles_html = (
-        _insp_tile("Latest Week", f"{cur_wk_mt:,.0f}", "TMT", wow_delta, JSA_CYAN) +
-        _insp_tile("YTD Total", f"{ytd_mt:,.0f}", f"TMT · thru wk {latest_week}", ytd_delta, JSA_GREEN) +
-        _insp_tile("Top Destination", top_dest, f"{top_dest_mt:,.0f} TMT YTD", accent="#f9a825") +
-        _insp_tile("Weeks in Range", str(int(df_my["week"].nunique())),
-                   f"wk {week_range[0]}–{week_range[1]}", accent="#78909c")
-    )
+    bu_ok = use_bushels and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    dff["v"] = dff["lbs"] / lb / 1e6 if bu_ok else dff["mt"] / 1000.0
+    notes = [f"Latest week in the data: week ending {df['week_end'].max():%a %b %d, %Y} (USDA FGIS posts each week on Monday)."]
+    if use_bushels and lb is None:
+        notes.append(f"USDA defines no bushel weight for {grain.lower()}, so it stays in TMT.")
     st.markdown(
-        f'<div style="display:flex;gap:10px;margin:12px 0 18px;">{tiles_html}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(_DIV, unsafe_allow_html=True)
+        f'<div style="margin:14px 0 4px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+        f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+        f'United States {_TITLE_COMMODITY.get(grain, grain)} Export Inspections</span>'
+        f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit})</span></div>',
+        unsafe_allow_html=True)
+    st.caption(" ".join(notes))
 
-    # ── Monthly labels for x-axis ─────────────────────────────────────────────
-    _my_month_labels = (
-        ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"]
-        if grain_label == "Wheat"
-        else ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
-    )
+    # ── pace numbers ──────────────────────────────────────────────────────────
+    M, C = _insp_matrices(df, dff)
+    pace = _insp_pace(M, C, sel_my, sel_week)
+    w_cur, c_cur, w_prev, w_ly, c_ly, w_oly, c_oly = (pace[k] for k in ("w_cur", "c_cur", "w_prev", "w_ly", "c_ly", "w_oly", "c_oly"))
 
-    # ── Charts row 1: Port breakdown + Carrier breakdown ──────────────────────
-    col_port, col_carr = st.columns(2)
+    cur = dff[dff["my"] == sel_my]
+    wk = cur[cur["my_week"] == sel_week]
+    ytd = cur[cur["my_week"] <= sel_week]
+    view_df = wk if view == "Weekly" else ytd
 
-    with col_port:
-        st.markdown("#### Port Region by Month")
-        port_df = (
-            df_my.groupby(["my_month_pos", "port_group"])["mt"]
-            .sum().reset_index()
-        )
-        port_df["tmt"] = port_df["mt"] / 1000
-        fig_port = go.Figure()
-        for pg in ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]:
-            sub = port_df[port_df["port_group"] == pg].sort_values("my_month_pos")
-            if sub.empty:
-                continue
-            fig_port.add_trace(go.Bar(
-                x=sub["my_month_pos"], y=sub["tmt"],
-                name=pg, marker_color=_PORT_GROUP_COLORS.get(pg, "#78909c"),
-            ))
-        fig_port.update_layout(
-            barmode="stack",
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title="MY Month", gridcolor="#2e353d",
-                       tickmode="array", tickvals=list(range(1, 13)),
-                       ticktext=_my_month_labels),
-            yaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10), height=320,
-        )
-        st.plotly_chart(fig_port, use_container_width=True)
+    def top_lines(col):
+        s = view_df.groupby(col)["v"].sum().sort_values(ascending=False)
+        s = s[s > 0]
+        tot = float(s.sum())
+        if s.empty or tot <= 0:
+            return "—", [f'<div class="insp-line">nothing inspected</div>']
+        rest = " · ".join(f"{n} {v / tot * 100:.0f}%" for n, v in s.iloc[1:3].items() if v / tot >= 0.005)
+        return s.index[0], [f'<div class="insp-line"><b>{s.iloc[0] / tot * 100:.0f}%</b> of the {"week" if view == "Weekly" else "marketing year to date"}</div>',
+                            f'<div class="insp-line">{rest}</div>' if rest else ""]
 
-    with col_carr:
-        st.markdown("#### Carrier Type")
-        carr_df = (
-            df_my.groupby("carrier")["mt"].sum()
-            .reset_index().sort_values("mt", ascending=False)
-        )
-        carr_df["tmt"] = carr_df["mt"] / 1000
-        colors = [_CARRIER_COLORS.get(c, "#8a9aaa") for c in carr_df["carrier"]]
-        fig_carr = go.Figure(go.Pie(
-            labels=carr_df["carrier"], values=carr_df["tmt"],
-            marker=dict(colors=colors, line=dict(color="#1e2124", width=2)),
-            hole=0.45,
-            textfont=dict(color="#cdd9e5", size=11),
-            hovertemplate="%{label}: %{value:,.0f} TMT (%{percent})<extra></extra>",
-        ))
-        fig_carr.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10), height=320,
-        )
-        st.plotly_chart(fig_carr, use_container_width=True)
-
-    # ── Top destinations bar ──────────────────────────────────────────────────
-    st.markdown("#### Top Destinations (YTD)")
-    dest_df = (
-        df_my.groupby("dest")["mt"].sum().reset_index()
-        .sort_values("mt", ascending=True)
-    )
-    dest_df["tmt"] = dest_df["mt"] / 1000
-    top_n = dest_df.tail(top_n_dests)
-
-    fig_dest = go.Figure(go.Bar(
-        x=top_n["tmt"], y=top_n["dest"],
-        orientation="h", marker_color=JSA_CYAN,
-        text=top_n["tmt"].apply(lambda v: f"{v:,.0f}"),
-        textposition="outside",
-        hovertemplate="%{y}: %{x:,.0f} TMT<extra></extra>",
-    ))
-    fig_dest.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(gridcolor="#2e353d", showgrid=False),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=max(300, len(top_n) * 22),
-    )
-    st.plotly_chart(fig_dest, use_container_width=True)
-
-    # ── Destination × Port Region stacked bar ─────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Destination by Port Region")
-
-    dest_port_df = (
-        df_my.groupby(["dest", "port_group"])["mt"].sum().reset_index()
-    )
-    dest_port_df["tmt"] = dest_port_df["mt"] / 1000
-    # Restrict to top N dests
-    top_dest_names = (
-        dest_port_df.groupby("dest")["tmt"].sum()
-        .nlargest(top_n_dests).index.tolist()
-    )
-    dest_port_df = dest_port_df[dest_port_df["dest"].isin(top_dest_names)]
-    dest_order = (
-        dest_port_df.groupby("dest")["tmt"].sum()
-        .sort_values().index.tolist()
-    )
-
-    fig_dp = go.Figure()
-    for pg in ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]:
-        sub = dest_port_df[dest_port_df["port_group"] == pg]
-        sub = sub.set_index("dest").reindex(dest_order).reset_index()
-        fig_dp.add_trace(go.Bar(
-            x=sub["tmt"], y=sub["dest"],
-            orientation="h", name=pg,
-            marker_color=_PORT_GROUP_COLORS.get(pg, "#78909c"),
-        ))
-    fig_dp.update_layout(
-        barmode="stack",
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(gridcolor="#2e353d", showgrid=False),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=max(320, len(dest_order) * 22),
-    )
-    st.plotly_chart(fig_dp, use_container_width=True)
-
-    # ── Seasonal cumulative chart ─────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Seasonal Cumulative Inspections")
-
-    comp_my_opts = [f"{m}/{str(m+1)[-2:]}" for m in all_my if m != sel_my]
-    comp_sel = st.multiselect(
-        "Compare Marketing Years", comp_my_opts,
-        default=comp_my_opts[:5], key="insp_comp_my"
-    )
-    comp_starts = [int(l.split("/")[0]) for l in comp_sel]
-    all_chart_my = sorted(set([sel_my] + comp_starts))
-
-    # Apply same dest/port/carrier filters to seasonal data too
-    df_seas = df.copy()
-    if sel_dests:
-        df_seas = df_seas[df_seas["dest"].isin(sel_dests)]
-    if sel_ports:
-        df_seas = df_seas[df_seas["port_group"].isin(sel_ports)]
-    if sel_carriers:
-        df_seas = df_seas[df_seas["carrier"].isin(sel_carriers)]
-
-    wk_df = (
-        df_seas.groupby(["my", "week"])["mt"].sum().reset_index()
-        .sort_values(["my", "week"])
-    )
-    wk_df["tmt"] = wk_df["mt"] / 1000
-
-    _SEAS_PALETTE = [
-        "#0693e3","#4a6741","#f9a825","#ef5350","#ab47bc",
-        "#26c6da","#ff7043","#78909c","#a5d6a7","#ffe082",
+    t_dest, l_dest = top_lines("dest")
+    t_reg, l_reg = top_lines("region")
+    tiles = [
+        _insp_tile(f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}", _insp_fmt(w_cur, unit), unit,
+                   [_insp_delta_line(_insp_pct(w_cur, w_prev), "vs prior week"),
+                    _insp_delta_line(_insp_pct(w_cur, w_ly), "vs same week last year"),
+                    _insp_delta_line(_insp_pct(w_cur, w_oly), "vs 6-yr Olympic avg")]),
+        _insp_tile(f"{my_label} to date · through week {sel_week}", _insp_fmt(c_cur, unit), unit,
+                   [_insp_delta_line(_insp_pct(c_cur, c_ly), "vs last year"),
+                    _insp_delta_line(_insp_pct(c_cur, c_oly), "vs 6-yr Olympic avg")]),
+        _insp_tile("Top destination", f'<span style="font-size:1.35rem">{t_dest}</span>', "", l_dest),
+        _insp_tile("Top origin region", f'<span style="font-size:1.35rem">{t_reg}</span>', "", l_reg),
     ]
-    fig_seas = go.Figure()
-    for idx, my_yr in enumerate(sorted(all_chart_my, reverse=True)):
-        sub = wk_df[wk_df["my"] == my_yr].copy()
-        if sub.empty:
-            continue
-        sub["cum_tmt"] = sub["tmt"].cumsum()
-        is_cur = (my_yr == sel_my)
-        my_lbl = f"{my_yr}/{str(my_yr+1)[-2:]}"
-        color = JSA_CYAN if is_cur else _SEAS_PALETTE[idx % len(_SEAS_PALETTE)]
-        fig_seas.add_trace(go.Scatter(
-            x=sub["week"], y=sub["cum_tmt"],
-            mode="lines", name=my_lbl,
-            line=dict(color=color, width=2.5 if is_cur else 1.3,
-                      dash="solid" if is_cur else "dot"),
-            opacity=1.0 if is_cur else 0.7,
-            hovertemplate=f"{my_lbl} · Wk %{{x}}: %{{y:,.0f}} TMT<extra></extra>",
-        ))
-    fig_seas.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="ISO Week of Year", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(title="Cumulative TMT", gridcolor="#2e353d", showgrid=True),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10), height=400,
-    )
-    st.plotly_chart(fig_seas, use_container_width=True)
+    for col, html in zip(st.columns(4), tiles):
+        col.markdown(html, unsafe_allow_html=True)
 
-    # ── Detail table ──────────────────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Destination Detail Table")
-    tbl_df = (
-        df_my.groupby(["dest", "port_group", "carrier"])["mt"]
-        .sum().reset_index().sort_values("mt", ascending=False)
-    )
-    tbl_df["tmt"] = (tbl_df["mt"] / 1000).round(1)
-    tbl_df = tbl_df.rename(columns={
-        "dest": "Destination", "port_group": "Port Region",
-        "carrier": "Carrier", "tmt": "TMT",
-    })[["Destination", "Port Region", "Carrier", "TMT"]]
+    when = (f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}" if view == "Weekly"
+            else f"{my_label} to date · through week {sel_week} ({week_end(sel_week):%b %d, %Y})")
 
-    dl_col, _ = st.columns([1, 6])
-    with dl_col:
-        st.download_button(
-            "⬇ CSV", data=tbl_df.to_csv(index=False),
-            file_name=f"inspections_{grain_label}_{sel_my}.csv",
-            mime="text/csv", key="dl_insp_tbl",
-        )
-    st.dataframe(tbl_df, use_container_width=True, height=360)
+    # ── weekly pace ───────────────────────────────────────────────────────────
+    _insp_sec("Weekly pace")
+    _insp_plot(_insp_fig_weekly(dff, M, C, sel_my, sel_week, last_w, first_thu, view, seg, unit, grain, my_label, logo),
+               "insp_fig_weekly")
+
+    y1, y2, _ = st.columns([2, 1.4, 3])
+    with y1:
+        years_mode = st.segmented_control("Compare with", ["5 prior years", "10 prior years", "All years"],
+                                          default="5 prior years", key="insp_years") or "5 prior years"
+    smooth = False
+    if view == "Weekly":
+        with y2:
+            smooth = st.toggle("4-week average", key="insp_smooth", help="Smooths the weekly lines; weekly volumes swing with vessel timing.")
+    _insp_plot(_insp_fig_multi(M, C, sel_my, view, years_mode, smooth, first_thu, unit, grain, start_month, logo),
+               "insp_fig_multi")
+
+    # ── where it went ─────────────────────────────────────────────────────────
+    _insp_sec("Where it went")
+    if view_df["v"].sum() <= 0:
+        st.info("Nothing was inspected for these filters in the selected period.")
+    else:
+        s1, _ = st.columns([1.6, 3.4])
+        top_n = s1.slider("Destinations shown", 5, 30, 12, key="insp_topn")
+        cl, cr = st.columns([3, 2])
+        fig = _insp_fig_hbar(view_df, "dest", seg, top_n, unit, f"Top destinations ({unit})", when, logo=logo)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_dest")
+        fig = _insp_fig_donut(view_df, "dest", unit, "Share by destination", when)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_pie")
+
+        # ── where it shipped from ─────────────────────────────────────────────
+        _insp_sec("Where it shipped from")
+        s2, _ = st.columns([1.6, 3.4])
+        with s2:
+            level = st.segmented_control("Origin by", ["Region", "Port"], default="Region", key="insp_lvl") or "Region"
+        by = "region" if level == "Region" else "port"
+        ol, orr = st.columns([3, 2])
+        fig = _insp_fig_hbar(view_df, by, seg, 20, unit, f"Inspections by U.S. {level.lower()} ({unit})", when, logo=logo)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_origin")
+        fig = _insp_fig_donut(view_df, "carrier", unit, "Share by carrier", when, colors=_INSP_CARRIER_COLOR)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_carrier")
+
+    # ── detail ────────────────────────────────────────────────────────────────
+    _insp_sec("Detail by destination")
+    ly_ytd = dff[(dff["my"] == sel_my - 1) & (dff["my_week"] <= sel_week)]
+    wk_col, ytd_col, ly_col = f"Week {sel_week}", f"{my_label} to date", "Same period last year"
+    tbl = pd.DataFrame({wk_col: wk.groupby("dest")["v"].sum(), ytd_col: ytd.groupby("dest")["v"].sum(),
+                        ly_col: ly_ytd.groupby("dest")["v"].sum()}).fillna(0.0)
+    tbl = tbl[(tbl[ytd_col] > 0) | (tbl[ly_col] > 0)].sort_values(ytd_col, ascending=False)
+    tbl["% vs last year"] = np.where(tbl[ly_col] > 0, (tbl[ytd_col] / tbl[ly_col].where(tbl[ly_col] > 0) - 1) * 100, np.nan)
+    tbl["Share of year to date"] = tbl[ytd_col] / tbl[ytd_col].sum() * 100 if tbl[ytd_col].sum() > 0 else np.nan
+    tbl.index.name = "Destination"
+    st.download_button("Download CSV", data=tbl.round(3).to_csv(), file_name=f"us_{code.lower()}_inspections_{my_label.replace('/', '-')}.csv",
+                       mime="text/csv", key="insp_dl")
+    vf = "{:,.1f}" if unit == "Mbu" else "{:,.0f}"
+    show = tbl.head(60).rename(columns={c: f"{c} ({unit})" for c in (wk_col, ytd_col, ly_col)})
+    show["% vs last year"] = show["% vs last year"].map(lambda p: "—" if pd.isna(p) else f"{p:+.1f}%")   # a null cell would read "None"
+    _insp_table(show.style.format({show.columns[0]: vf, show.columns[1]: vf, show.columns[2]: vf,
+                                   "Share of year to date": "{:.1f}%"}, na_rep="—"), 420)
+
+    mo = pd.Timestamp(year=2000, month=start_month, day=1).strftime("%B")
+    st.markdown(
+        f'<div class="insp-note">Source: USDA Federal Grain Inspection Service export inspections (AMS AgTransport, '
+        f'"Grain Inspections"), by week ending Thursday. {grain} marketing years start on {mo} 1; a week that straddles '
+        f'the start is split by certificate date, so year-to-date totals follow USDA\'s marketing year (this is also how '
+        f'jpsi.com/export-inspections-dashboard counts them). Inspections are a leading indicator of exports, not a customs count: '
+        f'only grain actually inspected is captured, and rail and truck shipments to Canada and Mexico are inspected in part. '
+        f'"6-yr Olympic avg" drops the highest and lowest of the six prior marketing years, as elsewhere in this dashboard.</div>',
+        unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EXPORT SALES TAB  (USDA FAS ESR API)
-# ─────────────────────────────────────────────────────────────────────────────
+@st.fragment
+def _run_export_inspections_tab(use_bushels: bool = False):
+    """US export inspections tab. A fragment, so its filters rerun only this tab, not all ten."""
+    try:
+        _insp_render(use_bushels)
+    except Exception as e:
+        st.error(f"Inspections tab error: {e}")
+
+
+# ── USDA FAS gateway: the Export Sales tab, the monthly US estimates and the PSD call all use it ──
 
 _ESR_GATEWAY = "https://api.fas.usda.gov"
 _ESR_API_KEY = "6hcX4IEwu7kreNrxoGQnPhctd6ozXmoPQTjk6Ewi"
-_ESR_COMMODITIES = {
-    "Corn":         401,
-    "Soybeans":     801,
-    "Soybean Meal": 901,
-    "Wheat - All":  107,
-    "Sorghum":      701,
-}
-_ESR_BU_FACTOR = {401: 39.368, 801: 36.744, 107: 36.744, 701: 39.368}
-# MT → MBU per 1 MT (multiply tmt by factor to get MBU)
-
-# ── Vessel Lineup constants ───────────────────────────────────────────────────
-_VL_GREEN      = "#5e7164"
-_VL_GREEN_LT   = "#8db89a"
-_VL_BG         = "#141c18"
-_VL_BORDER     = "#253328"
-_VL_TEXT       = "#e8ede9"
-_VL_MUTED      = "#7a9485"
-_VL_COL_POS    = "#8db89a"
-_VL_COL_NEG    = "#e07070"
-_VL_COL_AMB    = "#c4b456"
-_VL_COL_BLUE   = "#6fa8c4"
-_VL_COL_PURP   = "#9b89c4"
-_VL_COL_ORG    = "#c4896a"
-_VL_COL_TEAL   = "#6ac4b8"
-_VL_COMM_COLORS = {
-    "Corn":          _VL_COL_AMB,
-    "Wheat":         "#e8c96a",
-    "Soybeans/Meal": _VL_COL_POS,
-    "Sorghum":       _VL_COL_ORG,
-    "Dist. Grains":  _VL_COL_PURP,
-    "Rice":          "#c46a8d",
-    "Mixed Cargo":   _VL_COL_BLUE,
-    "Other":         "#5a6660",
-}
-_VL_REGION_COLORS = {
-    "USG": _VL_COL_BLUE,
-    "PNW": _VL_COL_POS,
-    "TXG": _VL_COL_AMB,
-}
-_VL_DATA_FILENAME  = "Vessel Lineup - US.xlsx"
-_VL_REPO_FILE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), _VL_DATA_FILENAME
-)
-_VL_ONEDRIVE_PATH  = (
-    r"C:\Users\KoltenPostin\John Stewart and Associates"
-    r"\JSA - Documents\Research Analyst\Misc\Boat Lineup\Vessel Lineup - US.xlsx"
-)
-_VL_BASE_LAYOUT = dict(
-    plot_bgcolor="#1a2620",
-    paper_bgcolor=_VL_BG,
-    font=dict(color=_VL_MUTED, family="Arial"),
-    xaxis=dict(gridcolor=_VL_BORDER, linecolor=_VL_BORDER,
-               tickfont=dict(color=_VL_MUTED)),
-    yaxis=dict(gridcolor=_VL_BORDER, linecolor=_VL_BORDER,
-               tickfont=dict(color=_VL_MUTED)),
-    legend=dict(bgcolor="#1a2620", bordercolor=_VL_BORDER, borderwidth=1,
-                font=dict(color=_VL_TEXT)),
-    margin=dict(l=10, r=10, t=36, b=10),
-    title_font=dict(size=12, color=_VL_MUTED),
-    title_x=0,
-)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_esr_countries() -> dict:
-    """ESR country code → description."""
-    try:
-        url = f"{_ESR_GATEWAY}/api/esr/countries?api_key={_ESR_API_KEY}"
-        with urllib.request.urlopen(url, timeout=15) as r:
-            data = json.loads(r.read())
-        return {c["countryCode"]: c["countryDescription"].strip() for c in data}
-    except Exception:
-        return {}
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_esr_release_dates() -> list:
-    try:
-        url = f"{_ESR_GATEWAY}/api/esr/datareleasedates?api_key={_ESR_API_KEY}"
-        with urllib.request.urlopen(url, timeout=15) as r:
-            return json.loads(r.read())
-    except Exception:
-        return []
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_esr_exports(commodity_code: int, market_year: int) -> list:
-    """ESR weekly export sales for one commodity + market year → list of records."""
+    """ESR weekly export sales for one commodity + market year → list of records (feeds the monthly US estimates;
+    the Export Sales tab has its own loader, _esr_history)."""
     try:
         url = (
             f"{_ESR_GATEWAY}/api/esr/exports/commodityCode/{commodity_code}"
@@ -5097,891 +5542,1433 @@ def _load_esr_exports(commodity_code: int, market_year: int) -> list:
         return []
 
 
-def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
-    """Weekly Export Sales tab — USDA FAS ESR API with full drill-down filters."""
+# ─────────────────────────────────────────────────────────────────────────────
+# EXPORT SALES TAB  (USDA FAS Export Sales Reporting, weekly)
+#   Source: the FAS ESR API, one call per commodity and marketing year, every destination, every week. Layout follows
+#   jpsi.com/export-sales-dashboard (summary table, weekly series, marketing-year overlay, destinations, country table)
+#   plus this dashboard's pace comparisons, filter panel and unit toggle; the destination map is left out.
+#   A marketing year's week n ends on the first Thursday on or after the year's first day plus 7 x (n-1) days (checked
+#   against the first report of every commodity), so "year ago" and the Olympic average are the same marketing-year week.
+#   ESR labels a year by the calendar year it ENDS in (corn 2026/27 = 2027); beef and pork run January-December.
+# ─────────────────────────────────────────────────────────────────────────────
 
-    _DIV = '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>'
-    dec  = 1 if use_bushels else 0
+# label -> (ESR commodity code, marketing-year start month, pounds per bushel or None where USDA has no bushel measure)
+_ESR_COMMODITIES = {
+    "Corn":          (401, 9, 56),
+    "Soybeans":      (801, 9, 60),
+    "Soybean meal":  (901, 10, None),
+    "Soybean oil":   (902, 10, None),
+    "Wheat - all":   (107, 6, 60),
+    "Wheat - SRW":   (102, 6, 60),
+    "Wheat - HRW":   (101, 6, 60),
+    "Wheat - HRS":   (103, 6, 60),
+    "Wheat - white": (104, 6, 60),
+    "Sorghum":       (701, 9, 56),
+    "Rice":          (1505, 8, None),
+    "Beef":          (1701, 1, None),
+    "Pork":          (1702, 1, None),
+}
+_ESR_START = {code: month for code, month, _lb in _ESR_COMMODITIES.values()}
+_ESR_DEPTH = 11                                    # marketing years loaded per commodity: the current one and ten before it
+_ESR_FIELDS = {                                    # ESR record field -> column (metric tons)
+    "currentMYNetSales": "net", "grossNewSales": "gross", "weeklyExports": "exp", "accumulatedExports": "acc",
+    "outstandingSales": "out", "currentMYTotalCommitment": "commit", "nextMYNetSales": "nxt_net",
+    "nextMYOutstandingSales": "nxt_out",
+}
+_ESR_COLS = ["week", "cc", "my", "wk"] + list(_ESR_FIELDS.values())
+# data type -> (column, True for a weekly flow that adds up over the year, False for a balance as of the week)
+_ESR_METRICS = {
+    "Net sales":                   ("net",     True),
+    "Gross new sales":             ("gross",   True),
+    "Weekly exports":              ("exp",     True),
+    "Accumulated exports":         ("acc",     False),
+    "Outstanding sales":           ("out",     False),
+    "Total commitments":           ("commit",  False),
+    "Net sales (next MY)":         ("nxt_net", True),
+    "Outstanding sales (next MY)": ("nxt_out", False),
+}
+_ESR_LABEL = {col: label for label, (col, _flow) in _ESR_METRICS.items()}
+_ESR_FLOW = {col: flow for _label, (col, flow) in _ESR_METRICS.items()}
+_ESR_RESET_KEYS = ("esr_my_", "esr_week_", "esr_metric", "esr_reg_", "esr_dst_", "esr_units_")
+_ESR_KEEP = ("esr_comm", "esr_my_", "esr_week_", "esr_metric", "esr_reg_", "esr_dst_", "esr_range", "esr_kind", "esr_ma", "esr_years",
+             "esr_cum", "esr_smooth", "esr_period", "esr_topn", "esr_pct")
+_ESR_NAME_FIX = {
+    "KOREA, REPUBLIC OF": "South Korea", "KOREA, DEMOCRATIC PEOPLE'S REP": "North Korea",
+    "CHINA, PEOPLES REPUBLIC OF": "China", "RUSSIAN FEDERATION": "Russia", "BYELARUS, REPUBLIC OF": "Belarus",
+    "EUROPEAN UNION - 27": "European Union", "UNKNOWN": "Unknown destination", "TANZANIA, UNITED REPUBLIC OF": "Tanzania",
+    "CONGO, DEMOCRATIC REPUBLIC OF": "DR Congo", "CONGO (BRAZZAVILLE)": "Congo (Brazzaville)",
+    "BOSNIA-HERCEGOVINA": "Bosnia and Herzegovina", "MACEDONIA (SKOPJE)": "North Macedonia",
+    "DJIBOUTI AFARS-ISSAS": "Djibouti", "MAURITIUS AND DEPENDENTS": "Mauritius", "MALTA & GOZO": "Malta",
+    "WESTERN SAMOA": "Samoa", "SURINAM": "Suriname", "COTE D'IVOIRE": "Cote d'Ivoire",
+    "VIRGIN ISLANDS OF THE U.S.": "US Virgin Islands", "OTHER PACIFIC ISLANDS, NEC": "Other Pacific Islands",
+    "WESTERN AFRICA, NEC": "Western Africa", "US MINOR OUTLYING ISLAND": "US Minor Outlying Islands",
+    "YEMEN (ADEN)": "Yemen", "ST. HELENA (BR W AFR)": "St. Helena", "FRENCH IND. OCEAN TERRITORY": "French Indian Ocean Territory",
+}
+_ESR_REGION_FIX = {"EUROPEAN UNION - 27": "European Union", "FORMER SOVIET UNION-12": "Former Soviet Union",
+                   "OTHER ASIA AND OCEANIA": "Other Asia & Oceania"}
+_ESR_TITLE = {"Soybeans": "Soybean", "Soybean meal": "Soybean Meal", "Soybean oil": "Soybean Oil", "Wheat - all": "Wheat",
+              "Wheat - SRW": "SRW Wheat", "Wheat - HRW": "HRW Wheat", "Wheat - HRS": "HRS Wheat", "Wheat - white": "White Wheat"}
 
-    # ── Connectivity check ────────────────────────────────────────────────────
-    with st.spinner("Loading ESR release dates…"):
-        release_dates = _load_esr_release_dates()
-    if not release_dates:
-        st.error("⚠️ Unable to reach the USDA FAS ESR API. Try refreshing.")
-        return
 
-    # ── Top controls: Commodity + Market Year ─────────────────────────────────
-    c1, c2 = st.columns([2, 2])
-    with c1:
-        commodity = st.selectbox(
-            "Commodity", list(_ESR_COMMODITIES.keys()), key="esr_commodity"
-        )
-    comm_code = _ESR_COMMODITIES[commodity]
-    bu_factor = _ESR_BU_FACTOR.get(comm_code)
+def _esr_name(raw: str) -> str:
+    """An ESR destination as it reads best: 'KOREA, REPUBLIC OF' -> 'South Korea', 'BAHAMAS, THE' -> 'Bahamas'."""
+    s = re.sub(r"\s+", " ", str(raw)).strip()
+    fixed = _ESR_NAME_FIX.get(s.upper())
+    if fixed:
+        return fixed
+    s = re.sub(r",\s*(REPUBLIC OF|THE)$", "", s, flags=re.I)
+    s = s.title()
+    return re.sub(r"(?<=\s)(And|Of|The)\b", lambda m: m.group(1).lower(), s)
 
-    comm_dates = sorted(
-        [d for d in release_dates if d["commodityCode"] == comm_code],
-        key=lambda d: d["marketYear"], reverse=True,
-    )
-    available_years = [d["marketYear"] for d in comm_dates]
-    cur_my = available_years[0] if available_years else pd.Timestamp.now().year
 
-    with c2:
-        my_opts = [
-            f"Current MY ({cur_my})" if y == cur_my else str(y)
-            for y in available_years
-        ]
-        my_sel_label = st.selectbox("Market Year", my_opts, key="esr_my")
-    sel_my_year = available_years[my_opts.index(my_sel_label)]
+def _esr_first_thu(code: int, my: int) -> pd.Timestamp:
+    """Week ending of week 1 of ESR marketing year `my` (the calendar year it ends in) of commodity `code`."""
+    month = _ESR_START[code]
+    return _insp_first_thu(my if month == 1 else my - 1, month)
 
-    # ── Fetch ─────────────────────────────────────────────────────────────────
-    with st.spinner(f"Fetching {commodity} MY {sel_my_year}…"):
-        records       = _load_esr_exports(comm_code, sel_my_year)
-        country_names = _load_esr_countries()
 
-    if not records:
-        st.warning(f"No ESR data for {commodity} MY {sel_my_year}.")
-        return
+def _esr_my_label(code: int, my: int) -> str:
+    return str(my) if _ESR_START[code] == 1 else f"{my - 1}/{str(my)[-2:]}"
 
-    def _cn(code):
-        return country_names.get(code, str(code)).title()
 
-    def _parse_esr(recs, my_year):
-        rows = []
-        for r in recs:
+def _esr_get(path: str):
+    """GET one ESR endpoint -> parsed JSON. Retries a rate-limit or gateway hiccup, then raises a RuntimeError that never
+    carries the URL (it holds the API key), so a bad moment is reported but never cached."""
+    url = f"{_ESR_GATEWAY}/api/esr/{path}?api_key={_ESR_API_KEY}"
+    why = "no answer"
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            why = f"HTTP {e.code}"
+            if e.code not in (429, 500, 502, 503, 504):
+                break
+        except Exception as e:                                  # timeouts, resets, a page that is not JSON
+            why = type(e).__name__
+        time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"the USDA export-sales service did not answer ({why}: {path.split('/')[0]})")
+
+
+def _esr_prepare(rows: list, code: int, my: int) -> pd.DataFrame:
+    """Raw ESR records of one commodity and marketing year -> week, cc (country code), my, wk (marketing-year week) and
+    the eight measures in metric tons."""
+    if not rows:
+        return pd.DataFrame(columns=_ESR_COLS)
+    raw = pd.DataFrame(rows)
+    df = pd.DataFrame({"week": pd.to_datetime(raw["weekEndingDate"], errors="coerce").dt.normalize(),
+                       "cc": pd.to_numeric(raw["countryCode"], errors="coerce")})
+    for field, col in _ESR_FIELDS.items():
+        df[col] = pd.to_numeric(raw[field], errors="coerce").fillna(0.0) if field in raw else 0.0
+    df = df.dropna(subset=["week", "cc"]).copy()
+    df["cc"] = df["cc"].astype(int)
+    df["my"] = int(my)
+    df["wk"] = ((df["week"] - _esr_first_thu(code, my)).dt.days // 7 + 1).astype(int)
+    return df[df["wk"] >= 1][_ESR_COLS].reset_index(drop=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _esr_catalog() -> dict:
+    """Destinations with their region, and each commodity's current marketing year. Raises on a failed call, so
+    st.cache_data never keeps an empty answer for an hour."""
+    regions = {int(r["regionId"]): _ESR_REGION_FIX.get(str(r["regionName"]).strip().upper(), str(r["regionName"]).strip().title())
+               for r in _esr_get("regions")}
+    country = {int(c["countryCode"]): (_esr_name(c["countryDescription"]), regions.get(c.get("regionId"), "Other"))
+               for c in _esr_get("countries")}
+    current: dict = {}
+    for d in _esr_get("datareleasedates"):
+        code = int(d["commodityCode"])
+        current[code] = max(int(d["marketYear"]), current.get(code, 0))
+    return {"country": country, "current": current}
+
+
+@st.cache_resource(ttl=3600, show_spinner=False)
+def _esr_store() -> dict:
+    """Prepared marketing-year frames, kept for an hour: {(commodity code, marketing year): DataFrame}. A resource, not
+    st.cache_data, so worker threads can fill it and a year fetched once is never fetched again when another is added."""
+    return {"lock": threading.Lock(), "frames": {}, "bad": {}}
+
+
+def _esr_fetch_my(code: int, my: int) -> pd.DataFrame:
+    return _esr_prepare(_esr_get(f"exports/commodityCode/{code}/allCountries/marketYear/{my}"), code, my)
+
+
+def _esr_history(code: int, current: int, depth: int = _ESR_DEPTH, store: dict | None = None):
+    """(frame, failed years): the `depth` marketing years ending at `current`, every destination. Years not held yet are
+    fetched in parallel. A past year that fails is left out and tried again after five minutes (not on every click); the
+    current year failing raises. `store` lets a worker thread (which must not call st.cache_resource) pass in the one it was handed."""
+    store = store if store is not None else _esr_store()
+    years = [current - i for i in range(depth)]
+    now = time.time()
+    with store["lock"]:
+        todo = [y for y in years if (code, y) not in store["frames"] and now - store["bad"].get((code, y), (0.0, ""))[0] > 300]
+    failed: dict = {y: store["bad"][(code, y)][1] for y in years if (code, y) not in store["frames"] and y not in todo
+                    and (code, y) in store["bad"]}
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(6, len(todo))) as pool:
+            futures = {y: pool.submit(_esr_fetch_my, code, y) for y in todo}
+        for y, fut in futures.items():                          # the with-block has waited for every call
             try:
-                rows.append({
-                    "country_code": r["countryCode"],
-                    "country":      _cn(r["countryCode"]),
-                    "week_date":    pd.Timestamp(r["weekEndingDate"]),
-                    "net_sales":    r.get("currentMYNetSales", 0) / 1000,
-                    "exports":      r.get("weeklyExports", 0) / 1000,
-                    "gross_sales":  r.get("grossNewSales", 0) / 1000,
-                    "outstanding":  r.get("outstandingSales", 0) / 1000,
-                    "ytd_exports":  r.get("accumulatedExports", 0) / 1000,
-                    "ytd_commit":   r.get("currentMYTotalCommitment", 0) / 1000,
-                    "next_sales":   r.get("nextMYNetSales", 0) / 1000,
-                    "next_outstanding": r.get("nextMYOutstandingSales", 0) / 1000,
-                    "my_year":      my_year,
-                })
-            except Exception:
-                pass
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-
-    df_full = _parse_esr(records, sel_my_year)
-    if df_full.empty:
-        st.warning("Could not parse ESR records.")
-        return
-
-    numeric_cols = ["net_sales","exports","gross_sales","outstanding",
-                    "ytd_exports","ytd_commit","next_sales","next_outstanding"]
-    if use_bushels and bu_factor:
-        df_full[numeric_cols] = df_full[numeric_cols] * bu_factor
-
-    all_countries = sorted(df_full["country"].dropna().unique().tolist())
-    all_weeks     = sorted(df_full["week_date"].unique())
-    latest_date   = df_full["week_date"].max()
-    latest_date_str = latest_date.strftime("%b %d, %Y")
-
-    # ── Metric definitions ────────────────────────────────────────────────────
-    _ESR_METRICS = {
-        "Net Sales":             "net_sales",
-        "Gross Sales":           "gross_sales",
-        "Weekly Exports":        "exports",
-        "Outstanding Sales":     "outstanding",
-        "YTD Exports":           "ytd_exports",
-        "YTD Commitment":        "ytd_commit",
-        "New Crop Net Sales":    "next_sales",
-        "New Crop Outstanding":  "next_outstanding",
-    }
-    _METRIC_COLORS = {
-        "net_sales":       JSA_CYAN,
-        "gross_sales":     "#26c6da",
-        "exports":         JSA_GREEN,
-        "outstanding":     "#f9a825",
-        "ytd_exports":     "#ab47bc",
-        "ytd_commit":      "#ff7043",
-        "next_sales":      "#78909c",
-        "next_outstanding":"#a5d6a7",
-    }
-
-    # ── Filter panel ──────────────────────────────────────────────────────────
-    with st.expander("🔽  Filters", expanded=True):
-        fa, fb = st.columns([3, 2])
-        with fa:
-            sel_countries = st.multiselect(
-                "Destination Country", all_countries, default=[],
-                key="esr_countries",
-                help="Leave blank to include all countries",
-            )
-        with fb:
-            top_n_dest = st.slider("Top N destinations", 5, 40, 20,
-                                   key="esr_top_n")
-
-        fc, fd = st.columns(2)
-        with fc:
-            wk_metrics = st.multiselect(
-                "Weekly chart — metrics to show",
-                list(_ESR_METRICS.keys()),
-                default=["Net Sales", "Weekly Exports"],
-                key="esr_wk_metrics",
-            )
-        with fd:
-            cum_metric_label = st.selectbox(
-                "Cumulative chart — metric",
-                ["YTD Exports", "YTD Commitment", "Net Sales", "Outstanding Sales"],
-                key="esr_cum_metric",
-            )
-
-        fe, _ = st.columns([3, 1])
-        with fe:
-            comp_my_opts = [str(y) for y in available_years if y != sel_my_year]
-            comp_my_sel = st.multiselect(
-                "Compare additional Market Years (cumulative chart)",
-                comp_my_opts,
-                default=comp_my_opts[:2],
-                key="esr_comp_my",
-            )
-
-    # Apply destination filter
-    df = df_full.copy()
-    if sel_countries:
-        df = df[df["country"].isin(sel_countries)]
-
-    if df.empty:
-        st.warning("No data matches current filters.")
-        return
-
-    # ── Latest / prior week snapshots ─────────────────────────────────────────
-    def _sum(frame, col):
-        return float(frame[col].sum()) if not frame.empty else 0.0
-
-    def _delta(cur, prev):
-        return ((cur / prev - 1) * 100) if prev and prev != 0 else None
-
-    latest    = df[df["week_date"] == latest_date]
-    prior_dates = sorted(df["week_date"].unique())
-    prev_date   = prior_dates[-2] if len(prior_dates) >= 2 else None
-    prev        = df[df["week_date"] == prev_date] if prev_date else pd.DataFrame()
-
-    wk_net  = _sum(latest, "net_sales")
-    wk_exp  = _sum(latest, "exports")
-    wk_out  = _sum(latest, "outstanding")
-    wk_ytd  = _sum(latest, "ytd_exports")
-    wk_comm = _sum(latest, "ytd_commit")
-
-    pw_net  = _sum(prev, "net_sales")
-    pw_exp  = _sum(prev, "exports")
-
-    # Prior MY for YoY
-    with st.spinner(""):
-        prior_recs = _load_esr_exports(comm_code, sel_my_year - 1)
-    df_py = _parse_esr(prior_recs, sel_my_year - 1)
-    if use_bushels and bu_factor and not df_py.empty:
-        df_py[numeric_cols] = df_py[numeric_cols] * bu_factor
-    if sel_countries and not df_py.empty:
-        df_py = df_py[df_py["country"].isin(sel_countries)]
-    py_latest = df_py[df_py["week_date"] == latest_date] if not df_py.empty else pd.DataFrame()
-    py_ytd    = _sum(py_latest, "ytd_exports")
-
-    # ── Stat tiles ────────────────────────────────────────────────────────────
-    def _esr_tile(label, val, sub="", pct=None, pct_label="WoW", acc=None):
-        acc = acc or JSA_CYAN
-        d = ""
-        if pct is not None:
-            c = "#4caf50" if pct >= 0 else "#ef5350"
-            s = "+" if pct >= 0 else ""
-            d = f'<div style="font-size:10px;color:{c};font-weight:700;margin-top:3px;">{s}{pct:.1f}% {pct_label}</div>'
-        v = f"{val:,.{dec}f}"
-        return (
-            f'<div style="background:#1e2124;border:1px solid #2e353d;'
-            f'border-top:3px solid {acc};border-radius:6px;'
-            f'padding:12px 16px;text-align:center;flex:1;min-width:140px;">'
-            f'<div style="font-size:9px;font-weight:700;color:#5a6878;'
-            f'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">{label}</div>'
-            f'<div style="font-size:22px;font-weight:700;color:{JSA_CYAN};'
-            f'line-height:1.1;font-family:Arial;">{v}</div>'
-            f'<div style="font-size:10px;color:#5a6878;margin-top:2px;">{sub}</div>'
-            f'{d}</div>'
-        )
-
-    tiles_html = (
-        _esr_tile("Weekly Net Sales",  wk_net,  unit_short, _delta(wk_net, pw_net), "WoW", JSA_CYAN) +
-        _esr_tile("Weekly Exports",    wk_exp,  unit_short, _delta(wk_exp, pw_exp), "WoW", JSA_GREEN) +
-        _esr_tile("Outstanding Sales", wk_out,  unit_short, acc="#f9a825") +
-        _esr_tile("YTD Exports",       wk_ytd,  unit_short, _delta(wk_ytd, py_ytd), "YoY", "#ab47bc") +
-        _esr_tile("YTD Commitment",    wk_comm, unit_short, acc="#ff7043")
-    )
-    st.markdown(
-        f'<div style="font-size:11px;color:#5a6878;margin-bottom:8px;">'
-        f'Week ending: <b style="color:#cdd9e5;">{latest_date_str}</b>'
-        f'&nbsp;·&nbsp;MY {sel_my_year}&nbsp;·&nbsp;{commodity}'
-        + (f'&nbsp;·&nbsp;<span style="color:#f9a825;">Filtered: {", ".join(sel_countries[:3])}'
-           + ("…" if len(sel_countries) > 3 else "") + "</span>"
-           if sel_countries else "") +
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div style="display:flex;gap:10px;margin-bottom:18px;">{tiles_html}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(_DIV, unsafe_allow_html=True)
-
-    # ── Weekly metric bar chart ───────────────────────────────────────────────
-    st.markdown("#### Weekly Metrics")
-    wk_totals = (
-        df.groupby("week_date")[numeric_cols].sum().reset_index()
-        .sort_values("week_date")
-    )
-
-    if wk_metrics:
-        fig_wk = go.Figure()
-        for ml in wk_metrics:
-            col_key = _ESR_METRICS[ml]
-            fig_wk.add_trace(go.Bar(
-                x=wk_totals["week_date"], y=wk_totals[col_key],
-                name=ml, marker_color=_METRIC_COLORS.get(col_key, JSA_CYAN),
-                hovertemplate=f"Wk %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra>{ml}</extra>",
-            ))
-        fig_wk.update_layout(
-            barmode="group",
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
-            yaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10), height=360,
-        )
-        st.plotly_chart(fig_wk, use_container_width=True)
-    else:
-        st.info("Select at least one metric in Filters to show the weekly chart.")
-
-    # ── Cumulative chart with multi-MY comparison ─────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    cum_col = _ESR_METRICS.get(cum_metric_label, "ytd_exports")
-    st.markdown(f"#### Cumulative {cum_metric_label} — MY Comparison")
-
-    comp_years = [int(y) for y in comp_my_sel]
-    all_cum_years = sorted(set([sel_my_year] + comp_years), reverse=True)
-
-    fig_cum = go.Figure()
-    _CUM_PAL = [JSA_CYAN, "#4a6741", "#f9a825", "#ef5350", "#ab47bc", "#26c6da", "#ff7043"]
-
-    for idx, yr in enumerate(all_cum_years):
-        if yr == sel_my_year:
-            yr_df = df.copy()
-        else:
-            with st.spinner(""):
-                yr_recs = _load_esr_exports(comm_code, yr)
-            yr_df = _parse_esr(yr_recs, yr)
-            if use_bushels and bu_factor and not yr_df.empty:
-                yr_df[numeric_cols] = yr_df[numeric_cols] * bu_factor
-            if sel_countries and not yr_df.empty:
-                yr_df = yr_df[yr_df["country"].isin(sel_countries)]
-
-        if yr_df.empty:
-            continue
-
-        # Build cumulative: sum across countries per week, then cumsum
-        cum_wk = (
-            yr_df.groupby("week_date")[cum_col].sum()
-            .sort_index().cumsum().reset_index()
-            .rename(columns={cum_col: "cum_val"})
-        )
-        is_sel = (yr == sel_my_year)
-        color  = _CUM_PAL[idx % len(_CUM_PAL)]
-        fig_cum.add_trace(go.Scatter(
-            x=cum_wk["week_date"], y=cum_wk["cum_val"],
-            mode="lines", name=f"MY {yr}",
-            line=dict(color=color, width=2.5 if is_sel else 1.5,
-                      dash="solid" if is_sel else "dot"),
-            opacity=1.0 if is_sel else 0.75,
-            hovertemplate=f"MY {yr} · %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra></extra>",
-        ))
-
-    fig_cum.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(title=f"Cumulative {unit_short}", gridcolor="#2e353d", showgrid=True),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10), height=360,
-    )
-    st.plotly_chart(fig_cum, use_container_width=True)
-
-    # ── Destination charts ────────────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-
-    dest_metric_label = st.selectbox(
-        "Destination charts — show metric",
-        ["YTD Exports", "Outstanding Sales", "Net Sales", "YTD Commitment",
-         "Gross Sales", "Weekly Exports"],
-        key="esr_dest_metric",
-        help="Which metric to rank destinations by",
-    )
-    dest_col = _ESR_METRICS.get(dest_metric_label, "ytd_exports")
-
-    # dest_col is often one of the other columns (the default is ytd_exports); pandas 3 rejects
-    # a duplicated label in the column selection, so de-duplicate it.
-    _agg_cols = list(dict.fromkeys([dest_col, "outstanding", "ytd_exports", "net_sales", "ytd_commit"]))
-    dest_agg = (
-        latest.groupby("country")[_agg_cols].sum()
-        .reset_index().sort_values(dest_col, ascending=True)
-    )
-    top_dest_df = dest_agg.tail(top_n_dest)
-
-    col_bar, col_pie = st.columns(2)
-
-    with col_bar:
-        st.markdown(f"#### Top {top_n_dest} Destinations — {dest_metric_label}")
-        fig_dest = go.Figure(go.Bar(
-            x=top_dest_df[dest_col], y=top_dest_df["country"],
-            orientation="h",
-            marker_color=_METRIC_COLORS.get(dest_col, JSA_CYAN),
-            text=top_dest_df[dest_col].apply(lambda v: f"{v:,.{dec}f}"),
-            textposition="outside",
-            hovertemplate="%{y}: %{x:,.0f} " + unit_short + "<extra></extra>",
-        ))
-        fig_dest.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
-            yaxis=dict(gridcolor="#2e353d", showgrid=False),
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=max(320, len(top_dest_df) * 24),
-        )
-        st.plotly_chart(fig_dest, use_container_width=True)
-
-    with col_pie:
-        st.markdown(f"#### {dest_metric_label} Share (pie)")
-        pie_df = top_dest_df[top_dest_df[dest_col] > 0]
-        if not pie_df.empty:
-            fig_pie = go.Figure(go.Pie(
-                labels=pie_df["country"], values=pie_df[dest_col],
-                hole=0.45,
-                textfont=dict(color="#cdd9e5", size=10),
-                hovertemplate="%{label}: %{value:,.0f} " + unit_short + " (%{percent})<extra></extra>",
-            ))
-            fig_pie.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#cdd9e5", size=11),
-                legend=dict(bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=10, r=10, t=10, b=10), height=max(320, len(pie_df) * 24),
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-    # ── All-metrics country table ─────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Country Detail — Latest Week (all metrics)")
-
-    tbl = latest[["country","net_sales","gross_sales","exports","outstanding",
-                  "ytd_exports","ytd_commit","next_sales","next_outstanding"]].copy()
-    tbl = tbl[tbl[["net_sales","exports","outstanding","ytd_exports","ytd_commit"]]
-              .abs().sum(axis=1) > 0]
-    tbl = tbl.sort_values("ytd_exports", ascending=False).reset_index(drop=True)
-    for c in ["net_sales","gross_sales","exports","outstanding",
-               "ytd_exports","ytd_commit","next_sales","next_outstanding"]:
-        tbl[c] = tbl[c].round(dec)
-    tbl.columns = [
-        "Country", "Net Sales", "Gross Sales", "Exports", "Outstanding",
-        "YTD Exports", "YTD Commitment", "New Crop Net Sales", "New Crop Outstanding",
-    ]
-    dl_col, _ = st.columns([1, 6])
-    with dl_col:
-        st.download_button(
-            "⬇ CSV", data=tbl.to_csv(index=False),
-            file_name=f"esr_{commodity}_{sel_my_year}_{latest_date_str.replace(' ','')}.csv",
-            mime="text/csv", key="dl_esr_tbl",
-        )
-    st.dataframe(tbl, use_container_width=True, height=400)
-
-    # ── New crop callout ──────────────────────────────────────────────────────
-    next_net = _sum(latest, "next_sales")
-    next_out = _sum(latest, "next_outstanding")
-    if abs(next_net) + abs(next_out) > 0.01:
-        st.info(
-            f"**New Crop MY {sel_my_year + 1}:** "
-            f"Net Sales {next_net:,.{dec}f} {unit_short} · "
-            f"Outstanding {next_out:,.{dec}f} {unit_short} "
-            f"as of {latest_date_str}"
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VESSEL LINEUP HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _vl_comm(c):
-    if pd.isna(c):
-        return "Other"
-    c = str(c).strip().upper()
-    if "/" in c:
-        return "Mixed Cargo"
-    if c == "CORN" or c.startswith("CORN "):
-        return "Corn"
-    if any(x in c for x in ("SBM", "YSB", "SOY", "CANOLA")):
-        return "Soybeans/Meal"
-    if "WHT" in c or "WHEAT" in c:
-        return "Wheat"
-    if "SORGHUM" in c:
-        return "Sorghum"
-    if any(x in c for x in ("DDGS", "CGM", "CGFP", "GDDG")):
-        return "Dist. Grains"
-    if "RICE" in c:
-        return "Rice"
-    return "Other"
-
-
-@st.cache_data(show_spinner=False)
-def _vl_load_data(file_source, _mtime=None):
-    import io as _io
-    US_COLS = ["ELEVATOR", "VESSEL", "ATA", "STATUS", "MT",
-               "COMMODITY", "DESTINATION", "SAIL DATE"]
-    frames = {}
-    for region in ("USG", "PNW", "TXG"):
-        src = _io.BytesIO(file_source) if isinstance(file_source, bytes) else file_source
-        df = pd.read_excel(src, sheet_name=region, usecols=list(range(8)), header=0)
-        df.columns = US_COLS
-        df = df.dropna(how="all")
-        df["REGION"] = region
-        df["IS_RVT"] = df["MT"].astype(str).str.strip().str.upper() == "RVT"
-        df["MT_kMT"] = pd.to_numeric(df["MT"], errors="coerce")
-
-        def _stat(s):
-            if pd.isna(s):
-                return "Unknown"
-            s = str(s).strip().upper()
-            if s.startswith("SAIL"):
-                return "Sailed"
-            if s in ("LOADING", "PART-LDD", "IN PORT"):
-                return "Loading/In Port"
-            if s == "FILED":
-                return "Filed"
-            if s.startswith("ETA") or s.startswith("L/R"):
-                return "ETA"
-            return "Other"
-
-        df["STATUS_NORM"] = df["STATUS"].apply(_stat)
-        df["SAILED"]      = df["STATUS_NORM"] == "Sailed"
-        df["COMM_GRP"]    = df["COMMODITY"].apply(_vl_comm)
-        df["ATA"]         = pd.to_datetime(df["ATA"], errors="coerce")
-        df["SAIL_DT"]     = pd.to_datetime(df["SAIL DATE"], errors="coerce")
-        df["SAIL_MONTH"]  = df["SAIL_DT"].dt.to_period("M").dt.to_timestamp()
-        frames[region] = df
-    return frames
-
-
-@st.cache_data(show_spinner=False)
-def _vl_load_trends(file_source, _mtime=None):
-    import io as _io
-    src = _io.BytesIO(file_source) if isinstance(file_source, bytes) else file_source
-    df = pd.read_excel(src, sheet_name="Trends", header=None)
-    header_row = df.iloc[0]
-    weekly_col = monthly_col = latest_col = None
-    latest_date = None
-    for ci, val in enumerate(header_row):
-        ci = int(ci)
-        if isinstance(val, str):
-            v = val.strip()
-            if v == "Weekly":
-                weekly_col = ci
-            elif v == "Monthly":
-                monthly_col = ci
-        elif hasattr(val, "year"):
-            val_ts = pd.Timestamp(val)
-            if latest_date is None or val_ts > latest_date:
-                latest_date = val_ts
-                latest_col = ci
-
-    TARGETS = {"USG", "PNW", "TXG"}
-
-    def _float(v):
-        if pd.isna(v):
-            return 0.0
-        try:
-            return float(v)
-        except Exception:
-            return 0.0
-
-    regions = {}
-    i = 0
-    while i < len(df):
-        cell = str(df.iloc[i, 0]).strip() if pd.notna(df.iloc[i, 0]) else ""
-        if cell in TARGETS:
-            region = cell
-            latest_val = df.iloc[i, latest_col] if latest_col else None
-            if not isinstance(latest_val, (int, float)):
-                rows = []
-                i += 1
-                if i < len(df) and str(df.iloc[i, 0]).strip() == "Commodity":
-                    i += 1
-                while i < len(df):
-                    label = str(df.iloc[i, 0]).strip() if pd.notna(df.iloc[i, 0]) else ""
-                    if label == region:
-                        i += 1
-                        break
-                    if label and label != "nan":
-                        rows.append({
-                            "COMMODITY":  label.upper(),
-                            "MT":         _float(df.iloc[i, latest_col]) if latest_col else 0.0,
-                            "Weekly_MT":  _float(df.iloc[i, weekly_col]) if weekly_col else 0.0,
-                            "Monthly_MT": _float(df.iloc[i, monthly_col]) if monthly_col else 0.0,
-                        })
-                    i += 1
-                if rows:
-                    regions[region] = pd.DataFrame(rows)
-                continue
-        i += 1
-    return regions, latest_date
-
-
-def _vl_cutoff(months):
-    return pd.Timestamp.now().normalize() - pd.DateOffset(months=months)
-
-
-def _vl_kpi(col, label, value, sub="", accent=None):
-    accent = accent or _VL_GREEN
-    col.markdown(
-        f'<div class="vl-kpi-wrap" style="border-left:3px solid {accent};">'
-        f'<div class="vl-kpi-label">{label}</div>'
-        f'<div class="vl-kpi-value">{value}</div>'
-        f'<div class="vl-kpi-sub">{sub}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _vl_sec(label):
-    st.markdown(f'<div class="vl-sec-hdr">{label}</div>', unsafe_allow_html=True)
-
-
-def _vl_bar_comm(df, title):
-    g = (df.groupby("COMM_GRP").size()
-           .reset_index(name="Vessels")
-           .sort_values("Vessels", ascending=False))
-    fig = px.bar(g, x="COMM_GRP", y="Vessels",
-                 color="COMM_GRP", color_discrete_map=_VL_COMM_COLORS,
-                 title=title, labels={"COMM_GRP": "Commodity"})
-    fig.update_layout(**_VL_BASE_LAYOUT, showlegend=False)
-    fig.update_traces(marker_line_width=0)
-    return fig
-
-
-def _vl_bar_monthly_stacked(df, title, color_col="COMM_GRP"):
-    cmap = _VL_COMM_COLORS if color_col == "COMM_GRP" else _VL_REGION_COLORS
-    lbl  = "Commodity" if color_col == "COMM_GRP" else "Region"
-    g = (df.groupby(["SAIL_MONTH", color_col]).size()
-           .reset_index(name="Vessels").sort_values("SAIL_MONTH"))
-    fig = px.bar(g, x="SAIL_MONTH", y="Vessels",
-                 color=color_col, color_discrete_map=cmap,
-                 barmode="stack", title=title,
-                 labels={"SAIL_MONTH": "Month", color_col: lbl})
-    fig.update_layout(**_VL_BASE_LAYOUT)
-    fig.update_xaxes(tickformat="%b %Y")
-    fig.update_traces(marker_line_width=0)
-    return fig
-
-
-def _vl_pivot_comm_month(df):
-    p = (df.groupby(["COMM_GRP", "SAIL_MONTH"]).size().unstack(fill_value=0))
-    p.columns = [c.strftime("%b %Y") if hasattr(c, "strftime") else str(c)
-                 for c in p.columns]
-    p["Total"] = p.sum(axis=1)
-    return p.sort_values("Total", ascending=False)
-
-
-def _vl_fmt_change(val):
-    if pd.isna(val) or val == 0:
-        return "0"
-    return f"+{val:,.0f}" if val > 0 else f"{val:,.0f}"
-
-
-def _vl_current_table(lined_df, trends_df):
-    vc = lined_df.groupby("COMMODITY").size().reset_index(name="Vessels")
-    vc["COMMODITY"] = vc["COMMODITY"].str.upper().str.strip()
-    if trends_df is not None and not trends_df.empty:
-        mt = trends_df[["COMMODITY", "MT"]].copy()
-    else:
-        mt = (lined_df.groupby("COMMODITY")["MT_kMT"].sum().reset_index()
-              .rename(columns={"MT_kMT": "MT"}))
-        mt["COMMODITY"] = mt["COMMODITY"].str.upper().str.strip()
-    merged = vc.merge(mt, on="COMMODITY", how="left").fillna({"MT": 0})
-    merged["MT"] = merged["MT"].round(0).astype(int)
-    total = pd.DataFrame([{"COMMODITY": "Grand Total",
-                            "Vessels": merged["Vessels"].sum(),
-                            "MT": merged["MT"].sum()}])
-    return pd.concat([merged, total], ignore_index=True).set_index("COMMODITY")
-
-
-def _vl_change_table(trends_df, col):
-    if trends_df is None or trends_df.empty:
-        return pd.DataFrame()
-    t = trends_df[["COMMODITY", col]].copy().rename(columns={col: "MT Δ (kMT)"})
-    total = pd.DataFrame([{"COMMODITY": "Total",
-                            "MT Δ (kMT)": t["MT Δ (kMT)"].sum()}])
-    return pd.concat([t, total], ignore_index=True).set_index("COMMODITY")
-
-
-def _vl_render_snapshot(frames, trends_regions, latest_date):
-    date_str = latest_date.strftime("%m/%d/%Y") if latest_date else "latest"
-    _vl_sec(f"📋  Commodity Snapshot — Lineup as of {date_str}")
-    REGION_LABELS = {"USG": "🇺🇸 US Gulf", "PNW": "🌲 Pacific Northwest", "TXG": "⭐ Texas Gulf"}
-    for region in ("USG", "PNW", "TXG"):
-        lined  = frames.get(region)
-        trends = trends_regions.get(region) if trends_regions else None
-        st.markdown(
-            f"<div style='font-size:14px;font-weight:700;color:{_VL_TEXT};"
-            f"margin:14px 0 6px 0;'>{REGION_LABELS[region]}</div>",
-            unsafe_allow_html=True,
-        )
-        col_cur, col_wk, col_mo = st.columns(3)
-        with col_cur:
-            st.markdown(
-                f"<div style='font-size:11px;font-weight:600;color:{_VL_MUTED};"
-                f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;'>"
-                f"Current Lineup</div>", unsafe_allow_html=True,
-            )
-            if lined is not None and len(lined[~lined["SAILED"]]) > 0:
-                st.dataframe(_vl_current_table(lined[~lined["SAILED"]], trends),
-                             use_container_width=True)
+                got = fut.result()
+            except Exception as e:
+                failed[y] = str(e)
+                with store["lock"]:
+                    store["bad"][(code, y)] = (time.time(), str(e))
             else:
-                st.info("No vessels lined up.")
-        for col_w, col_key, col_label in [
-            (col_wk, "Weekly_MT", "Weekly MT Change"),
-            (col_mo, "Monthly_MT", "Monthly MT Change"),
-        ]:
-            with col_w:
-                st.markdown(
-                    f"<div style='font-size:11px;font-weight:600;color:{_VL_MUTED};"
-                    f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;'>"
-                    f"{col_label}</div>", unsafe_allow_html=True,
-                )
-                chg = _vl_change_table(trends, col_key)
-                if not chg.empty:
-                    fmt = chg.copy()
-                    fmt["MT Δ (kMT)"] = fmt["MT Δ (kMT)"].apply(
-                        lambda v: _vl_fmt_change(v) if isinstance(v, (int, float)) else v
-                    )
-                    st.dataframe(fmt, use_container_width=True)
-                else:
-                    st.info("No Trends data.")
-    st.markdown("---")
+                with store["lock"]:
+                    store["frames"][(code, y)] = got
+                    store["bad"].pop((code, y), None)
+    if current in failed:
+        raise RuntimeError(failed[current])
+    with store["lock"]:
+        frames = [store["frames"][(code, y)] for y in years if (code, y) in store["frames"]]
+    frames = [f for f in frames if not f.empty]
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=_ESR_COLS)
+    return df, sorted(failed)
 
 
-def _vl_page_summary(frames, n_months, trends_regions=None, latest_date=None):
-    cut = _vl_cutoff(n_months)
-    rows = []
-    for r, df in frames.items():
-        lu = df[~df["SAILED"]]
-        s  = df[df["SAILED"] & (df["SAIL_MONTH"] >= cut)]
-        rows.append(dict(Region=r,
-                         Lined_Up=len(lu), LU_MT=lu["MT_kMT"].sum(),
-                         Sailed=len(s), S_MT=s["MT_kMT"].sum()))
-    smry = pd.DataFrame(rows)
-
-    c1, c2, c3, c4 = st.columns(4)
-    _vl_kpi(c1, "Total Vessels Lined Up", f"{smry['Lined_Up'].sum():,}",
-            "all regions combined", _VL_COL_BLUE)
-    _vl_kpi(c2, "Total Vessels Sailed", f"{smry['Sailed'].sum():,}",
-            f"last {n_months} months", _VL_COL_POS)
-    _vl_kpi(c3, "Volume Lined Up", f"{smry['LU_MT'].sum():,.0f} kMT",
-            "known MT (excl. RVT)", _VL_COL_AMB)
-    _vl_kpi(c4, "Volume Sailed", f"{smry['S_MT'].sum():,.0f} kMT",
-            f"last {n_months} months", _VL_COL_PURP)
-    st.markdown("---")
-
-    if trends_regions:
-        _vl_render_snapshot(frames, trends_regions, latest_date)
-
-    _vl_sec("🟡  Current Lineup — All Regions")
-    lu_all = pd.concat([df[~df["SAILED"]] for df in frames.values()], ignore_index=True)
-    ch1, ch2 = st.columns(2)
-    with ch1:
-        g = lu_all.groupby(["REGION", "COMM_GRP"]).size().reset_index(name="Vessels")
-        fig = px.bar(g, x="REGION", y="Vessels",
-                     color="COMM_GRP", color_discrete_map=_VL_COMM_COLORS,
-                     barmode="stack", title="Lined-Up Vessels by Region & Commodity",
-                     category_orders={"REGION": ["USG", "PNW", "TXG"]},
-                     labels={"REGION": "Region", "COMM_GRP": "Commodity"})
-        fig.update_layout(**_VL_BASE_LAYOUT)
-        fig.update_traces(marker_line_width=0)
-        st.plotly_chart(fig, use_container_width=True)
-    with ch2:
-        g2 = lu_all.groupby(["COMM_GRP", "REGION"]).size().reset_index(name="Vessels")
-        fig2 = px.bar(g2, x="COMM_GRP", y="Vessels",
-                      color="REGION", color_discrete_map=_VL_REGION_COLORS,
-                      barmode="stack", title="Lined-Up Vessels by Commodity & Region",
-                      labels={"COMM_GRP": "Commodity", "REGION": "Region"})
-        fig2.update_layout(**_VL_BASE_LAYOUT)
-        fig2.update_traces(marker_line_width=0)
-        st.plotly_chart(fig2, use_container_width=True)
-
-    st.dataframe(
-        smry.rename(columns=dict(
-            Lined_Up="Lined Up", LU_MT="Lined Up kMT",
-            Sailed=f"Sailed ({n_months}mo)", S_MT="Sailed kMT",
-        )).set_index("Region"),
-        use_container_width=True,
-    )
-    st.markdown("---")
-    _vl_sec("✅  Shipped — All Regions by Month")
-    s_all = pd.concat(
-        [df[df["SAILED"] & (df["SAIL_MONTH"] >= cut)] for df in frames.values()],
-        ignore_index=True,
-    )
-    if len(s_all) == 0:
-        st.info("No sailed vessel data for the selected period.")
-        return
-    ch3, ch4 = st.columns(2)
-    with ch3:
-        st.plotly_chart(_vl_bar_monthly_stacked(s_all,
-            "Shipped Vessels by Month & Region", color_col="REGION"),
-            use_container_width=True)
-    with ch4:
-        st.plotly_chart(_vl_bar_monthly_stacked(s_all,
-            "Shipped Vessels by Month & Commodity"),
-            use_container_width=True)
-    reg_month = (s_all.groupby(["REGION", "SAIL_MONTH"]).size().unstack(fill_value=0))
-    reg_month.columns = [c.strftime("%b %Y") if hasattr(c, "strftime") else str(c)
-                         for c in reg_month.columns]
-    reg_month["Total"] = reg_month.sum(axis=1)
-    st.dataframe(reg_month, use_container_width=True)
+def _keep_selected(options: list, key: str) -> list:
+    """`options` plus anything this widget already holds, so a selection never falls out of a list that shifted underneath it."""
+    held = [v for v in (st.session_state.get(key) or []) if v not in options]
+    return list(options) + held
 
 
-def _vl_page_region(df, region_label, n_months):
-    lined  = df[~df["SAILED"]].copy()
-    sailed = df[df["SAILED"] & (df["SAIL_MONTH"] >= _vl_cutoff(n_months))].copy()
+def _esr_named(df: pd.DataFrame, cat: dict) -> pd.DataFrame:
+    """Adds the destination's name and region."""
+    out = df.copy()
+    out["country"] = out["cc"].map({c: v[0] for c, v in cat["country"].items()})
+    out["region"] = out["cc"].map({c: v[1] for c, v in cat["country"].items()})
+    lost = out["country"].isna()
+    if lost.any():                                              # a code the country list has not heard of
+        out.loc[lost, "country"] = "Destination " + out.loc[lost, "cc"].astype(str)
+        out.loc[lost, "region"] = "Other"
+    return out
 
-    c1, c2, c3, c4 = st.columns(4)
-    lu_mt  = lined["MT_kMT"].sum()
-    s_mt   = sailed["MT_kMT"].sum()
-    top_lu = lined["COMM_GRP"].value_counts().index[0] if len(lined) > 0 else "—"
-    top_lu_n = lined["COMM_GRP"].value_counts().iloc[0] if len(lined) > 0 else 0
-    top_s  = sailed["COMM_GRP"].value_counts().index[0] if len(sailed) > 0 else "—"
-    top_s_n = sailed["COMM_GRP"].value_counts().iloc[0] if len(sailed) > 0 else 0
 
-    _vl_kpi(c1, "Vessels Lined Up", f"{len(lined):,}",
-            f"{lu_mt:,.0f} kMT known" if lu_mt > 0 else "MT not disclosed", _VL_COL_BLUE)
-    _vl_kpi(c2, "Top Commodity (Lined Up)", top_lu, f"{top_lu_n} vessels", _VL_COL_AMB)
-    _vl_kpi(c3, f"Vessels Sailed — last {n_months}mo", f"{len(sailed):,}",
-            f"{s_mt:,.0f} kMT", _VL_COL_POS)
-    _vl_kpi(c4, "Top Commodity (Sailed)", top_s, f"{top_s_n} vessels", _VL_COL_PURP)
-    st.markdown("---")
+def _esr_matrices(df_all: pd.DataFrame, df_f: pd.DataFrame) -> dict:
+    """{column: DataFrame} with one row per marketing year and one column per marketing-year week, for the eight measures
+    of the filtered rows. Weeks a year never reached are NaN; weeks it reached with nothing in the filter are 0. The
+    week grid comes from the unfiltered rows, so a destination filter never shortens a year."""
+    last_w = df_all.groupby("my")["wk"].max().sort_index()
+    cols = list(range(1, int(last_w.max()) + 1))
+    in_range = pd.DataFrame(np.arange(1, len(cols) + 1)[None, :] <= last_w.to_numpy()[:, None],
+                            index=last_w.index, columns=cols)
+    g = df_f.groupby(["my", "wk"])[list(_ESR_FIELDS.values())].sum()
+    out = {}
+    for c in _ESR_FIELDS.values():
+        pv = g[c].unstack("wk") if len(g) else pd.DataFrame(index=last_w.index, columns=cols, dtype=float)
+        out[c] = pv.reindex(index=last_w.index, columns=cols).fillna(0.0).where(in_range)
+    return out
 
-    _vl_sec("🟡  Current Lineup — Vessels Waiting to Ship")
-    if len(lined) == 0:
-        st.info("No vessels currently in the lineup.")
+
+def _esr_dated(mat: pd.DataFrame, code: int) -> pd.Series:
+    """One value per report Thursday. Where two marketing years share a Thursday (the report that closes the old year
+    and opens the new one) the newer year's figure is kept, as jpsi.com does."""
+    parts = []
+    for my, row in mat.iterrows():                              # oldest year first
+        row = row.dropna()
+        if row.empty:
+            continue
+        first = _esr_first_thu(code, int(my))
+        parts.append(pd.Series(row.to_numpy(dtype=float), index=[first + pd.Timedelta(weeks=int(n) - 1) for n in row.index]))
+    if not parts:
+        return pd.Series(dtype=float)
+    s = pd.concat(parts)
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
+def _esr_compare(mat: pd.DataFrame, flow: bool, code: int, sel_my: int, wk: int, prior6: list) -> dict:
+    """The selected week of one measure against last week, the same week a year ago, the last four weeks and the
+    6-year Olympic average. A flow's 'last week' is the previous report whatever year it falls in; a balance is only
+    compared with the previous week of its own year (a new year's balances start again from nothing)."""
+    def cell(y, n):
+        return None if (y not in mat.index or n not in mat.columns or pd.isna(mat.at[y, n])) else float(mat.at[y, n])
+
+    cur = cell(sel_my, wk)
+    if flow:
+        ser = _esr_dated(mat, code)
+        d = _esr_first_thu(code, sel_my) + pd.Timedelta(weeks=wk - 1)
+        prev = ser.get(d - pd.Timedelta(weeks=1))
+        prev = None if prev is None or pd.isna(prev) else float(prev)
+        last4 = ser[(ser.index <= d) & (ser.index > d - pd.Timedelta(weeks=4))]
+        avg4 = float(last4.mean()) if len(last4) else None
     else:
-        ch, tb = st.columns([1.5, 1])
-        with ch:
-            st.plotly_chart(_vl_bar_comm(lined, "Vessel Count by Commodity"),
-                            use_container_width=True)
-        with tb:
-            st.markdown("<br>", unsafe_allow_html=True)
-            piv = lined.groupby(["COMM_GRP", "STATUS_NORM"]).size().unstack(fill_value=0)
-            piv["Total"] = piv.sum(axis=1)
-            st.dataframe(piv.sort_values("Total", ascending=False),
-                         use_container_width=True)
-        with st.expander("📋 Full Lineup Detail"):
-            cols = [c for c in ["ELEVATOR","VESSEL","ATA","STATUS","COMMODITY",
-                                 "COMM_GRP","MT","DESTINATION"] if c in lined.columns]
-            st.dataframe(lined[cols].sort_values("ATA", na_position="last"),
-                         use_container_width=True, height=320)
+        prev = cell(sel_my, wk - 1) if wk > 1 else None
+        vals = [v for v in (cell(sel_my, n) for n in range(max(1, wk - 3), wk + 1)) if v is not None]
+        avg4 = float(np.mean(vals)) if vals else None
+    return dict(cur=cur, prev=prev, ly=cell(sel_my - 1, wk), avg4=avg4,
+                oly=_insp_olympic(mat, prior6, wk))
 
-    st.markdown("---")
-    _vl_sec("✅  Shipped — Departed Vessels by Month")
-    if len(sailed) == 0:
-        st.info("No sailed vessel data for this period.")
+
+def _esr_delta_line(a, b, text: str, unit: str) -> str:
+    """'▲ 12.3% vs last week'; against a base of zero or less (net sales can be negative) the change is in volume."""
+    if a is None or b is None or pd.isna(a) or pd.isna(b):
+        return f'<div class="insp-line">— {text}</div>'
+    if b > 0:
+        return _insp_delta_line((a / b - 1.0) * 100.0, text)
+    d = a - b
+    if abs(d) < 1e-12:
+        return f'<div class="insp-line">— {text}</div>'
+    col, arrow = (_INSP_POS, "▲") if d > 0 else (_INSP_NEG, "▼")
+    return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(d):,.{_insp_dec(unit, d)}f} {unit}</b> {text}</div>'
+
+
+def _esr_summary_html(comp: dict, unit: str, pct: bool, labels: dict) -> str:
+    """The jpsi.com-style summary table: the selected week, last week, a year ago, the 4-week and 6-year averages, and
+    the change of the selected week against each, for all eight measures."""
+    cols = list(_ESR_LABEL)
+    dec = {c: _insp_dec(unit, max([abs(v) for v in comp[c].values() if v is not None] or [0.0])) for c in cols}
+
+    def num(v, c):
+        return "—" if v is None or pd.isna(v) else f"{v:,.{dec[c]}f}"
+
+    def chg(cur, base, c):
+        if cur is None or base is None or pd.isna(cur) or pd.isna(base):
+            return "—", ""
+        if pct:
+            if base <= 0:
+                return "—", ""
+            d = (cur / base - 1.0) * 100.0
+            text = f"{d:+,.1f}%"
+        else:
+            d = cur - base
+            text = f"{d:+,.{dec[c]}f}"
+        return text, ("pos" if d > 1e-12 else "neg" if d < -1e-12 else "")
+
+    head = "".join(f"<th>{_ESR_LABEL[c]}</th>" for c in cols)
+    body = ""
+    for key, lab in (("cur", labels["cur"]), ("prev", "Last week"), ("ly", labels["ly"]), ("avg4", "4-week average"),
+                     ("oly", "6-yr Olympic average")):
+        cells = "".join(f"<td>{num(comp[c][key], c)}</td>" for c in cols)
+        body += f'<tr class="{"cur" if key == "cur" else ""}"><td>{lab}</td>{cells}</tr>'
+    body += '<tr class="gap"><td colspan="9"></td></tr>'
+    for key, lab in (("prev", "Change vs last week"), ("ly", "Change vs a year ago"), ("avg4", "Change vs 4-week average"),
+                     ("oly", "Change vs 6-yr Olympic avg")):
+        cells = ""
+        for c in cols:
+            text, cls = chg(comp[c]["cur"], comp[c][key], c)
+            cells += f'<td class="{cls}">{text}</td>'
+        body += f'<tr class="chg"><td>{lab}</td>{cells}</tr>'
+    return f'<div class="esr-wrap"><table class="esr-sum"><thead><tr><th></th>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def _esr_fig_series(mat, flow, code, sel_my, sel_wk, last_w, rng, kind, ma, unit, name, metric, logo):
+    """Weekly series of one measure. 'Selected year': that marketing year's weeks against last year and the 6-year Olympic
+    average in the same marketing-year week. Longer ranges lay consecutive marketing years on the calendar."""
+    first = _esr_first_thu(code, sel_my)
+    my_label = _esr_my_label(code, sel_my)
+    single = rng == "Selected year"
+    if single:
+        weeks = list(range(1, last_w + 1))
+        x = [first + pd.Timedelta(weeks=n - 1) for n in weeks]
+        y = mat.loc[sel_my].reindex(weeks).to_numpy(dtype=float)
+        prior6 = [m for m in mat.index if m < sel_my][-6:]
+        ly = mat.loc[sel_my - 1].reindex(weeks) if (sel_my - 1) in mat.index else pd.Series(np.nan, index=weeks)
+        oly = [_insp_olympic(mat, prior6, n) for n in weeks]
+        label = my_label
+    else:
+        ser = _esr_dated(mat, code)
+        k = {"2 years": 2, "5 years": 5}.get(rng)
+        start = _esr_first_thu(code, sel_my - k + 1) if k else (ser.index.min() if len(ser) else first)
+        ser = ser[(ser.index >= start) & (ser.index <= first + pd.Timedelta(weeks=last_w - 1))]
+        x, y, weeks, label = list(ser.index), ser.to_numpy(dtype=float), None, f"{name} {metric.lower()}"
+    finite = y[np.isfinite(y)] if len(y) else y
+    dec = _insp_dec(unit, float(np.abs(finite).max()) if len(finite) else 0.0)
+    hov = (lambda nm: f"Wk %{{customdata}}: %{{y:,.{dec}f}} {unit}<extra>{nm}</extra>") if single else \
+          (lambda nm: f"%{{x|%b %d, %Y}}: %{{y:,.{dec}f}} {unit}<extra>{nm}</extra>")
+    fig = go.Figure()
+    if kind == "Bars":
+        picked = "#3b7fa3"
+        colors = [_INSP_NEG if (np.isfinite(v) and v < 0) else (picked if (single and weeks[i] == sel_wk) else _INSP_BLUE)
+                  for i, v in enumerate(y)]
+        fig.add_trace(go.Bar(x=x, y=np.nan_to_num(y), marker_color=colors, showlegend=False, name=label, customdata=weeks,
+                             hovertemplate=hov(label)))
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", marker=dict(symbol="square", size=11, color=_INSP_BLUE),
+                                 name=label))                    # a bar trace of mixed colours would lend its legend the first bar's
+    else:
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=label, customdata=weeks, line=dict(color=_INSP_BLUE, width=2.8),
+                                 hovertemplate=hov(label)))
+    if single:
+        fig.add_trace(go.Scatter(x=x, y=ly, mode="lines", name="Year ago", customdata=weeks,
+                                 line=dict(color=_INSP_TERRA, width=1.8), hovertemplate=hov("Year ago")))
+        fig.add_trace(go.Scatter(x=x, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
+                                 line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
+    if ma and len(y):
+        smooth = pd.Series(y).rolling(4, min_periods=1).mean().to_numpy()
+        fig.add_trace(go.Scatter(x=x, y=smooth, mode="lines", name="4-week average", customdata=weeks,
+                                 line=dict(color=_INSP_LAV, width=2.6), hovertemplate=hov("4-week average")))
+    if single and sel_wk < last_w:
+        xs = x[sel_wk - 1].strftime("%Y-%m-%d")
+        fig.add_shape(type="line", x0=xs, x1=xs, y0=0, y1=1, xref="x", yref="paper", line=dict(color=_INSP_SAGE, width=1, dash="dot"))
+    if single:
+        title = f"{name} {metric.lower()}, {my_label} ({unit})"
+        sub = "Weekly, week ending Thursday. Year ago and the 6-year Olympic average are the same marketing-year week."
+    else:
+        title = f"{name} {metric.lower()} ({unit})"
+        sub = (f"Weekly, {x[0]:%b %d, %Y} to {x[-1]:%b %d, %Y}. On the Thursday a marketing year turns over, the new year's figure is shown."
+               if len(x) else "No weeks in this range.")
+    _insp_style(fig, 400, title, sub, logo=logo, y_title=unit)
+    if single and last_w <= 14:                                 # early in a marketing year: a tick for every week
+        fig.update_xaxes(tickformat="%b %d", dtick=7 * 86_400_000, tickmode="linear", tick0=x[0].strftime("%Y-%m-%d"),
+                         hoverformat="%b %d, %Y")
+    elif single:
+        fig.update_xaxes(tickformat="%b %y", dtick="M1", hoverformat="%b %d, %Y")
+    else:
+        fig.update_xaxes(tickformat="%b %Y", dtick={"2 years": "M3", "5 years": "M6"}.get(rng, "M12"), hoverformat="%b %d, %Y")
+    fig.update_yaxes(tickformat=",", zeroline=True, zerolinecolor=_INSP_BORDER)
+    return fig
+
+
+def _esr_fig_season(mat, flow, code, sel_my, sel_wk, last_w, years_mode, cumulative, smooth, unit, name, metric, logo):
+    """One line per marketing year over the marketing-year weeks: the selected year in blue, the year before it terracotta,
+    older years in sage shades (darker = more recent), plus the 6-year Olympic average."""
+    cum = flow and cumulative
+    M = mat.fillna(0.0).cumsum(axis=1).where(mat.notna()) if cum else mat
+    prior = [y for y in M.index if y < sel_my]
+    pick = (prior[-10:] if years_mode == "10 prior years" else prior[-5:]) + [sel_my]
+    prior6 = prior[-6:]
+    weeks = list(M.columns)
+    sm = flow and smooth and not cum
+    older = sorted(y for y in pick if y not in (sel_my, sel_my - 1))
+    finite = M.loc[sel_my].dropna().to_numpy(dtype=float)
+    dec = _insp_dec(unit, float(np.abs(finite).max()) if len(finite) else 0.0)
+    fig = go.Figure()
+    for y in sorted(pick):
+        row = M.loc[y].dropna()
+        if sm:
+            row = row.rolling(4, min_periods=1).mean()
+        lbl = _esr_my_label(code, y)
+        if y == sel_my:
+            style, mode = dict(color=_INSP_BLUE, width=3.6), "lines+markers" if len(row) <= 12 else "lines"
+        elif y == sel_my - 1:
+            style, mode = dict(color=_INSP_TERRA, width=2.2), "lines"
+        else:
+            style, mode = dict(color=_ch_mix("#d7e2dc", "#5f7267", older.index(y) / max(len(older) - 1, 1)), width=1.3), "lines"
+        if len(row) <= 2 and mode == "lines":
+            mode = "lines+markers"                              # a year with one or two weeks in is otherwise invisible
+        fig.add_trace(go.Scatter(x=row.index, y=row.to_numpy(), mode=mode, name=lbl, line=style, marker=dict(size=6),
+                                 hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>{lbl}</extra>"))
+    oly = [_insp_olympic(M, prior6, n) for n in weeks]
+    if sm:
+        oly = pd.Series(oly, dtype="float").rolling(4, min_periods=1).mean().tolist()
+    fig.add_trace(go.Scatter(x=weeks, y=oly, mode="lines", name="6-yr Olympic avg", line=dict(color=_INSP_SAGE, width=2.2, dash="dash"),
+                             hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>6-yr Olympic avg</extra>"))
+    if sel_wk < last_w:
+        fig.add_shape(type="line", x0=sel_wk, x1=sel_wk, y0=0, y1=1, xref="x", yref="paper", line=dict(color=_INSP_SAGE, width=1, dash="dot"))
+    vals, text = _insp_month_ticks(_esr_first_thu(code, sel_my), len(weeks))
+    word = "cumulative " if cum else ("weekly (4-week average) " if sm else "")
+    _insp_style(fig, 420, f"{name} {word}{metric.lower()} by marketing-year week ({unit})",
+                f"Marketing years overlaid; months on the axis follow {_esr_my_label(code, sel_my)}.", logo=logo,
+                x_title="Marketing-year week", y_title=f"Cumulative {unit}" if cum else unit)
+    fig.update_xaxes(tickmode="array", tickvals=vals, ticktext=[f"{t}" for t in text], range=[0.5, len(weeks) + 0.5])
+    fig.update_yaxes(tickformat=",", zeroline=True, zerolinecolor=_INSP_BORDER)
+    return fig
+
+
+def _esr_fig_dest(vals: pd.Series, top_n: int, unit: str, title: str, subtitle: str, logo=None):
+    """Horizontal bars of one measure by destination: the `top_n` largest by size, positives on top. A net cancellation
+    (negative) is drawn red, to the left of zero."""
+    v = vals[vals.abs() > 1e-12]
+    if v.empty:
+        return None
+    top = v.reindex(v.abs().sort_values(ascending=False).index).head(top_n).sort_values()
+    order = list(top.index)
+    dec = _insp_dec(unit, float(top.abs().max()))
+    fig = go.Figure(go.Bar(x=top.to_numpy(), y=order, orientation="h", name="Volume",
+                           marker_color=[_INSP_NEG if t < 0 else _INSP_BLUE for t in top.to_numpy()],
+                           hovertemplate=f"%{{y}}: %{{x:,.{dec}f}} {unit}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[max(t, 0.0) for t in top.to_numpy()], y=order, mode="text", text=[_insp_fmt(t, unit) for t in top.to_numpy()],
+                             textposition="middle right", textfont=dict(size=11, color=_INSP_MUTED), showlegend=False,
+                             hoverinfo="skip", cliponaxis=False))
+    _insp_style(fig, max(300, 27 * len(order) + 110), title, subtitle, legend=False, hover="closest", logo=logo, x_title=unit)
+    lo, hi = float(top.min()), float(top.max())
+    fig.update_xaxes(range=[min(0.0, lo * 1.25), max(0.0, hi * 1.2)], tickformat=",", zeroline=True, zerolinecolor=_INSP_BORDER)
+    fig.update_yaxes(showgrid=False, automargin=True)
+    return fig
+
+
+def _esr_render(use_bushels: bool) -> None:
+    st.markdown(_INSP_CSS, unsafe_allow_html=True)
+    logo = _load_logo_b64(LOGO_50YR_PATH)
+    snapshot, use_bushels = _view_row("esr", use_bushels)
+    if snapshot:
+        _keep_state(_ESR_KEEP)
+        _esr_snapshot(use_bushels)
+        return
+    try:
+        cat = _esr_catalog()
+    except Exception as e:
+        st.error(f"**The USDA export-sales service could not be reached.** `{e}` Click **Refresh Data** above to try again.")
         return
 
-    st.plotly_chart(_vl_bar_monthly_stacked(sailed,
-        "Shipped Vessels by Month & Commodity"), use_container_width=True)
-    st.dataframe(_vl_pivot_comm_month(sailed), use_container_width=True)
-
-    mv = sailed.groupby("SAIL_MONTH")["MT_kMT"].sum().reset_index()
-    fig_v = px.bar(mv.sort_values("SAIL_MONTH"), x="SAIL_MONTH", y="MT_kMT",
-                   title="Shipped Volume by Month (kMT — excludes RVT)",
-                   labels={"SAIL_MONTH": "Month", "MT_kMT": "kMT"},
-                   color_discrete_sequence=[_VL_GREEN_LT])
-    fig_v.update_layout(**_VL_BASE_LAYOUT)
-    fig_v.update_xaxes(tickformat="%b %Y")
-    fig_v.update_traces(marker_line_width=0)
-    st.plotly_chart(fig_v, use_container_width=True)
-
-
-def _run_vessel_lineup_tab():
-    """Vessel Lineup tab — embedded from vessel-lineup-dashboard."""
-    # ── File source ───────────────────────────────────────────────────────────
-    file_source = None
-    file_mtime  = None
-
-    if os.path.exists(_VL_REPO_FILE_PATH):
-        file_source = _VL_REPO_FILE_PATH
-        try:
-            file_mtime = os.path.getmtime(_VL_REPO_FILE_PATH)
-            mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
-        except Exception:
-            mod_str = "Unknown"
-        st.caption(f"📂 {_VL_DATA_FILENAME} · Last saved: {mod_str}")
-    elif os.path.exists(_VL_ONEDRIVE_PATH):
-        file_source = _VL_ONEDRIVE_PATH
-        try:
-            file_mtime = os.path.getmtime(_VL_ONEDRIVE_PATH)
-            mod_str = datetime.fromtimestamp(file_mtime).strftime("%b %d · %I:%M %p")
-        except Exception:
-            mod_str = "Unknown"
-        st.caption(f"📂 OneDrive · Last saved: {mod_str}")
-    else:
-        import io as _io
-        st.info("Upload the Vessel Lineup Excel file to load this tab.")
-        uploaded = st.file_uploader(
-            "Vessel Lineup - US.xlsx", type=["xlsx"], key="vl_upload"
-        )
-        if uploaded is None:
+    # ── filters: always on show, and they apply to the tiles, the table and every chart ──────────────────────────────
+    with st.container(border=True, key="esr_filters"):
+        top_l, top_r = st.columns([5, 1.1])
+        top_l.markdown('<span class="fp-title">Filters</span><span class="fp-sub">apply to every tile, chart and table below</span>',
+                       unsafe_allow_html=True)
+        top_r.button("Reset filters", key="esr_reset", on_click=_fp_reset, args=(_ESR_RESET_KEYS,))
+        _fp_group("What to show")
+        c_com, c_my, c_wk, c_met = st.columns([1.15, 1.0, 2.7, 1.6])
+        commodity = c_com.selectbox("Commodity", list(_ESR_COMMODITIES), key="esr_comm")
+        code, _month, lb = _ESR_COMMODITIES[commodity]
+        cur_my = cat["current"].get(code)
+        if cur_my is None:
+            st.error(f"USDA lists no current marketing year for {commodity.lower()}.")
             return
-        file_source = uploaded.read()
+        try:
+            with st.spinner(f"Loading {commodity.lower()} export sales…"):
+                df, failed = _esr_history(code, cur_my)
+        except Exception as e:
+            st.error(f"**The {commodity.lower()} export sales could not be read.** `{e}` Click **Refresh Data** above to try again.")
+            return
+        if df.empty:
+            st.info(f"No {commodity.lower()} export sales are on file yet.")
+            return
+        df = _esr_named(df, cat)
+        years = sorted((int(y) for y in df["my"].unique()), reverse=True)
+        my_name = {y: _esr_my_label(code, y) for y in years}
+        picked = c_my.selectbox("Marketing year", [my_name[y] for y in years], key=f"esr_my_{code}")
+        sel_my = next(y for y in years if my_name[y] == picked)
+        my_label = my_name[sel_my]
+        last_w = int(df.loc[df["my"] == sel_my, "wk"].max())
+        first_thu = _esr_first_thu(code, sel_my)
 
-    # ── Controls ──────────────────────────────────────────────────────────────
-    ctl1, ctl2, _ = st.columns([2, 1, 5])
-    with ctl1:
-        n_months = st.slider("Shipped history (months)", 3, 24, 12,
-                             key="vl_n_months")
-    with ctl2:
-        if st.button("🔄 Reload", key="vl_reload", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
+        def week_end(n) -> pd.Timestamp:
+            return first_thu + pd.Timedelta(weeks=int(n) - 1)
 
-    # ── Load data ─────────────────────────────────────────────────────────────
-    with st.spinner("Loading vessel data…"):
-        frames = _vl_load_data(file_source, _mtime=file_mtime)
-        trends_regions, latest_date = _vl_load_trends(file_source, _mtime=file_mtime)
+        with c_wk:
+            if last_w > 1:
+                sel_week = int(st.select_slider("Week (ending Thursday)", options=list(range(1, last_w + 1)), value=last_w,
+                                                format_func=lambda n: f"Wk {n} · {week_end(n):%b %d}",
+                                                key=f"esr_week_{code}_{sel_my}"))
+            else:
+                sel_week = 1                                    # a slider needs two positions: only one week is in so far
+                st.caption(f"Week 1 · {week_end(1):%b %d}: the only week reported so far in {my_label}.")
+        metric = c_met.selectbox("Data type", list(_ESR_METRICS), key="esr_metric")
+        col, flow = _ESR_METRICS[metric]
 
-    # ── Sub-tabs ──────────────────────────────────────────────────────────────
-    sub_summary, sub_usg, sub_pnw, sub_txg = st.tabs(
-        ["📊 Summary", "🇺🇸 USG", "🌲 PNW", "⭐ TXG"]
-    )
+        _fp_group("Narrow it down")
+        ref = df[(df["my"] == sel_my) & (df["wk"] == last_w)]
+        by_reg = ref.groupby("region")["commit"].sum().sort_values(ascending=False)
+        by_dst = ref.groupby("country")["commit"].sum().sort_values(ascending=False)
+        reg_opts = list(by_reg.index) + sorted(set(df["region"]) - set(by_reg.index))
+        dst_opts = list(by_dst.index) + sorted(set(df["country"]) - set(by_dst.index))
+        f1, f2 = st.columns([1.3, 2.7])
+        sel_reg = f1.multiselect("Region", _keep_selected(reg_opts, f"esr_reg_{code}"), key=f"esr_reg_{code}", placeholder="All regions")
+        sel_dst = f2.multiselect("Destination", _keep_selected(dst_opts, f"esr_dst_{code}"), key=f"esr_dst_{code}",
+                                 placeholder="All destinations")
+        chips = []
+        if sel_reg:
+            chips.append("Region: " + ", ".join(sel_reg))
+        if sel_dst:
+            chips.append("Destination: " + ", ".join(sel_dst[:4]) + (f" +{len(sel_dst) - 4} more" if len(sel_dst) > 4 else ""))
+        st.markdown(_fp_chips(chips, "No narrowing: every destination is counted"), unsafe_allow_html=True)
 
-    with sub_summary:
-        _vl_page_summary(frames, n_months,
-                         trends_regions=trends_regions, latest_date=latest_date)
+    mask = pd.Series(True, index=df.index)
+    if sel_reg:
+        mask &= df["region"].isin(sel_reg)
+    if sel_dst:
+        mask &= df["country"].isin(sel_dst)
+    dff = df[mask]
+    if dff.empty:
+        st.info("No destination matches these filters.")
+        return
 
-    with sub_usg:
-        st.markdown("<h3>US Gulf (USG)</h3>", unsafe_allow_html=True)
-        _vl_page_region(frames["USG"], "USG", n_months)
+    bu_ok = use_bushels and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    sc = (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1e-3          # metric tons -> Mbu or TMT
+    name = _ESR_TITLE.get(commodity, commodity)
 
-    with sub_pnw:
-        st.markdown("<h3>Pacific Northwest (PNW)</h3>", unsafe_allow_html=True)
-        _vl_page_region(frames["PNW"], "PNW", n_months)
+    notes = [f"Data through the week ending {df['week'].max():%a %b %d, %Y}. USDA publishes on Thursdays at 8:30 a.m. ET, "
+             f"for the week that ended the Thursday before."]
+    if use_bushels and lb is None:
+        notes.append(f"USDA defines no bushel weight for {commodity.lower()}, so it stays in TMT.")
+    if code in (1701, 1702):
+        notes.append("Fresh, chilled or frozen muscle cuts; the marketing year is the calendar year.")
+    if failed:
+        notes.append("Marketing year(s) " + ", ".join(_esr_my_label(code, y) for y in failed) +
+                     " could not be read just now and are left out; Refresh Data tries again.")
+    st.markdown(
+        f'<div style="margin:14px 0 4px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+        f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+        f'United States {name} Export Sales</span>'
+        f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit})</span></div>',
+        unsafe_allow_html=True)
+    st.caption(" ".join(notes))
 
-    with sub_txg:
-        st.markdown("<h3>Texas Gulf (TXG)</h3>", unsafe_allow_html=True)
-        _vl_page_region(frames["TXG"], "TXG", n_months)
+    # ── pace numbers ──────────────────────────────────────────────────────────
+    T = {c: m * sc for c, m in _esr_matrices(df, dff).items()}
+    prior6 = [y for y in T["net"].index if y < sel_my][-6:]
+    comp = {c: _esr_compare(T[c], _ESR_FLOW[c], code, sel_my, sel_week, prior6) for c in T}
+
+    tiles = []
+    for c, lab in (("net", f"Net sales · week {sel_week}"), ("exp", "Weekly exports"), ("out", "Outstanding sales"),
+                   ("acc", "Exports to date"), ("commit", "Total commitments"), ("nxt_out", "Next-MY outstanding")):
+        k = comp[c]
+        tiles.append(_insp_tile(lab, _insp_fmt(k["cur"], unit), unit,
+                                [_esr_delta_line(k["cur"], k["prev"], "vs last week", unit),
+                                 _esr_delta_line(k["cur"], k["ly"], "vs a year ago", unit),
+                                 _esr_delta_line(k["cur"], k["oly"], "vs 6-yr Olympic avg", unit)]))
+    for cell_col, html_ in zip(st.columns(6), tiles):
+        cell_col.markdown(html_, unsafe_allow_html=True)
+
+    # ── summary table ─────────────────────────────────────────────────────────
+    _insp_sec("Summary")
+    ly_end = _esr_first_thu(code, sel_my - 1) + pd.Timedelta(weeks=sel_week - 1) if (sel_my - 1) in T["net"].index else None
+    labels = {"cur": f"Week {sel_week} · {week_end(sel_week):%b %d, %Y}",
+              "ly": f"A year ago · {ly_end:%b %d, %Y}" if ly_end is not None else "A year ago"}
+    p1, _ = st.columns([1.4, 4.6])
+    as_pct = p1.toggle("Show changes as %", key="esr_pct")
+    st.markdown(_esr_summary_html(comp, unit, as_pct, labels), unsafe_allow_html=True)
+    st.markdown(f'<div class="insp-note">All figures in {unit}. A year ago and the 6-yr Olympic average are the same marketing-year week. '
+                f'Sales and exports compare with the previous report; balances (accumulated exports, outstanding sales, commitments) '
+                f'with the previous week of the same marketing year, and the 4-week average of a balance is taken within it.</div>',
+                unsafe_allow_html=True)
+
+    # ── weekly pace ───────────────────────────────────────────────────────────
+    _insp_sec("Weekly pace")
+    r1, r2, r3, _ = st.columns([2.4, 1.4, 1.4, 2.0])
+    rng = r1.segmented_control("Range", ["Selected year", "2 years", "5 years", "All loaded"], default="Selected year",
+                               key="esr_range") or "Selected year"
+    kind = r2.segmented_control("Chart", ["Bars", "Line"], default="Bars", key="esr_kind") or "Bars"
+    ma = r3.toggle("4-week average", key="esr_ma", help="Smooths the weekly series; sales and exports swing with vessel timing.")
+    _insp_plot(_esr_fig_series(T[col], flow, code, sel_my, sel_week, last_w, rng, kind, ma, unit, name, metric, logo), "esr_fig_series")
+
+    _insp_sec("Marketing-year pace")
+    s1, s2, s3, _ = st.columns([2.0, 1.3, 1.5, 2.4])
+    years_mode = s1.segmented_control("Compare with", ["5 prior years", "10 prior years"], default="5 prior years",
+                                      key="esr_years") or "5 prior years"
+    cumulative = smooth = False
+    if flow:
+        cumulative = s2.toggle("Cumulative", key="esr_cum", help="Adds each week to the ones before it: the marketing year to date.")
+        if not cumulative:
+            smooth = s3.toggle("4-week average", key="esr_smooth")
+    else:
+        s2.caption("A balance: shown as it stood each week.")
+    _insp_plot(_esr_fig_season(T[col], flow, code, sel_my, sel_week, last_w, years_mode, cumulative, smooth, unit, name, metric, logo),
+               "esr_fig_season")
+
+    # ── where it is going ─────────────────────────────────────────────────────
+    _insp_sec("Where it is going")
+    cur_f = dff[dff["my"] == sel_my]
+    d1, d2, _ = st.columns([2.4, 1.8, 2.2])
+    to_date = False
+    if flow:
+        to_date = (d1.segmented_control("Period", ["This week", "Marketing year to date"], default="This week",
+                                        key="esr_period") or "This week") != "This week"
+    else:
+        d1.caption(f"A balance: shown as it stood at the end of week {sel_week}.")
+    top_n = d2.slider("Destinations shown", 5, 30, 12, key="esr_topn")
+    rows = cur_f[cur_f["wk"] <= sel_week] if to_date else cur_f[cur_f["wk"] == sel_week]
+    vals = rows.groupby("country")[col].sum() * sc
+    when = (f"{my_label} to date · through week {sel_week} ({week_end(sel_week):%b %d, %Y})" if to_date
+            else f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}")
+    if vals.abs().sum() <= 1e-12:
+        st.info(f"No destination has {metric.lower()} to show for this period and these filters.")
+    else:
+        cl, cr = st.columns([3, 2])
+        with cl:
+            fig = _esr_fig_dest(vals, top_n, unit, f"{metric} by destination ({unit})", when, logo=logo)
+            if fig is not None:
+                _insp_plot(fig, "esr_fig_dest")
+        with cr:
+            pos = vals[vals > 1e-12]
+            fig = _insp_fig_donut(pd.DataFrame({"dest": pos.index, "v": pos.to_numpy()}), "dest", unit, "Share by destination",
+                                  when + (" · net cancellations left out" if (vals < -1e-12).any() else ""), top_n=7, min_label=3)
+            if fig is not None:
+                _insp_plot(fig, "esr_fig_share")
+
+    # ── detail ────────────────────────────────────────────────────────────────
+    _insp_sec("Detail by destination")
+    num_cols = list(_ESR_FIELDS.values())
+    wk_rows = cur_f[cur_f["wk"] == sel_week]
+    tbl = wk_rows.groupby("country")[num_cols].sum() * sc
+    ly_commit = dff[(dff["my"] == sel_my - 1) & (dff["wk"] == sel_week)].groupby("country")["commit"].sum() * sc
+    tbl = tbl.reindex(tbl.index.union(ly_commit[ly_commit.abs() > 1e-12].index)).fillna(0.0)
+    tbl = tbl[(tbl[num_cols].abs() > 1e-12).any(axis=1)].sort_values("commit", ascending=False)
+    ly_c = ly_commit.reindex(tbl.index).fillna(0.0)
+    tbl["vs"] = np.where(ly_c > 0, (tbl["commit"] / ly_c.where(ly_c > 0) - 1.0) * 100.0, np.nan)
+    tot = tbl["commit"].sum()
+    tbl["share"] = tbl["commit"] / tot * 100.0 if tot > 0 else np.nan
+    tbl.index.name = "Destination"
+    nice = {c: f"{_ESR_LABEL[c].replace(' (next MY)', ', next MY')} ({unit})" for c in num_cols}
+    nice.update({"vs": "Commitments vs a year ago", "share": "Share of commitments"})
+    tbl = tbl.rename(columns=nice)
+    st.download_button("Download CSV", data=tbl.round(4).to_csv(),
+                       file_name=f"us_{commodity.lower().replace(' ', '_')}_export_sales_{my_label.replace('/', '-')}_wk{sel_week}.csv",
+                       mime="text/csv", key="esr_dl")
+    vf = "{:,.1f}" if unit == "TMT" else "{:,.2f}"
+    show = tbl.head(80).copy()
+    show["Commitments vs a year ago"] = show["Commitments vs a year ago"].map(lambda p: "—" if pd.isna(p) else f"{p:+.1f}%")   # a null cell would read "None"
+    fmt = {nice[c]: vf for c in num_cols}
+    fmt["Share of commitments"] = "{:.1f}%"
+    _insp_table(show.style.format(fmt, na_rep="—"), 420)
+
+    st.markdown(
+        '<div class="insp-note">Source: USDA Foreign Agricultural Service, Export Sales Reporting (ESR), by week ending Thursday; '
+        'the same weekly report as jpsi.com/export-sales-dashboard. <b>Net sales</b> are new sales less cancellations and can be negative; '
+        '<b>outstanding sales</b> are sold and not yet shipped; <b>total commitments</b> are accumulated exports plus outstanding sales; '
+        '<b>next MY</b> counts sales for the following marketing year. The first report of a marketing year covers only the days since it '
+        'began, so its weekly exports run short. Sales are reported by exporters on contract date and are revised later. '
+        '"6-yr Olympic avg" drops the highest and lowest of the six prior marketing years, as elsewhere in this dashboard.</div>',
+        unsafe_allow_html=True)
+
+
+@st.fragment
+def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
+    """Export sales tab. A fragment, so its filters rerun only this tab, not all ten. The unit comes from the global
+    toggle through `use_bushels`; `unit_short` is kept for the caller's sake."""
+    try:
+        _esr_render(use_bushels)
+    except Exception as e:
+        st.error(f"Export Sales tab error: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY SNAPSHOTS  (the KPI tiles of the Inspections and Export Sales tabs, one card per commodity)
+#   Export Sales: corn, soybeans, soybean meal, soybean oil and wheat from the ESR weekly report.
+#   Inspections: corn, soybeans and wheat from FGIS. FGIS inspects grain, not products, so the soybean meal and soybean oil cards
+#   show weekly shipments (the weekly exports of that same ESR report) instead.
+#   Each card is the latest week of its own source; the unit follows the tab's Units switch (meal and oil have no bushel weight).
+# ─────────────────────────────────────────────────────────────────────────────
+_SNAP_ORDER = ("Corn", "Soybeans", "Soybean meal", "Soybean oil", "Wheat")
+_SNAP_COLOR = {"Corn": _CH_GOLD, "Soybeans": _CH_SAGE, "Soybean meal": _CH_BLUE, "Soybean oil": _CH_TERRA, "Wheat": "#d9904a"}
+_SNAP_ESR = {"Corn": "Corn", "Soybeans": "Soybeans", "Soybean meal": "Soybean meal", "Soybean oil": "Soybean oil", "Wheat": "Wheat - all"}
+_SNAP_INSP = {"Corn": "Corn", "Soybeans": "Soybeans", "Wheat": "Wheat"}               # card -> _INSP_GRAINS key
+_ESR_SNAP_DEPTH = 7                       # the current marketing year and six before it: a year ago and the 6-year Olympic average
+
+
+def _snap_kpi(label: str, value: str, unit: str, lines: list) -> str:
+    unit_html = f'<span class="insp-tile-unit">{unit}</span>' if unit else ""
+    return (f'<div class="snap-kpi"><div class="insp-tile-label">{label}</div>'
+            f'<div class="snap-val">{value}{unit_html}</div>{"".join(lines)}</div>')
+
+
+def _snap_top(label: str, name, lines: list) -> str:
+    return (f'<div class="snap-kpi"><div class="insp-tile-label">{label}</div>'
+            f'<div class="snap-top">{_html_escape(str(name))}</div>{"".join(lines)}</div>')
+
+
+def _snap_card(title: str, subs: list, kpis: list) -> str:
+    """A card: the commodity, a two-line header (what it is, which week), then the KPI blocks. Two lines on every card keeps
+    the rows of neighbouring cards level."""
+    head = "".join(f"<span>{s}</span>" for s in subs)
+    return (f'<div class="snap-card" style="border-top-color:{_SNAP_COLOR[title]}">'
+            f'<div class="snap-head"><b>{title}</b>{head}</div>{"".join(kpis)}</div>')
+
+
+def _snap_off(title: str, why: str) -> str:
+    return (f'<div class="snap-card" style="border-top-color:{_SNAP_COLOR[title]}"><div class="snap-head"><b>{title}</b>'
+            f'<span>not available just now</span><span>&nbsp;</span></div><div class="snap-off">{_html_escape(why)}</div></div>')
+
+
+def _snap_top_lines(vals: pd.Series, period: str):
+    """(name, the two lines under it) of the largest entry of a series of volumes: its share and the next two."""
+    s = vals[vals > 1e-12].sort_values(ascending=False)
+    tot = float(s.sum())
+    if s.empty or tot <= 0:
+        return "—", [f'<div class="insp-line">nothing in the {period}</div>']
+    rest = " · ".join(f"{_html_escape(str(n))} {v / tot * 100:.0f}%" for n, v in s.iloc[1:3].items() if v / tot >= 0.005)
+    return s.index[0], [f'<div class="insp-line"><b>{s.iloc[0] / tot * 100:.0f}%</b> of the {period}</div>',
+                        f'<div class="insp-line">{rest}</div>' if rest else ""]
+
+
+def _esr_snap_loads(cat: dict, labels: list, store: dict | None = None) -> dict:
+    """{ESR commodity label: (frame, failed years), or the Exception that stopped it}: the current marketing year and six before it
+    for each commodity, the commodities in parallel. The one store is shared with the Export Sales tab, which reuses what is loaded."""
+    store = store if store is not None else _esr_store()
+
+    def one(label):
+        code = _ESR_COMMODITIES[label][0]
+        current = cat["current"].get(code)
+        if current is None:
+            raise RuntimeError("USDA lists no current marketing year for it")
+        return _esr_history(code, current, _ESR_SNAP_DEPTH, store)
+
+    with ThreadPoolExecutor(max_workers=max(1, len(labels))) as pool:
+        futures = {label: pool.submit(one, label) for label in labels}
+    out = {}
+    for label, fut in futures.items():
+        try:
+            out[label] = fut.result()
+        except Exception as e:
+            out[label] = e
+    return out
+
+
+def _esr_snap_kpis(df: pd.DataFrame, code: int, cat: dict, sc: float) -> dict:
+    """The latest week of every measure of one commodity, all destinations: against last week, a year ago and the 6-year Olympic
+    average (`_esr_compare`), and the week's net sales and weekly exports by destination. Volumes are scaled by `sc`."""
+    df = _esr_named(df, cat)
+    sel_my = int(df["my"].max())
+    last_w = int(df.loc[df["my"] == sel_my, "wk"].max())
+    T = {c: m * sc for c, m in _esr_matrices(df, df).items()}
+    prior6 = [y for y in T["net"].index if y < sel_my][-6:]
+    comp = {c: _esr_compare(T[c], _ESR_FLOW[c], code, sel_my, last_w, prior6) for c in T}
+    rows = df[(df["my"] == sel_my) & (df["wk"] == last_w)]
+    return dict(my=sel_my, wk=last_w, week_end=_esr_first_thu(code, sel_my) + pd.Timedelta(weeks=last_w - 1), comp=comp,
+                net_by=rows.groupby("country")["net"].sum() * sc, exp_by=rows.groupby("country")["exp"].sum() * sc)
+
+
+def _esr_snap_card(title: str, frame: pd.DataFrame, cat: dict, use_bu: bool) -> str:
+    """One commodity's card on the Export Sales snapshot."""
+    code, _month, lb = _ESR_COMMODITIES[_SNAP_ESR[title]]
+    bu_ok = use_bu and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    k = _esr_snap_kpis(frame, code, cat, (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1e-3)
+    kpis = []
+    for c, lab in (("net", f"Net sales · week {k['wk']}"), ("exp", "Weekly exports"), ("out", "Outstanding sales"),
+                   ("acc", "Exports to date"), ("commit", "Total commitments")):
+        cc = k["comp"][c]
+        kpis.append(_snap_kpi(lab, _insp_fmt(cc["cur"], unit), unit,
+                              [_esr_delta_line(cc["cur"], cc["prev"], "vs last week", unit),
+                               _esr_delta_line(cc["cur"], cc["ly"], "vs a year ago", unit),
+                               _esr_delta_line(cc["cur"], cc["oly"], "vs 6-yr Olympic avg", unit)]))
+    name, lines = _snap_top_lines(k["net_by"], "week's net sales")
+    kpis.append(_snap_top("Top buyer · net sales", name, lines))
+    return _snap_card(title, [_esr_my_label(code, k["my"]) + (" · all classes" if title == "Wheat" else ""),
+                              f"week ending {k['week_end']:%b %d}"], kpis)
+
+
+def _ship_snap_card(title: str, frame: pd.DataFrame, cat: dict) -> str:
+    """A product's card on the Inspections snapshot: weekly shipments, because FGIS inspects grain, not meal or oil. These come from
+    the weekly exports of USDA export sales (TMT: products have no bushel weight)."""
+    code = _ESR_COMMODITIES[_SNAP_ESR[title]][0]
+    unit = "TMT"
+    k = _esr_snap_kpis(frame, code, cat, 1e-3)
+    ex, ac = k["comp"]["exp"], k["comp"]["acc"]
+    name, lines = _snap_top_lines(k["exp_by"], "week's shipments")
+    kpis = [
+        _snap_kpi(f"Weekly shipments · week {k['wk']}", _insp_fmt(ex["cur"], unit), unit,
+                  [_esr_delta_line(ex["cur"], ex["prev"], "vs prior week", unit),
+                   _esr_delta_line(ex["cur"], ex["ly"], "vs same week last year", unit),
+                   _esr_delta_line(ex["cur"], ex["oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_kpi(f"{_esr_my_label(code, k['my'])} to date", _insp_fmt(ac["cur"], unit), unit,
+                  [_esr_delta_line(ac["cur"], ac["ly"], "vs last year", unit),
+                   _esr_delta_line(ac["cur"], ac["oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_top("Top destination", name, lines),
+    ]
+    return _snap_card(title, ["Shipments · USDA export sales", f"week ending {k['week_end']:%b %d}"], kpis)
+
+
+def _insp_snap_card(title: str, df: pd.DataFrame, use_bu: bool) -> str:
+    """One grain's card on the Inspections snapshot: the latest FGIS week."""
+    _code, start_month, lb = _INSP_GRAINS[_SNAP_INSP[title]]
+    bu_ok = use_bu and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    dff = df.assign(v=(df["lbs"] / lb / 1e6) if bu_ok else (df["mt"] / 1000.0))
+    M, C = _insp_matrices(df, dff)
+    sel_my = int(df["my"].max())
+    last_w = int(df.loc[df["my"] == sel_my, "my_week"].max())
+    p = _insp_pace(M, C, sel_my, last_w)
+    week_end = _insp_first_thu(sel_my, start_month) + pd.Timedelta(weeks=last_w - 1)
+    wk = dff[(dff["my"] == sel_my) & (dff["my_week"] == last_w)]
+    d_name, d_lines = _snap_top_lines(wk.groupby("dest")["v"].sum(), "week")
+    r_name, r_lines = _snap_top_lines(wk.groupby("region")["v"].sum(), "week")
+    kpis = [
+        _snap_kpi(f"Inspections · week {last_w}", _insp_fmt(p["w_cur"], unit), unit,
+                  [_esr_delta_line(p["w_cur"], p["w_prev"], "vs prior week", unit),
+                   _esr_delta_line(p["w_cur"], p["w_ly"], "vs same week last year", unit),
+                   _esr_delta_line(p["w_cur"], p["w_oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_kpi(f"{sel_my}/{str(sel_my + 1)[-2:]} to date", _insp_fmt(p["c_cur"], unit), unit,
+                  [_esr_delta_line(p["c_cur"], p["c_ly"], "vs last year", unit),
+                   _esr_delta_line(p["c_cur"], p["c_oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_top("Top destination", d_name, d_lines),
+        _snap_top("Top origin region", r_name, r_lines),
+    ]
+    return _snap_card(title, ["FGIS inspections", f"week ending {week_end:%b %d}"], kpis)
+
+
+def _snap_header(text: str) -> None:
+    st.markdown(
+        f'<div style="margin:14px 0 8px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+        f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">{text}</span></div>',
+        unsafe_allow_html=True)
+
+
+def _esr_snapshot(use_bu: bool) -> None:
+    """Export Sales snapshot: corn, soybeans, soybean meal, soybean oil and wheat, the latest report week of each."""
+    try:
+        cat = _esr_catalog()
+    except Exception as e:
+        st.error(f"**The USDA export-sales service could not be reached.** `{e}` Click **Refresh Data** above to try again.")
+        return
+    with st.spinner("Loading the latest export sales…"):
+        loads = _esr_snap_loads(cat, [_SNAP_ESR[t] for t in _SNAP_ORDER])
+    cards = {}
+    for t in _SNAP_ORDER:
+        got = loads[_SNAP_ESR[t]]
+        if isinstance(got, Exception):
+            cards[t] = _snap_off(t, f"The USDA export-sales service did not answer ({got}).")
+        elif got[0].empty:
+            cards[t] = _snap_off(t, "No export sales are on file yet.")
+        else:
+            cards[t] = _esr_snap_card(t, got[0], cat, use_bu)
+    _snap_header("United States Export Sales: summary snapshot")
+    last = max((c for c in (loads[_SNAP_ESR[t]][0]["week"].max() for t in _SNAP_ORDER
+                            if not isinstance(loads[_SNAP_ESR[t]], Exception) and not loads[_SNAP_ESR[t]][0].empty)), default=None)
+    if last is not None:
+        st.caption(f"Data through the week ending {last:%a %b %d, %Y}. USDA publishes on Thursdays at 8:30 a.m. ET, "
+                   f"for the week that ended the Thursday before.")
+    for t, col in zip(_SNAP_ORDER, st.columns(5)):
+        col.markdown(cards[t], unsafe_allow_html=True)
+    st.markdown(
+        '<div class="insp-note">USDA Foreign Agricultural Service, Export Sales Reporting: the latest report week of each commodity, '
+        'against last week, the same marketing-year week a year ago and the 6-year Olympic average (the highest and lowest of the six '
+        'prior years dropped). Wheat is all classes. Soybean meal and oil marketing years start October 1, so early in the year their '
+        'comparisons rest on a few weeks. Mbu applies to corn, soybeans and wheat; meal and oil have no bushel weight and stay in TMT. '
+        'Switch to Detail for the filters, charts and country table.</div>', unsafe_allow_html=True)
+
+
+def _insp_snapshot(use_bu: bool) -> None:
+    """Inspections snapshot: corn, soybeans and wheat from FGIS, and soybean meal and oil as weekly shipments from export sales."""
+    jobs = [(_INSP_GRAINS[_SNAP_INSP[t]][0], _INSP_GRAINS[_SNAP_INSP[t]][1]) for t in _SNAP_ORDER if t in _SNAP_INSP]
+    ship_labels = [_SNAP_ESR[t] for t in _SNAP_ORDER if t not in _SNAP_INSP]
+    cat, cat_err = None, None
+    try:
+        cat = _esr_catalog()
+    except Exception as e:
+        cat_err = e
+    insp_store, esr_store = _insp_store(), _esr_store()
+    with st.spinner("Loading the latest inspections and shipments…"):
+        with ThreadPoolExecutor(max_workers=2) as pool:           # FGIS and the ESR report are fetched side by side
+            f_insp = pool.submit(_insp_frames, jobs, insp_store)
+            f_ship = pool.submit(_esr_snap_loads, cat, ship_labels, esr_store) if cat is not None else None
+        frames = f_insp.result()
+        ships = f_ship.result() if f_ship is not None else {}
+    cards = {}
+    for t in _SNAP_ORDER:
+        if t in _SNAP_INSP:
+            got = frames[_INSP_GRAINS[_SNAP_INSP[t]][0]]
+            if isinstance(got, Exception):
+                cards[t] = _snap_off(t, f"The FGIS inspections could not be read ({got}).")
+            elif got.empty:
+                cards[t] = _snap_off(t, "No export inspections are on file.")
+            else:
+                cards[t] = _insp_snap_card(t, got, use_bu)
+        else:
+            got = ships.get(_SNAP_ESR[t], cat_err)
+            if isinstance(got, Exception) or got is None:
+                cards[t] = _snap_off(t, f"The USDA export-sales service did not answer ({got}).")
+            elif got[0].empty:
+                cards[t] = _snap_off(t, "No export sales are on file yet.")
+            else:
+                cards[t] = _ship_snap_card(t, got[0], cat)
+    _snap_header("United States Export Inspections: summary snapshot")
+    for t, col in zip(_SNAP_ORDER, st.columns(5)):
+        col.markdown(cards[t], unsafe_allow_html=True)
+    st.markdown(
+        '<div class="insp-note">Corn, soybeans and wheat: USDA Federal Grain Inspection Service export inspections, the latest week '
+        '(FGIS posts on Mondays), against the prior week, the same marketing-year week last year and the 6-year Olympic average. '
+        'FGIS inspects grain, not products, so <b>soybean meal and soybean oil show weekly shipments</b> from USDA export sales (the '
+        'weekly exports of the Thursday report, a week behind inspections). Mbu applies to the grains; meal and oil have no bushel '
+        'weight and stay in TMT. Switch to Detail for the filters, charts and destination table.</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VESSEL LINEUP  (the Summary page of the Vessel Line-up dashboard, mirrored)
+#   The page is generated into vessel_mirror/ by sync_vessel_summary.py (never edited by hand); vessel_tab.py is its wrapper:
+#   data fetch, styling, reload button. Run `python sync_vessel_summary.py status` to see whether the source has moved on.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.fragment
+def _run_vessel_lineup_tab():
+    """Vessel Lineup tab. A fragment, so its toggles and filters rerun only this tab, not all of them."""
+    try:
+        import vessel_tab
+        vessel_tab.render()
+    except Exception as e:
+        st.error(f"Vessel Lineup tab error: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# EXPORT DESTINATIONS
+#   United States                   USDA FAS GATS / Census, cached by gats.py into Snowflake GATS_EXPORTS
+#   Brazil / Argentina / Ukraine    TDM exports by destination, cached by tdm_partners.py into TDM_PARTNER_MONTHLY
+#   China                           TDM imports by origin (same table, flow I)
+# ─────────────────────────────────────────────────────────────────────────────
+_GATS_COMMODITIES = {"Corn": "corn", "Soybeans": "soybeans", "Soybean Meal": "soybeanmeal", "Wheat": "wheat",
+                    "Sorghum": "sorghum", "Canola": "canola"}
+_GATS_MBU_PER_TMT = {"corn": 0.039368, "soybeans": 0.036744, "wheat": 0.036744,
+                     "sorghum": 0.039368, "canola": 0.044092}   # soybean meal has no bushel unit
+_GATS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# tab selector -> where the numbers come from and which way the trade runs
+_DEST_PLACES = {
+    "United States":              dict(code="US", src="gats", owner="US", flow="E"),
+    "Brazil":                     dict(code="BR", src="tdm", owner="Brazil", flow="E"),
+    "Argentina":                  dict(code="AR", src="tdm", owner="Argentina", flow="E"),
+    "Ukraine":                    dict(code="UA", src="tdm", owner="Ukraine", flow="E"),
+    "China (imports, by origin)": dict(code="CN", src="tdm", owner="China", flow="I"),
+}
+_TDM_COMMODITY_OF = {"205719": "corn", "205714": "soybeans", "205717": "soybeanmeal", "205713": "wheat"}
+_DEST_CONFIDENTIAL = "Confidential"        # TDM's name for shipments a country reports without a destination
+
+
+class _DestNotLoaded(Exception):
+    """The TDM partner table is missing or still empty. Raised, not returned, so st.cache_data never caches it."""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_gats_destinations() -> pd.DataFrame:
+    """Every loaded partner-month: commodity, code, country, year, month, tmt, value.
+    Raises on failure (a cached empty frame would hide an outage for an hour); a dead cached
+    connection is dropped and retried once."""
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT commodity, partner_code, partner_name, year, month, tmt, value_usd FROM GATS_EXPORTS")
+            df = pd.DataFrame(cur.fetchall(), columns=["commodity", "code", "country", "year", "month", "tmt", "value"])
+            for c in ("year", "month"):
+                df[c] = df[c].astype(int)
+            for c in ("tmt", "value"):
+                df[c] = df[c].astype(float)
+            return df
+        except Exception:
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_tdm_partner_months() -> pd.DataFrame:
+    """Every loaded TDM partner-month: reporter, flow, commodity, code, country, year, month, tmt, value.
+    Raises _DestNotLoaded until tdm_partners.py has created and filled the table; any other failure raises as
+    it is (neither is cached)."""
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT reporter, flow, product_code, partner_code, partner_name, year, month, tmt, value_usd "
+                        "FROM TDM_PARTNER_MONTHLY")
+            rows = cur.fetchall()
+        except Exception as e:
+            if "does not exist" in str(e).lower():
+                raise _DestNotLoaded("TDM_PARTNER_MONTHLY does not exist yet")
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()
+            continue
+        if not rows:
+            raise _DestNotLoaded("TDM_PARTNER_MONTHLY is empty")
+        df = pd.DataFrame(rows, columns=["reporter", "flow", "product", "code", "country", "year", "month", "tmt", "value"])
+        df["commodity"] = df["product"].map(_TDM_COMMODITY_OF)
+        for c in ("year", "month"):
+            df[c] = df[c].astype(int)
+        for c in ("tmt", "value"):
+            df[c] = df[c].astype(float)
+        return df.dropna(subset=["commodity"]).drop(columns="product")
+
+
+def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int):
+    """Where a country's corn / soybeans / soybean meal / wheat went (or, for China, came from), by country and
+    month: the US from GATS (Census data), Brazil / Argentina / Ukraine / China from TDM."""
+    c0, c1, c2 = st.columns(3)
+    with c0:
+        place_label = st.selectbox("Country", list(_DEST_PLACES), key="dest_place")
+    place = _DEST_PLACES[place_label]
+    owner, flow = place["owner"], place["flow"]
+    verb = "exports" if flow == "E" else "imports"
+    noun = "destination" if flow == "E" else "origin"
+    Noun = noun.capitalize()
+
+    if place["src"] == "gats":
+        df_all = _load_gats_destinations()
+        if df_all.empty:
+            st.info("No GATS destination data has been loaded yet. Run `python gats.py seed`, then `backfill`, on the droplet.")
+            return
+    else:
+        try:
+            tdm = _load_tdm_partner_months()
+        except _DestNotLoaded:
+            st.info(f"The {owner} {noun} data has not been loaded yet. It is filled by `tdm_partners.py` on the droplet "
+                    "once the TDM_PARTNER_MONTHLY table exists.")
+            return
+        df_all = tdm[(tdm["reporter"] == place["code"]) & (tdm["flow"] == flow)]
+        if df_all.empty:
+            st.info(f"No {owner} {verb} by {noun} are loaded yet.")
+            return
+
+    present = set(df_all["commodity"])
+    com_options = {k: v for k, v in _GATS_COMMODITIES.items() if v in present}
+    with c1:
+        com_label = st.selectbox("Commodity", list(com_options), key=f"dest_commodity_{place['code']}")
+    com = com_options[com_label]
+    df = df_all[df_all["commodity"] == com].copy()
+
+    factor = _GATS_MBU_PER_TMT.get(com) if use_bushels else None
+    unit = unit_short if (not use_bushels or factor) else "TMT"      # meal has no bushel unit: stay in TMT
+    dec = unit_decimals if unit == unit_short else 0
+    scale = factor or 1.0
+    df["vol"] = df["tmt"] * scale
+    df["ym"] = df["year"] * 12 + df["month"] - 1                       # month index, so windows are plain ranges
+    last_ym = int(df["ym"].max())
+    first_ym = int(df["ym"].min())
+    ly = last_ym // 12
+    today = pd.Timestamp.now()
+    if place["src"] == "gats" and last_ym < today.year * 12 + today.month - 1 - 3:    # newest loaded month is >3 months old
+        st.warning("The destination history is still being loaded, so the figures below are incomplete. "
+                   "This notice disappears once recent months are in.")
+
+    def mon(ym):
+        return f"{_GATS_MON[ym % 12]} {ym // 12}"
+
+    options = {
+        "Latest month": (last_ym, last_ym),
+        "Last 3 months": (last_ym - 2, last_ym),
+        "Last 12 months": (last_ym - 11, last_ym),
+        f"{ly} year to date": (ly * 12, last_ym),
+    }
+    for y in range(ly - 1, first_ym // 12 - 1, -1):
+        if y * 12 >= first_ym:
+            options[f"{y} calendar year"] = (y * 12, y * 12 + 11)
+    with c2:
+        per_label = st.selectbox("Period", list(options), index=2, key=f"dest_period_{place['code']}_{com}")
+    start, end = options[per_label]
+    p_start, p_end = start - 12, end - 12                              # same months one year earlier
+    have_prior = p_start >= first_ym
+
+    cur = df[(df["ym"] >= start) & (df["ym"] <= end)]
+    pri = df[(df["ym"] >= p_start) & (df["ym"] <= p_end)]
+    by = cur.groupby("country").agg(vol=("vol", "sum"), value=("value", "sum")).reset_index()
+    by["prior"] = by["country"].map(pri.groupby("country")["vol"].sum()).fillna(0.0)
+    by = by[by["vol"] > 0].sort_values("vol", ascending=False)
+    if by.empty:
+        st.info(f"No {verb} in that period.")
+        return
+    total, prior_total = by["vol"].sum(), pri["vol"].sum()
+    named = by[by["country"] != _DEST_CONFIDENTIAL]                   # 'Confidential' is a bucket, not a country
+    conf_vol = float(by.loc[by["country"] == _DEST_CONFIDENTIAL, "vol"].sum())
+
+    span = mon(start) if start == end else f"{mon(start)} – {mon(end)}"
+    k1, k2, k3, k4 = st.columns([1.7, 1.2, 1.3, 0.8])             # the first label carries the period, so it gets the room
+    k1.metric(f"{owner} {com_label.lower()} {verb} ({span})", f"{total:,.{dec}f} {unit}")
+    if have_prior and prior_total > 0:
+        k2.metric("vs same months a year earlier", f"{(total / prior_total - 1) * 100:+.1f}%",
+                  help=f"{prior_total:,.{dec}f} {unit} in {mon(p_start)}" + ("" if p_start == p_end else f" – {mon(p_end)}"))
+    if len(named):
+        top = named.iloc[0]
+        k3.metric(f"Largest {noun}", top["country"], f"{top['vol'] / total * 100:.0f}% of volume", delta_color="off")
+    k4.metric(f"{Noun}s", f"{len(named)}", help="Countries that took any volume in the period" if flow == "E"
+              else "Countries that supplied any volume in the period")
+    if conf_vol > 0:
+        st.caption(f"{conf_vol / total * 100:.0f}% of the volume is reported by {owner} as '{_DEST_CONFIDENTIAL}' "
+                   f"(no {noun} given); it is shown as its own entry below and left out of the counts above.")
+
+    top_n = st.slider(f"{Noun}s shown", 5, 25, 12, key="dest_topn")
+    show = by.head(top_n)
+
+    col_bar, col_trend = st.columns(2)
+    with col_bar:
+        st.markdown(f"#### Top {top_n} {noun}s — {span}")
+        fig = go.Figure()
+        if have_prior:
+            fig.add_trace(go.Bar(y=show["country"], x=show["prior"], orientation="h", name="Year earlier",
+                                 marker_color=_CH_MIST))
+        fig.add_trace(go.Bar(y=show["country"], x=show["vol"], orientation="h", name=span, marker_color=_CH_BLUE,
+                             text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="outside",
+                             textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
+        fig.update_layout(**_ch_layout(None, None, unit, None, hover="closest", height=max(340, len(show) * 34),
+                                       margin=dict(l=10, r=50, t=44, b=10)))
+        fig.update_layout(barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                                       bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig.update_xaxes(tickformat=",")
+        fig.update_yaxes(autorange="reversed", showgrid=False, automargin=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_trend:
+        st.markdown(f"#### Monthly {verb} by {noun} — last 24 months")
+        t_start = max(first_ym, last_ym - 23)
+        win = df[df["ym"] >= t_start]
+        lead = list(win.groupby("country")["vol"].sum().sort_values(ascending=False).head(7).index)
+        win = win.assign(dest=win["country"].where(win["country"].isin(lead), "All other"))
+        mo = win.groupby(["ym", "dest"])["vol"].sum().reset_index()
+        fig2 = go.Figure()
+        palette = _CH_PAL[:7] + [_CH_MIST]                     # the seven leading countries, then "All other"
+        for i, d in enumerate(lead + ["All other"]):
+            s = mo[mo["dest"] == d]
+            if s.empty:
+                continue
+            fig2.add_trace(go.Bar(x=[mon(v) for v in s["ym"]], y=s["vol"], name=d, marker_color=palette[i]))
+        fig2.update_layout(**_ch_layout(None, None, None, unit, height=max(340, len(show) * 34),
+                                        margin=dict(l=10, r=10, t=10, b=10)))
+        fig2.update_layout(barmode="stack", legend=dict(orientation="h", y=-0.2, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig2.update_xaxes(categoryorder="array", categoryarray=[mon(v) for v in range(t_start, last_ym + 1)])
+        fig2.update_yaxes(tickformat=",")
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown(f"#### {Noun} detail — {span}")
+    tbl = pd.DataFrame({
+        Noun: by["country"],
+        f"Volume ({unit})": by["vol"],
+        "Share": by["vol"] / total * 100,
+        f"Year earlier ({unit})": by["prior"] if have_prior else np.nan,
+        "Change": ((by["vol"] / by["prior"] - 1) * 100).where(by["prior"] > 0) if have_prior else np.nan,
+        "Value ($M)": by["value"] / 1e6,
+        "$/MT": (by["value"] / (by["vol"] / scale * 1000)).where(by["vol"] > 0),
+    })
+    st.dataframe(
+        tbl, hide_index=True, use_container_width=True,
+        column_config={
+            f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+            "Share": st.column_config.NumberColumn(format="%.1f%%"),
+            f"Year earlier ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+            "Change": st.column_config.NumberColumn(format="%+.1f%%"),
+            "Value ($M)": st.column_config.NumberColumn(format="$%,.1f"),
+            "$/MT": st.column_config.NumberColumn(format="$%,.0f"),
+        },
+    )
+    if place["src"] == "gats":
+        st.caption(
+            f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
+            "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum), sorghum = HS 1007, canola = HS 1205 (rapeseed/colza seed). "
+            "Census revises months for up to a year, and countries are as Census reports them (e.g. EU members appear individually). "
+            "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late."
+        )
+    else:
+        st.caption(
+            f"Source: Trade Data Monitor (TDM), {owner} customs {verb} by partner country, data through {mon(last_ym)}. "
+            "Product groups: corn (ex. seed), soybeans (ex. seed), soybean meal, wheat (ex. seed). "
+            "TDM revises recent months as customs data is finalised, and each country's own reporting lag differs. "
+            + ("" if flow == "I" else f"Partners are the destination as {owner}'s customs record it; shipments to a "
+               "transshipment hub (e.g. the Netherlands, Singapore) are not traced further.")
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FLASH SALES TAB
+# Every USDA daily flash export sale (100,000 t or more of one commodity to one destination, soybean oil 20,000 t),
+# one row per announcement in Snowflake JSA.FLASH_SALES.ALL_SALES. Filled by flash_archive.py of the China
+# soybean tracker (FAS emails, daily) plus the desk's USDA Flash.xlsx history (marketing year derived).
+# ─────────────────────────────────────────────────────────────────────────────
+_FLASH_ORDER = ["Corn", "Soybeans", "Soybean Meal", "Soybean Oil", "Wheat", "Sorghum"]
+_FLASH_MBU = {"Corn": 0.039368, "Soybeans": 0.036744, "Wheat": 0.036744, "Sorghum": 0.039368}   # meal, oil: no bushel unit
+_FLASH_MY_MONTH = {"Wheat": 6, "Soybean Meal": 10, "Soybean Oil": 10}                          # every other marketing year starts Sep 1
+_FLASH_ADJ = {"switch", "cancel", "reduction", "destination_change", "rebooked", "revision"}   # corrections, kept out of the totals
+_FLASH_RESET_KEYS = ("flash_com", "flash_my_", "flash_per", "flash_dst_", "flash_freq", "flash_topn")
+_FLASH_PERIODS = {"Everything selected": None, "Last 30 days": 30, "Last 90 days": 90, "Last 12 months": 365}
+
+
+class _FlashNotAvailable(Exception):
+    """The archive view is missing, empty, or this app's Snowflake role may not read it. Raised so st.cache_data never caches it."""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_flash_sales() -> pd.DataFrame:
+    """Every archived flash sale: date, ESR, commodity, tonnes, destination, marketing year, flags, source (+ adj, tmt)."""
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT SALE_DATE, ESR, COMMODITY, MT, DESTINATION, MARKETING_YEAR, FLAGS, SOURCE "
+                        "FROM JSA.FLASH_SALES.ALL_SALES")
+            rows = cur.fetchall()
+        except Exception as e:
+            msg = str(e).lower()
+            if "does not exist" in msg or "not authorized" in msg or "insufficient privileges" in msg:
+                raise _FlashNotAvailable(str(e).splitlines()[0])
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()
+            continue
+        if not rows:
+            raise _FlashNotAvailable("JSA.FLASH_SALES.ALL_SALES is empty")
+        df = pd.DataFrame(rows, columns=["date", "esr", "commodity", "mt", "dest", "my", "flags", "source"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["mt"] = df["mt"].astype(float)
+        df["tmt"] = df["mt"] / 1000.0
+        df["flags"] = df["flags"].fillna("")
+        df["dest"] = df["dest"].fillna("—").replace("", "—")
+        df["adj"] = df["flags"].apply(lambda f: bool(_FLASH_ADJ & set(str(f).split(","))))
+        return df
+
+
+def _flash_my_start(com: str, my: str) -> pd.Timestamp:
+    return pd.Timestamp(int(my[:4]), _FLASH_MY_MONTH.get(com, 9), 1)
+
+
+def _run_flash_sales_tab(use_bushels: bool):
+    st.markdown(_INSP_CSS, unsafe_allow_html=True)
+    try:
+        df = _load_flash_sales()
+    except _FlashNotAvailable as e:
+        st.info("The flash-sale archive is not readable by this dashboard yet. It lives in Snowflake `JSA.FLASH_SALES`; "
+                "the dashboard's role needs read access to it (see the grant note in the China tracker's README). "
+                f"Detail: {e}")
+        return
+    except Exception as e:
+        st.error(f"**The flash-sale archive could not be read.** `{e}` Click **Refresh Data** above to try again.")
+        return
+
+    latest = df["date"].max()
+    present = set(df["commodity"])
+    coms = [c for c in _FLASH_ORDER if c in present] + sorted(present - set(_FLASH_ORDER))
+
+    with st.container(border=True, key="flash_filters"):
+        top_l, top_r = st.columns([5, 1.1])
+        top_l.markdown('<span class="fp-title">Filters</span><span class="fp-sub">apply to every tile, chart and table below</span>',
+                       unsafe_allow_html=True)
+        top_r.button("Reset filters", key="flash_reset", on_click=_fp_reset, args=(_FLASH_RESET_KEYS,))
+        _fp_group("What to show")
+        c_com, c_my, c_per, c_dst = st.columns([1.2, 1.1, 1.3, 2.6])
+        com = c_com.selectbox("Commodity", ["All commodities"] + coms, key="flash_com")
+        single = com != "All commodities"
+        sub = df[df["commodity"] == com] if single else df
+        years = sorted((y for y in sub["my"].dropna().unique() if y), reverse=True)
+        my = c_my.selectbox("Marketing year", ["All years"] + years, key=f"flash_my_{com}")
+        per = c_per.selectbox("Period", list(_FLASH_PERIODS), key="flash_per")
+        f = sub if my == "All years" else sub[sub["my"] == my]
+        days = _FLASH_PERIODS[per]
+        if days:
+            f = f[f["date"] > latest - pd.Timedelta(days=days)]
+        dest_opts = list(f.loc[~f["adj"]].groupby("dest")["mt"].sum().sort_values(ascending=False).index)
+        picked = c_dst.multiselect("Destination", dest_opts, key=f"flash_dst_{com}_{my}_{per}", placeholder="All destinations")
+        if picked:
+            f = f[f["dest"].isin(picked)]
+        chips = [x for x in (com if single else "", my if my != "All years" else "", per if days else "") if x] + picked
+        st.markdown(_fp_chips(chips, "Showing every flash sale on file."), unsafe_allow_html=True)
+
+    adj, g = f[f["adj"]], f[~f["adj"]].copy()
+    if g.empty:
+        st.info("No flash sales match those filters.")
+        return
+
+    factor = _FLASH_MBU.get(com) if (use_bushels and single) else None
+    unit = "Mbu" if factor else "TMT"
+    dec = 1 if factor else 0
+    g["vol"] = g["tmt"] * (factor or 1.0)
+    total = g["vol"].sum()
+    if use_bushels and not factor:
+        st.caption("Million bushels apply to one grain at a time (corn, soybeans, wheat, sorghum); this view stays in TMT.")
+
+    # ── tiles ────────────────────────────────────────────────────────────────────────────────────
+    prior_line = _insp_delta_line(None, "no earlier year to compare")
+    if days:
+        p_end, p_start = latest - pd.Timedelta(days=365), latest - pd.Timedelta(days=365 + days)
+        pb = sub[(sub["date"] > p_start) & (sub["date"] <= p_end) & ~sub["adj"]]
+        if picked:
+            pb = pb[pb["dest"].isin(picked)]
+        if my != "All years":
+            pb = pb.iloc[0:0]          # a fixed marketing year has no 'same days last year'
+        pv = pb["tmt"].sum() * (factor or 1.0)
+        if pv > 0:
+            prior_line = _insp_delta_line(_insp_pct(total, pv), f"vs the same {days} days a year earlier ({pv:,.{dec}f} {unit})")
+    big = g.loc[g["vol"].idxmax()]
+    by_dest = g.groupby("dest")["vol"].sum().sort_values(ascending=False)
+    named = by_dest.drop(labels=["Unknown Destinations", "—"], errors="ignore")
+    unk = float(by_dest.get("Unknown Destinations", 0.0))
+    china = float(by_dest.get("China", 0.0))
+    t1, t2, t3, t4 = st.columns(4)
+    t1.markdown(_insp_tile("Flash sales reported", f"{total:,.{dec}f}", unit,
+                           [f'<div class="insp-line">{len(g):,} announcements, through {latest:%b %d, %Y}</div>', prior_line]),
+                unsafe_allow_html=True)
+    t2.markdown(_insp_tile("Largest single sale", f"{big['vol']:,.{dec}f}", unit,
+                           [f'<div class="insp-line">{_html_escape(big["commodity"])} to {_html_escape(big["dest"])}</div>',
+                            f'<div class="insp-line">{big["date"]:%b %d, %Y}</div>']), unsafe_allow_html=True)
+    if len(named):
+        t3.markdown(_insp_tile("Largest named destination", _html_escape(named.index[0]), "",
+                               [f'<div class="insp-line">{named.iloc[0]:,.{dec}f} {unit}, {named.iloc[0] / total * 100:.0f}% of volume</div>']),
+                    unsafe_allow_html=True)
+    t4.markdown(_insp_tile("Unknown destinations", f"{unk / total * 100:.0f}%", "of volume",
+                           [f'<div class="insp-line">{unk:,.{dec}f} {unit}</div>',
+                            f'<div class="insp-line">China: {china / total * 100:.0f}% ({china:,.{dec}f} {unit})</div>']),
+                unsafe_allow_html=True)
+
+    # ── charts ───────────────────────────────────────────────────────────────────────────────────
+    _insp_sec("Volume over time")
+    freq = st.segmented_control("Group by", ["Weekly", "Monthly"], default="Weekly", key="flash_freq") or "Weekly"
+    g["bucket"] = g["date"].dt.to_period("W" if freq == "Weekly" else "M").dt.start_time
+    lead = list(by_dest.head(7).index)
+    g["seg"] = g["dest"].where(g["dest"].isin(lead), "All other")
+    ts = g.groupby(["bucket", "seg"])["vol"].sum().reset_index()
+    fig = go.Figure()
+    for i, name in enumerate(lead + ["All other"]):
+        s = ts[ts["seg"] == name]
+        if s.empty:
+            continue
+        col = _CH_MIST if name == "All other" else (_CH_COUNTRY.get(name) if name in _CH_COUNTRY else _CH_PAL[i % 11])
+        fig.add_trace(go.Bar(x=s["bucket"], y=s["vol"], name=name, marker_color=col))
+    fig.update_layout(barmode="stack")
+    _insp_style(fig, 380, logo="x", y_title=unit)
+    fig.update_yaxes(tickformat=",")
+    _insp_plot(fig, "flash_ts")
+
+    left, right = st.columns(2)
+    with left:
+        top_n = st.slider("Destinations shown", 5, 20, 10, key="flash_topn")
+        show = by_dest.head(top_n)
+        fig2 = go.Figure(go.Bar(y=show.index, x=show.values, orientation="h", marker_color=_CH_BLUE,
+                                text=[f"{v:,.{dec}f}" for v in show.values], textposition="outside",
+                                textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
+        _insp_style(fig2, max(340, len(show) * 32 + 60), title=f"Top destinations ({unit})", legend=False, hover="closest")
+        fig2.update_yaxes(autorange="reversed", showgrid=False, automargin=True)
+        fig2.update_xaxes(tickformat=",")
+        _insp_plot(fig2, "flash_dest")
+    with right:
+        if single:
+            base = sub[~sub["adj"]]
+            if picked:
+                base = base[base["dest"].isin(picked)]
+            data_start = df["date"].min() - pd.Timedelta(days=7)
+            fig3 = go.Figure()
+            mys = sorted(m for m in base["my"].dropna().unique() if m and _flash_my_start(com, m) >= data_start)[-6:]
+            ys = [int(m[:4]) for m in mys]
+            for m in mys:
+                s = base[base["my"] == m].sort_values("date")
+                x = (s["date"] - _flash_my_start(com, m)).dt.days
+                y = (s["tmt"] * (factor or 1.0)).cumsum()
+                col, wid, _ = _year_style(int(m[:4]), max(ys), max(ys) - 1, ys)
+                fig3.add_trace(go.Scatter(x=x, y=y, name=m, mode="lines", line=dict(color=col, width=wid, shape="hv")))
+            _insp_style(fig3, max(340, min(len(show), top_n) * 32 + 60), title=f"Cumulative flash sales by marketing year ({unit})",
+                        x_title="Days into the marketing year", hover="closest")
+            fig3.update_yaxes(tickformat=",")
+            _insp_plot(fig3, "flash_cum")
+        else:
+            bc = g.groupby("commodity")["vol"].sum().reindex(coms).dropna()
+            fig3 = go.Figure(go.Bar(x=bc.index, y=bc.values, marker_color=_CH_SAGE,
+                                    text=[f"{v:,.0f}" for v in bc.values], textposition="outside", cliponaxis=False,
+                                    textfont=dict(color=_CH_MUTED, size=11)))
+            _insp_style(fig3, max(340, len(show) * 32 + 60), title="Volume by commodity (TMT)", legend=False, hover="closest")
+            fig3.update_yaxes(tickformat=",")
+            _insp_plot(fig3, "flash_com_bar")
+
+    # ── every announcement ───────────────────────────────────────────────────────────────────────
+    _insp_sec("Every announcement")
+    both = pd.concat([g.assign(note=np.where(g["flags"].str.contains("my_derived"), "Marketing year estimated", "")),
+                      adj.assign(vol=adj["tmt"] * (factor or 1.0), note="Correction, not in the totals")])
+    tbl = both.sort_values(["date", "mt"], ascending=[False, False]).assign(date=lambda d: d["date"].dt.date)
+    out = pd.DataFrame({"Date": tbl["date"], "Commodity": tbl["commodity"], "Destination": tbl["dest"],
+                        f"Volume ({unit})": tbl["vol"], "Marketing year": tbl["my"], "ESR": tbl["esr"],
+                        "Source": tbl["source"].map({"email": "USDA email", "history": "Desk history"}).fillna(tbl["source"]),
+                        "Note": tbl["note"]})
+    _cfg = {f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f")}
+    try:
+        st.dataframe(out, hide_index=True, width="stretch", height=420, column_config=_cfg)
+    except TypeError:                      # older Streamlit
+        st.dataframe(out, hide_index=True, use_container_width=True, height=420, column_config=_cfg)
+    st.download_button("Download CSV", out.to_csv(index=False).encode("utf-8"), "usda_flash_sales.csv", "text/csv", key="flash_csv")
+    n_hist = int((g["source"] == "history").sum())
+    st.caption(
+        "Source: USDA FAS daily flash export sales (private exporters' reports of 100,000 t or more of one commodity to one destination; "
+        f"soybean oil 20,000 t). {len(g) - n_hist:,} announcements come from the USDA emails, {n_hist:,} from the desk's spreadsheet history "
+        "(Aug 2024 onward), whose marketing year is worked out from the sale date. Switches, cancellations and other corrections are listed "
+        "but left out of every total. A sale on the same day in both sources is counted once, from the email."
+    )
+
+
 def main():
 
     _white_mtime = os.path.getmtime(LOGO_WHITE_PATH) if os.path.exists(LOGO_WHITE_PATH) else 0
@@ -6064,10 +7051,10 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, vessel_tab, ref_tab = st.tabs(
+    corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, flash_tab, dest_tab, vessel_tab, ref_tab = st.tabs(
         ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat",
-         "🇨🇳  China Imports", "🔍  Inspections", "📈  Export Sales",
-         "🚢  Vessel Lineup", "📅  Marketing Years"]
+         "🇨🇳  China Imports", "🔍  US Inspections", "📈  Export Sales", "⚡  Flash Sales",
+         "🧭  Destinations", "🚢  Vessel Lineup", "📅  Marketing Years"]
     )
 
     with corn_tab:
@@ -6096,16 +7083,25 @@ def main():
             st.error(f"China Imports tab error: {_e}")
 
     with insp_tab:
-        try:
-            _run_export_inspections_tab()
-        except Exception as _e:
-            st.error(f"Inspections tab error: {_e}")
+        _run_export_inspections_tab(use_bushels)
 
     with esr_tab:
         try:
             _run_export_sales_tab(use_bushels=use_bushels, unit_short=unit_short)
         except Exception as _e:
             st.error(f"Export Sales tab error: {_e}")
+
+    with flash_tab:
+        try:
+            _run_flash_sales_tab(use_bushels)
+        except Exception as _e:
+            st.error(f"Flash Sales tab error: {_e}")
+
+    with dest_tab:
+        try:
+            _run_destinations_tab(use_bushels, unit_short, unit_decimals)
+        except Exception as _e:
+            st.error(f"Destinations tab error: {_e}")
 
     with vessel_tab:
         try:

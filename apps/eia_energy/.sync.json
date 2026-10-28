@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "044c75386c07cd08f3d5cee069680d234ce5dc37",
+ "commit": "c235d4b557c6abae00d73a4d5b811c4cdfd39f34",
  "files": {
-  "app.py": "50d178dfd3cdf201a3f24fe9e3b25dd2e421a3d96cba4b78c5ca79aab164080c",
+  "app.py": "a9c799e0ab167694aaede237d62e49bc8dd2a60ba2fc3fa0f4b173b45aad3b25",
   "assets/jsa_50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "eia_ethanol_cache_client.py": "db5af1a30e3bcb94453d21593a8056f34e60c1bae6d2705233ca6dda16d933b1"
  },

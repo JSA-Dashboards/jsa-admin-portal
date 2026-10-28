@@ -79,6 +79,10 @@ def save_events(events, db_path=None):
     with _conn(db_path) as c:
         exists = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sail_events'").fetchone()
         if exists:
+            have = {r[1] for r in c.execute("PRAGMA table_info(sail_events)")}
+            for col in d.columns:                       # e.g. vessel_w, added with the Argentina source
+                if col not in have:
+                    c.execute(f'ALTER TABLE sail_events ADD COLUMN "{col}" REAL')
             c.executemany("DELETE FROM sail_events WHERE event_id=?", [(i,) for i in d["event_id"]])
         d.to_sql("sail_events", c, if_exists="append", index=False)
     return len(d)
@@ -108,3 +112,17 @@ def rebuild_executed(db_path=None, cfg=None):
 def load_executed(db_path=None):
     return _read("executed_fact", db_path,
                  ["report_date", "month", "mtd_baseline_date", "mytd_baseline_date"])
+
+
+# ── small replace-all tables (combo calibration: shares, weights, per-vessel actual splits) ──
+
+def save_table(df, name, db_path=None):
+    """Replace table `name` with `df` (these are rebuilt in full each refresh)."""
+    d = _iso(df)
+    with _conn(db_path) as c:
+        d.to_sql(name, c, if_exists="replace", index=False)
+    return len(d)
+
+
+def load_table(name, db_path=None, date_cols=()):
+    return _read(name, db_path, list(date_cols))

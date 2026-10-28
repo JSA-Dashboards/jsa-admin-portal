@@ -53,7 +53,7 @@ st.markdown("###### Paste or upload a position sheet")
 st.caption(
     f"Works for {commodity.name.lower()} options and futures in the same sheet — column names "
     "and order don't need to match, you'll map them next. Every row needs a Contract symbol. "
-    f"Strike, entry/premium, and last-tick prices are all read as cents/{commodity.unit}. If your "
+    f"Strike, entry/premium, and last-tick prices are all read as {commodity.quote_unit}. If your "
     "Qty column is unsigned, also map Position (\"Net Long\"/\"Net Short\"/\"Net\") to supply the "
     "sign — a bare \"Net\" means flat and won't import. **Importing replaces your whole book** (cash positions you've entered are kept) — "
     "this only affects your own browser session, never anyone else's."
@@ -141,7 +141,7 @@ if "import_headers" in st.session_state:
     if st.button("Build preview", type="primary"):
         header_mapping = mapping_to_header_names(new_mapping, headers)
         presets_repo.set_last_used_mapping(header_mapping, updated_by="CJACOBS")
-        staging = [build_staging_row(row, headers, new_mapping) for row in st.session_state.import_rows]
+        staging = [build_staging_row(row, headers, new_mapping, commodity.price_divisor) for row in st.session_state.import_rows]
         st.session_state.import_staging = staging
 
 if "import_staging" in st.session_state:

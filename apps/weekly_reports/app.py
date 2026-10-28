@@ -734,8 +734,8 @@ with st.expander("On this day — for a closing line", expanded=False):
                    "— write it in your own words; nothing here goes into the "
                    "letter on its own.")
     else:
-        st.caption("Sporting firsts, US milestones and the odd agricultural one, "
-                   "for the bottom of the letter. Nothing is inserted for you.")
+        st.caption("Everything This Day in History lists for the date, minus "
+                   "anything grim. Nothing is inserted for you.")
 
 
 st.subheader("Your read")

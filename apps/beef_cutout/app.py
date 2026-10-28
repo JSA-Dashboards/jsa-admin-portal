@@ -15,7 +15,16 @@ import time
 # Same two lines apps/beef_weight/app.py uses to reach daily_slaughter.py.
 # "am_cutout" is a name that exists ONCE in this repo, so unlike snowflake_db
 # it cannot join the five-copy sys.modules collision CLAUDE.md documents.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 import am_cutout
 
 # ── JSA Brand Colors ────────────────────────────────────────────────────────
@@ -1277,7 +1286,7 @@ if not load_ok:
         "⏳ **USDA data temporarily unavailable** — the USDA LMR server is not responding. "
         "This usually resolves in a few minutes. Use **Refresh Now** in the sidebar to retry."
     )
-    with st.expander("Technical details"):
+    for _ in portal_view.staff_expander("Technical details"):
         st.code(err_msg)
     # NOT REDUNDANT. The morning report comes from a different USDA host over
     # a different protocol, so it is very often fine when LMR is not. Delete
@@ -1829,7 +1838,7 @@ st.markdown(
 
 # ── Data Table ───────────────────────────────────────────────────────────────
 
-with st.expander("📋  Data Table"):
+for _ in portal_view.staff_expander("📋  Data Table"):
     display = hist.copy()
     display["report_date"] = display["report_date"].dt.strftime("%Y-%m-%d")
     display = display.rename(columns={

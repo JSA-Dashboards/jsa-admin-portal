@@ -23,9 +23,19 @@ import streamlit as st
 # the portal's shared sys.modules despite the usual by-name collision trap —
 # "cof_recap" and "cold_storage" each exist exactly once in the repo, unlike
 # snowflake_db.py and friends.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 import cof_recap  # noqa: E402
 import cold_storage  # noqa: E402
+import placement_records  # noqa: E402
 from nass_cache_client import fetch_cached  # noqa: E402
 
 # ── JSA brand ────────────────────────────────────────────────────────────────
@@ -229,6 +239,38 @@ CAP_1000 = "CAPACITY: (1,000 OR MORE HEAD)"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def fetch_beef_cows(schema: int) -> pd.Series:
+    """Jan-1 beef cow inventory, year-indexed, SURVEY only.
+
+    SURVEY ONLY IS LOAD-BEARING. This series also carries CENSUS rows, and the
+    Census of Agriculture years 1997, 2002 and 2017 come back at 1.4M, 1.2M and
+    4.0M head against a true ~30M -- a collapse and recovery that never
+    happened, on a series used as a denominator.
+
+    The params are us_cow_herd/inventory.py's BEEF_COWS verbatim, which omits
+    the four keys every other fetch on this page sends. The cache key is a hash
+    of the exact dict, so "tidying" it to match returns nothing at all.
+    """
+    try:
+        payload = fetch_cached({"agg_level_desc": "NATIONAL",
+                                "short_desc": "CATTLE, COWS, BEEF - INVENTORY"})
+    except Exception:
+        return pd.Series(dtype="float64")
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not rows:
+        return pd.Series(dtype="float64")
+    df = pd.DataFrame(rows)
+    if "source_desc" in df:
+        df = df[df["source_desc"] == "SURVEY"]
+    df = df[df["reference_period_desc"] == "FIRST OF JAN"]
+    df["Value"] = pd.to_numeric(df["Value"].astype(str).str.replace(",", "", regex=False),
+                                errors="coerce")
+    df = df.dropna(subset=["Value"])
+    df["year"] = df["year"].astype(int)
+    return df.groupby("year")["Value"].max()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_all(years: tuple, qyears: tuple):
     inv      = fetch_series("CATTLE, ON FEED - INVENTORY", years, CAP_1000)
     place    = fetch_series("CATTLE, ON FEED - PLACEMENTS, MEASURED IN HEAD", years, CAP_1000)
@@ -251,6 +293,60 @@ def load_all(years: tuple, qyears: tuple):
 
 def series_for(df: pd.DataFrame, state: str) -> pd.DataFrame:
     return df[df["state_alpha"] == state].sort_values("date").reset_index(drop=True)
+
+
+# The released report text, by full state name as USDA prints it.
+_STATE_BY_NAME = {v.lower(): k for k, v in STATE_NAMES.items()}
+
+
+def overlay_released(df: pd.DataFrame, series: str, rows: list) -> pd.DataFrame:
+    """`df` with USDA's just-released figures written over it.
+
+    WHY THE PAGE NEEDS THIS AT ALL. Everything here reads QuickStats through a
+    cache a scheduled job fills, so on release day it sat on last month while
+    the COF Recap tab — which parses USDA's released text directly — already had
+    the new one. Two halves of one page a month apart. This closes that: the
+    history still comes from the cache, and the one or two months the release
+    covers are written over the top of it.
+
+    **THE RELEASE WINS WHERE THE TWO OVERLAP, and that is not arbitrary.**
+    Checked against the cache on 2026-10-23: of 104 observations both sources
+    held, 98 agreed exactly and 6 differed — South Dakota and the US total, in
+    all three monthly series, for the PRIOR month. They are USDA's restatement,
+    which every release makes, and the US delta equalled South Dakota's to the
+    head in each one (+5,000 / +3,000 / -2,000). So the disagreements were the
+    release being newer, not this being wrong. The same rule the feeder index
+    runs on: the published value wins for any period it covers.
+
+    **IT IS APPLIED OUTSIDE load_all's CACHE ON PURPOSE.** load_all holds for an
+    hour because it is a Snowflake read over full series; this is a dict merge
+    over ~150 rows. Keeping it out here lets the new month appear on the release
+    text's own five-minute clock without making the history refetch hourly.
+    """
+    if df.empty or not rows:
+        return df
+    recs = []
+    for r in rows:
+        if r["series"] != series:
+            continue
+        st = _STATE_BY_NAME.get(r["state_name"].lower())
+        if not st:
+            continue
+        recs.append({"year": r["year"], "month": r["month"],
+                     "date": pd.Timestamp(year=r["year"], month=r["month"], day=1),
+                     "agg_level_desc": "NATIONAL" if st == "US" else "STATE",
+                     "state_alpha": st, "Value": float(r["value"])})
+    if not recs:
+        return df
+    add = pd.DataFrame(recs)
+    # Replace, never append: the prior month is usually already in the cache and
+    # concatenating would leave TWO rows for it, which every downstream .max()
+    # and groupby would silently pick between.
+    marked = df.merge(add[["state_alpha", "year", "month"]].assign(_new=1),
+                      on=["state_alpha", "year", "month"], how="left")
+    kept = df[marked["_new"].isna().values]
+    return (pd.concat([kept, add], ignore_index=True)
+              .sort_values("date").reset_index(drop=True))
 
 
 def latest_kpi(df: pd.DataFrame, state: str) -> dict:
@@ -279,6 +375,55 @@ def latest_kpi(df: pd.DataFrame, state: str) -> dict:
         yoy = yoy_pct = float("nan")
 
     return dict(current=current, mom=mom, mom_pct=mom_pct, yoy=yoy, yoy_pct=yoy_pct, date=date)
+
+
+def with_year_ago_pct(sub: pd.DataFrame, history: pd.DataFrame = None) -> pd.DataFrame:
+    """`sub` plus a `pct_year_ago` column — USDA's percent of previous year, so
+    100 is unchanged and 97.0 is three percent below.
+
+    `history` is the longer run of the same series to reach back INTO, and the
+    Data tab passes it for a rendering reason rather than an arithmetic one.
+    The tables show the nine years `LOAD_YEARS` covers, so the oldest of them
+    has no year-ago row inside its own frame — and `st.column_config.NumberColumn`
+    has no blank: a missing number prints a greyed **"None"**, which reads as a
+    fault rather than as "USDA published nothing to compare against". Measured
+    on Streamlit 1.63, and it is not a dtype matter: float64 NaN, nullable
+    Float64 pd.NA and an object None all render the same. Reaching into the
+    full record the page already holds for the seasonality charts means those
+    rows carry a real figure, and what "None" is left genuinely has none.
+
+    THE ARITHMETIC IS `cof_recap.pct`, DELIBERATELY. The COF Recap tab on this
+    same page already prints this figure for the latest month off USDA's
+    released report text; a second copy of `round(curr / prev * 100, 1)` here is
+    how the two tabs come to quote one number two ways and disagree in the last
+    decimal. Note the convention differs from the Summary tiles on purpose —
+    those show a percent CHANGE, this reproduces the column USDA's own report
+    prints beside On Feed, Placed and Marketed, which is what the raw-series
+    tables are for. That is also why the column header spells out "% of year
+    ago" rather than carrying a sign.
+
+    The year-ago row is matched on (year - 1, month), never a 12-row shift.
+    They agree on every row of every state today — checked across all three
+    series over the loaded window, zero divergence — so this is not fixing a
+    live defect. It is the form that stays right if a month ever goes missing,
+    which these state series do without warning: Minnesota's placements run to
+    November 2024 and then stop for good. A shift bridges a hole silently and
+    prices a month against whatever row happens to sit twelve places back.
+
+    A row with no year-ago match gets None, which renders blank. The earliest
+    loaded year has no prior year to reach, by construction.
+    """
+    out = sub.copy()
+    src = sub if history is None else history
+    prior = {(int(r.year) + 1, int(r.month)): float(r.Value) for r in src.itertuples()}
+    vals = [
+        cof_recap.pct(float(v), prior.get((int(y), int(m))))
+        for y, m, v in zip(out["year"], out["month"], out["Value"])
+    ]
+    # float64, not object: a state whose every row is unmatched would otherwise
+    # give an all-None column, and NumberColumn's "%.1f%%" cannot format that.
+    out["pct_year_ago"] = pd.Series(vals, index=out.index, dtype="float64")
+    return out
 
 
 def heifer_pct_frame(heifer: pd.DataFrame, steer: pd.DataFrame, inv: pd.DataFrame, state: str) -> pd.DataFrame:
@@ -672,9 +817,13 @@ def render_cold_storage() -> None:
                  "the shared NASS cache has no rows for it (usda-nass-etl jobs/cold_storage.py).")
         return
 
-    tab_over, tab_hist, tab_season, tab_data = st.tabs([
+    # Cold Storage keeps Overview and Full History -- the second is the whole
+    # reason this view reads QuickStats rather than the monthly PDF, since it
+    # goes back to 1917 and a one-month release cannot. Seasonality and Data go
+    # for the same reasons they go upstairs.
+    tab_over, tab_hist, tab_season, tab_data = portal_view.tabs([
         "⭐  Overview", "📈  Full History", "📅  Seasonality", "📋  Data",
-    ], on_change="rerun")
+    ], hide={"📅  Seasonality", "📋  Data"}, on_change="rerun")
 
     with tab_over:
         if tab_over.open:
@@ -821,7 +970,33 @@ Q_YEARS     = tuple(range(1996, current_year + 1))  # full history — NASS seri
 state = st.sidebar.selectbox(
     "State", STATE_ORDER, format_func=lambda s: STATE_NAMES.get(s, s),
 )
-trend_years = st.sidebar.slider("Trend window (years)", 2, 8, 5)
+# The state picker chooses a reading and stays; the trend window is tuning and
+# goes, at the 5 years the staff page opens on. See the same line drawn on
+# Cattle Weights' sidebar.
+trend_years = portal_view.pick(5, lambda: st.sidebar.slider("Trend window (years)", 2, 8, 5))
+
+st.sidebar.divider()
+
+# CLEARING load_all ALONE DOES NOTHING. It is cached, but its body calls
+# fetch_series, which is cached too -- so clearing only the outer one re-runs it
+# straight back into the inner cache and returns the same frames. Both, or
+# neither. The button would otherwise look like it worked.
+#
+# Staff only, like the trend slider: a client has no use for a cache control.
+if portal_view.pick(False, lambda: st.sidebar.button(
+        "Check for new data", width="stretch",
+        help="Clears the cached NASS pull and refetches. These tabs read the "
+             "shared cache a scheduled job fills, so new USDA data appears here "
+             "only once that job has run.")):
+    fetch_series.clear()
+    load_all.clear()
+    st.rerun()
+
+# BOOKED HERE, FILLED AFTER THE LOAD. The freshness line needs `inv`, which is
+# fetched ~190 lines below this -- script order, not layout order, the rule the
+# crush pages already run on. Without the slot it lands at the bottom of the
+# sidebar under the publication note, away from the button it belongs to.
+_freshness_slot = st.sidebar.empty()
 
 st.sidebar.divider()
 st.sidebar.markdown(
@@ -842,9 +1017,28 @@ header_slot = st.container()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
-    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
-], on_change="rerun")
+# SEVEN TABS IS THE DENSEST PAGE ON THE PORTAL AND A CLIENT GETS THREE.
+# Summary, On-Feed & Flows and Heifers on Feed each answer a market question
+# off the report USDA just published. Seasonality overlays eight years to show
+# the shape of a normal calendar, State Comparison is a fourteen-state ranking
+# nobody trades off, and Data is the raw frame -- research, not a reading.
+#
+# COF RECAP GOES FOR A DIFFERENT REASON, and the docstring below still calls it
+# "the client one-pager", which is true of the ARTEFACT and not of this tab.
+# Ross builds the recap here and sends it out himself (2026-10-23: "the clients
+# don't need to see the COF Recap page that I use to edit and send to
+# clients"). What a client receives is the finished one-pager in their inbox;
+# the live tab is the workbench it was made on, and showing both invites the
+# question of why they disagree -- which they will, since this tab re-reads
+# USDA's file every hour and the thing they were sent did not.
+#
+# Hiding it also skips `_latest_recap()`, which fetches and parses USDA's
+# released report text -- the body is behind `if tab_recap.open:`, so a client
+# costs that fetch nothing.
+tab_summary, tab_recap, tab_flows, tab_weights, tab_prec, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
+    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "⚖️  Placements by Weight", "📉  Placement Records", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
+], hide={"📄  COF Recap", "📅  Seasonality", "🗺️  State Comparison", "📋  Data"},
+    on_change="rerun")
 
 # ── COF Recap ─────────────────────────────────────────────────────────────────
 # The client one-pager, drawn BEFORE the QuickStats load on purpose: it reads
@@ -857,14 +1051,28 @@ tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data =
 # weight-class breakdown (absent from the series above) comes along with them.
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# FIVE MINUTES, NOT AN HOUR. This is the one page whose whole job is to show a
+# USDA report the moment it lands, and on 2026-10-23 it sat on the September
+# recap while October was live on nass.usda.gov -- a cache entry created before
+# the 2pm CT release, held for the full hour. The fetch is two small text GETs
+# behind `if tab_recap.open:`, so the hour was buying almost nothing and cost
+# exactly the morning it mattered. The button below clears it outright.
+@st.cache_data(ttl=300, show_spinner=False)
 def _latest_recap():
-    """(recap dict, error string). Cached so the tab does not refetch per rerun."""
+    """(recap dict, overlay rows, error string) from ONE fetch of the release.
+
+    The recap and the overlay must describe the SAME report, so they are built
+    together rather than from two cached fetches. Two entries expiring
+    independently is how the Recap tab and the Summary tiles come to show
+    different months — which is the exact complaint this whole change answers,
+    reintroduced one level down.
+    """
     year, month, text = cof_recap.latest_report()
     if not text:
-        return None, "Could not reach the USDA report file at nass.usda.gov."
+        return None, [], "Could not reach the USDA report file at nass.usda.gov."
     prior = cof_recap.fetch_report(year - 1, month)
-    return cof_recap.build_recap(year, month, text, prior), ""
+    return (cof_recap.build_recap(year, month, text, prior),
+            cof_recap.released_rows(text, year, month), "")
 
 
 # The guesses are the one thing on the recap that cannot be re-derived, so they
@@ -903,7 +1111,7 @@ def _recap_image(fig_json: str, fmt: str) -> bytes | None:
 
 with tab_recap:
     if tab_recap.open:
-        recap, err = _latest_recap()
+        recap, _release_rows, err = _latest_recap()
         if err:
             st.error(err)
         else:
@@ -957,23 +1165,132 @@ with tab_recap:
                 # Gated behind a button, like livestock_seasonal's export_row: a
                 # hidden tab still runs every rerun, and to_image spins up Chromium,
                 # so rendering eagerly would tax every widget on the whole page.
-                if st.button("Prepare download", width="stretch",
-                             help="Renders the page above as PNG and PDF."):
+                if st.button("Prepare client page", width="stretch",
+                             help="Renders the page above as one image and as a PDF."):
                     st.session_state["recap_export_ready"] = True
                 if st.session_state.get("recap_export_ready"):
                     fig_json = fig.to_json()
                     with st.spinner("Rendering…"):
                         png, pdf = _recap_image(fig_json, "png"), _recap_image(fig_json, "pdf")
+                    # Named for the job, in the daily letter's own words: HubSpot's
+                    # editor takes ONE asset, so "one image" is the thing to promise.
+                    # Unlike the letter there is no paged/texting twin to confuse it
+                    # with -- the figure is a single page by construction, so there
+                    # is nothing here to split and no capture height to get wrong.
                     if png:
-                        st.download_button("Download PNG", png, file_name=f"{stem}.png",
-                                           mime="image/png", width="stretch")
+                        st.download_button("Save one image (HubSpot)", png,
+                                           file_name=f"{stem}.png", mime="image/png",
+                                           width="stretch")
                     if pdf:
-                        st.download_button("Download PDF", pdf, file_name=f"{stem}.pdf",
+                        st.download_button("Download PDF (print)", pdf,
+                                           file_name=f"{stem}.pdf",
                                            mime="application/pdf", width="stretch")
+                    if png or pdf:
+                        st.caption("The image is the whole page — letterhead, watermark "
+                                   "and frame — ready to drop into a HubSpot email.")
                     if not png and not pdf:
                         st.warning("Image export failed on the host. The table above still "
                                    "renders — use the camera icon on its toolbar.")
                 st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
+                # RELEASE DAY NEEDS A WAY THROUGH THE CACHE. _latest_recap is cached
+                # so the tab does not refetch per rerun, and on release afternoon that
+                # is exactly the wrong behaviour: the entry predates the 2pm CT post
+                # and the page shows last month until it expires. Shortening the TTL
+                # narrows the window; this closes it.
+                if st.button("Check for a new release", width="stretch",
+                             help="Clears the cached recap and refetches from USDA."):
+                    _latest_recap.clear()
+                    st.rerun()
+
+
+# ── Placements by weight ─────────────────────────────────────────────────────
+# Asked for 2026-10-23: the weight classes placed, the head in each, and when
+# those cattle come to market.
+#
+# EVERY FIGURE HERE ALREADY EXISTED. build_recap returns `weight_classes` as
+# (label, head, window) and `placed_total`, and until now both went only into
+# the PNG one-pager Ross emails. This RENDERS that object; it does not
+# recompute any of it, so the tab and the sheet cannot drift -- the failure
+# this file records five times over.
+#
+# ABOVE THE QUICKSTATS GUARD, like COF Recap and for the same reason: it reads
+# USDA's released report text over plain HTTP and needs neither that API nor a
+# key, so an outage there must not take it down.
+#
+# BOTH VIEWS, unlike COF Recap directly above. The one-pager is Ross's to
+# author and send; which weights went on feed and when they market is a market
+# reading, and clients get it. It costs them nothing extra -- same cached
+# _latest_recap() the Recap tab uses, so on the client app, where that tab is
+# hidden, this is the only thing that calls it.
+with tab_weights:
+    if tab_weights.open:
+        _wr, _, _werr = _latest_recap()
+        if _werr:
+            st.error(_werr)
+        elif not _wr or not _wr.get("weight_classes"):
+            st.info("USDA's latest release carries no weight-class breakdown.")
+        else:
+            _wc = _wr["weight_classes"]
+            _wsum = sum(h for _lbl, h, _win in _wc if h)
+            _wtot = _wr.get("placed_total")
+
+            st.markdown(
+                f'<div class="sec-hdr">Placed on feed by weight &mdash; '
+                f'{_wr["placement_month"]}</div>', unsafe_allow_html=True)
+
+            _wrows = []
+            for _lbl, _head, _win in _wc:
+                _h = f"{_head:,}" if _head else "&mdash;"
+                _s = f"{_head / _wsum * 100:.1f}%" if _head and _wsum else "&mdash;"
+                _wrows.append(f"<tr><td>{_lbl}</td><td>{_h}</td>"
+                              f"<td>{_s}</td><td>{_win}</td></tr>")
+            _wrows.append(
+                f'<tr style="font-weight:700"><td>All weights</td>'
+                f'<td>{_wsum:,}</td><td>100.0%</td><td>&mdash;</td></tr>')
+
+            # st.html, not st.markdown: the six-state table on the index page
+            # shipped as an unstyled grid because a literal tag inside a style
+            # comment ended the style element, and markdown has eaten tables on
+            # this portal before. st.html does not run the markdown parser.
+            st.html(
+                '<table class="sum-table">'
+                '<thead><tr>'
+                '<th>Weight placed</th>'
+                '<th>Head placed</th>'
+                '<th>Share of placements</th>'
+                '<th>Expected marketing window</th>'
+                '</tr></thead><tbody>' + "".join(_wrows) + '</tbody></table>'
+            )
+
+            # A FREE AUDIT, checked live rather than asserted. USDA publishes
+            # the six classes and the placement total independently, so they
+            # must agree -- they do, exactly, on the September 2026 report
+            # (1,777,000 both ways). A shifted or missed class is the failure
+            # that does not look wrong on a table of plausible head counts.
+            if _wtot and _wsum == _wtot:
+                st.caption(
+                    f"The six classes sum to **{_wsum:,} head** — exactly the placement "
+                    f"total USDA publishes in the same report, which is the check that "
+                    f"no class has been missed or misread.")
+            elif _wtot:
+                st.warning(
+                    f"These classes sum to {_wsum:,} head against USDA's published "
+                    f"placement total of {_wtot:,} — a difference of "
+                    f"{_wsum - _wtot:+,}. One of the two is being read wrongly; "
+                    f"treat the breakdown as unreliable until that is resolved.")
+
+            # THE WINDOW IS JSA'S, NOT USDA'S, and saying so is not optional.
+            # USDA publishes the head in each class and nothing about when
+            # those cattle market; the months are a fixed per-class offset in
+            # cof_recap.WEIGHT_CLASSES, derived from one example sheet. A
+            # reader who takes it for a USDA forecast has been misled by us.
+            st.caption(
+                "**USDA publishes the head; the marketing window is JSA's.** It is a "
+                "fixed offset from the placement month — ten to eleven months out for "
+                "cattle under 600 lb, down to four to five months for 1,000 lb and "
+                "over — so read it as a planning guide rather than a USDA forecast. "
+                "Placements are for the month USDA reports, which is the month before "
+                "the report's own title.")
 
 
 # ── Load data ────────────────────────────────────────────────────────────────
@@ -984,6 +1301,29 @@ with tab_recap:
 with header_slot:
     with st.spinner("Loading USDA NASS data…"):
         inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
+
+    # USDA's released text written over the cached history -- see
+    # overlay_released. Outside load_all's hour-long cache on purpose, and
+    # wrapped because letterhead-grade presentation must never cost the
+    # numbers: if the release is unreachable the page is exactly what it was.
+    try:
+        _rows = _latest_recap()[1]
+    except Exception:
+        _rows = []
+    if _rows:
+        inv        = overlay_released(inv,        "inventory",  _rows)
+        place      = overlay_released(place,      "placements", _rows)
+        sales      = overlay_released(sales,      "marketings", _rows)
+        other      = overlay_released(other,      "other",      _rows)
+        inv_full   = overlay_released(inv_full,   "inventory",  _rows)
+        place_full = overlay_released(place_full, "placements", _rows)
+        sales_full = overlay_released(sales_full, "marketings", _rows)
+        # The quarterly class split, carried only by the Jan/Apr/Jul/Oct
+        # reports. heifer_pct_frame divides these by inv_full, which is
+        # overlaid above, so all three sides of that ratio come from the same
+        # release rather than two of them moving and one lagging a quarter.
+        heifer     = overlay_released(heifer,     "heifers",    _rows)
+        steer      = overlay_released(steer,      "steers",     _rows)
 
 if inv.empty:
     with header_slot:
@@ -998,6 +1338,26 @@ place_s  = series_for(place, state)
 sales_s  = series_for(sales, state)
 other_s  = series_for(other, state)
 hpct     = heifer_pct_frame(heifer, steer, inv_full, state)
+
+# WHAT MONTH IS ACTUALLY ON THE PAGE, in the slot booked beside the button.
+# These tabs and the COF Recap run on different clocks -- the Recap reads USDA's
+# released text the moment it posts, while everything else waits on QuickStats
+# and then on the scheduled job that fills the cache. On release day that gap is
+# a day or more, and nothing on the page said so: it simply looked like the
+# dashboard had not noticed. On-feed and the two flow series are named
+# separately because they are a month apart by USDA's own design -- the report
+# carrying the Oct 1 inventory carries SEPTEMBER placements and marketings.
+_inv_latest = inv[inv["state_alpha"] == "US"]["date"].max() if not inv.empty else None
+_flow_latest = place[place["state_alpha"] == "US"]["date"].max() if not place.empty else None
+if _inv_latest is not None and pd.notna(_inv_latest):
+    _bits = [f"on-feed to <b>{_inv_latest:%b %Y}</b>"]
+    if _flow_latest is not None and pd.notna(_flow_latest):
+        _bits.append(f"flows to <b>{_flow_latest:%b %Y}</b>")
+    _freshness_slot.markdown(
+        f'<div style="color:{DM_MUTED};font-size:.68rem;line-height:1.5">'
+        f'Cached NASS data: {" · ".join(_bits)}.</div>',
+        unsafe_allow_html=True,
+    )
 
 inv_kpi   = latest_kpi(inv, state)
 place_kpi = latest_kpi(place, state)
@@ -1146,6 +1506,473 @@ with tab_flows:
         st.dataframe(merged, hide_index=True, width="stretch")
 
 # ── Seasonality ────────────────────────────────────────────────────────────────
+# ── Placement Records ────────────────────────────────────────────────────────
+# Asked for by Ross, 2026-10-27, after he noticed placements had been the lowest
+# on record for their calendar month three reports running.
+#
+# IT REPORTS WHAT MOVED AND REFUSES TO SAY WHY. Whether a run of record lows is
+# heifer retention or simply a smaller herd is the question it exists to let a
+# reader judge, and this page has a standing rule against a caption that
+# supplies a plausible wrong cause. The three framings are shown together
+# because they disagree.
+
+def _prec_spread_line(rows: list, heifer: dict) -> str:
+    """The contrast between the heifer shares in a ranking, in words.
+
+    BOTH ENDS ARE READ AT RENDER TIME. Ross asked for the 4th-against-54th
+    contrast to be called out, and writing those two numbers into the sentence
+    is how a caption comes to disagree with the table printed directly above
+    it -- the mistake recorded for the southeast retention panel, where "the
+    trough of the whole record" was true of one panel and false of the next.
+    Nothing here names a year or a percentile.
+
+    It states WHAT the two ends are. It does not say why they differ.
+    """
+    sp = placement_records.heifer_spread(rows, heifer)
+    if not sp or not sp.get("material"):
+        return ""
+    lo, hi = sp["low"], sp["high"]
+    return (f" Across these ten the heifer share runs from the "
+            f"**{lo['percentile']:.0f}th percentile ({lo['year']}, "
+            f"{lo['pct']:.1f}%)** to the **{hi['percentile']:.0f}th "
+            f"({hi['year']}, {hi['pct']:.1f}%)** — a comparable placement "
+            f"level reached with very different shares of heifers on feed.")
+
+
+def _prec_stretch(n: int) -> str:
+    """"1 stretch" / "3 separate stretches" -- the on-feed any-window ranking
+    really does come from a single stretch, so the plural cannot be assumed."""
+    return "1 stretch" if n == 1 else f"{n} separate stretches"
+
+
+def prec_basis_chart(values: dict, heifer: dict, y_title: str, hover: str,
+                     height: int = 400) -> go.Figure:
+    """Placements by year on either basis, with the heifer share beside it.
+
+    TWO AXES, AND THE CAPTION CARRIES THE MEASURED r FOR THAT REASON. Two
+    series on independently scaled axes will look related whatever they do,
+    which is the classic way to manufacture a correlation in a picture. The
+    number under the chart is what disciplines it: these two move together at
+    about +0.35, which is weak, and the page says so rather than leaving the
+    impression to the drawing.
+    """
+    if not values:
+        return go.Figure()
+    years = sorted(values)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=years, y=[values[y] for y in years], marker_color=HEIFER_COLOR,
+        name=y_title,
+        hovertemplate="%{x}: " + hover + "<extra></extra>"))
+    hy = [y for y in years if y in heifer]
+    if hy:
+        fig.add_trace(go.Scatter(
+            x=hy, y=[heifer[y]["pct"] for y in hy], yaxis="y2",
+            mode="lines+markers", name="Heifers on feed",
+            line=dict(color=COL_NEG, width=2), marker=dict(size=5),
+            customdata=[[heifer[y]["percentile"]] for y in hy],
+            hovertemplate="%{x}: %{y:.1f}% heifers on feed · "
+                          "%{customdata[0]:.0f}th percentile<extra></extra>"))
+    _apply(fig, height=height, y_title=y_title)
+    fig.update_layout(
+        yaxis2=dict(title="Heifers, % of cattle on feed", overlaying="y",
+                    side="right", showgrid=False, ticksuffix="%"),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(l=55, r=70, t=50, b=40))
+    fig.update_xaxes(dtick=2)
+    return fig
+
+
+def _prec_times(n: int) -> str:
+    return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def _prec_standing(st: dict, first: int) -> str:
+    """Where the run in progress sits against every earlier run, in words.
+
+    EVERY BRANCH NAMES THE SPAN. "the longest on record" ranks a figure
+    against a period it does not state, which is the defect Ross reported on
+    the other three tiles -- so this helper interpolates `first` on every
+    path, and a test fails any branch that returns a bare string.
+    """
+    longest, ties = st.get("longest", 0), st.get("ties", 0)
+    if not st.get("current"):
+        return f"the longest since {first} is {longest} months"
+    if not st.get("is_longest"):
+        return f"short of the longest since {first}, {longest} months"
+    if not ties:
+        return f"the longest since {first}"
+    return f"the longest since {first}, matched {_prec_times(ties)} before"
+
+
+def _prec_ord(n: int) -> str:
+    """1 -> 'the lowest', 2 -> '2nd lowest', 122 -> '122nd lowest'.
+
+    A bare "122 lowest of 358 windows" is not a sentence, and rank 1 reads
+    worst of all -- "1 lowest", when the point is that nothing is below it.
+    The standing rule on this page is that a figure reads on its own.
+    """
+    if n == 1:
+        return "the lowest"
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix} lowest"
+
+
+with tab_prec:
+    if tab_prec.open:
+        _pc_cows = fetch_beef_cows(placement_records.SCHEMA)
+        _pc_share = placement_records.heifer_share(
+            series_for(heifer, "US")[["year", "month", "Value"]],
+            series_for(steer, "US")[["year", "month", "Value"]])
+        _pc = placement_records.compare(
+            series_for(place_full, "US")[["year", "month", "Value"]],
+            _pc_cows, _pc_share,
+            inventory=series_for(inv_full, "US")[["year", "month", "Value"]])
+
+        st.markdown('<div class="sec-hdr">Placement records — United States</div>',
+                    unsafe_allow_html=True)
+
+        _r12, _roll, _percow = _pc["last12"], _pc["rolling"], _pc["per_cow"]
+        # HOISTED ABOVE BOTH TABLES AND THE CHART. Streamlit runs this top to
+        # bottom, so a name used by the placements table cannot be bound down
+        # in the chart section -- that is a NameError on the live page which
+        # every source-text test passes, the trap this page has hit twice.
+        _heif = _pc.get("heifer_by_year", {})
+        _newest = _pc["flagged"].iloc[-1]
+        # ONE GRID, NOT FOUR STREAMLIT COLUMNS. The four feet wrap to
+        # different line counts and left the row ragged at 192/206/233/233px --
+        # invisible to get_page_text and to the suite, exactly as the daily
+        # cash tile row was.
+        #
+        # Streamlit columns cannot fix it from the outside: five wrappers sit
+        # between the column and the card, and `height: 100%` on the column is
+        # WORSE THAN NOTHING -- an explicit height defeats the flex row's own
+        # `align-items: stretch`, and then resolves against an auto-height
+        # parent, so the column ends up SHORTER than the row. Measured.
+        #
+        # Grid items stretch to their row by default, so equal height is the
+        # behaviour rather than something layered on top, and it holds at any
+        # width and through a Streamlit upgrade. st.html also skips the
+        # markdown parser, which is what renders a pair of dollar signs as
+        # LaTeX elsewhere on this portal.
+        _run = _pc["current_run"]
+        # EVERY RANKING NAMES ITS OWN PERIOD. Ross, 2026-10-27, on the shipped
+        # version: *"does 'a series high' mean the most since the cattle on
+        # feed series began in 1996?"* It did, and three of the four tiles
+        # ranked against a span they never named -- "a series high", "most on
+        # file", "of 358 windows". The standing rule on this portal is that a
+        # tile is read on its own and screenshotted away from its caption, so
+        # the span cannot live in the paragraph underneath.
+        _first = int(_pc["first_year"])
+        _cards = [
+            _snap_card(
+                "Record-Low Months in a Row", f"{_run}",
+                "months" if _run != 1 else "month",
+                '<span class="snap-neu">lowest for that calendar month</span>',
+                f'<span class="snap-neu">'
+                f'{_prec_standing(_pc["standing"], _first)}</span>',
+                mom_lbl="BASIS", yoy_lbl="WHERE THIS SITS", accent="#c98a56",
+                foot=(f'must beat {_pc["min_prior"]}+ earlier years · newest '
+                      f'month on file: {MONTH_ABBR[int(_newest.month)]} '
+                      f'{int(_newest.year)}'),
+            ),
+            _snap_card(
+                "Record-Low Months, Last 12 Reports", f'{_r12.get("now", 0)}', "of 12",
+                f'<span class="snap-neu">{_r12.get("best", 0)} in any 12 '
+                f'months</span>',
+                '<span class="snap-neu">'
+                + (f"a series high — the most since {_first}"
+                   if _r12.get("is_best")
+                   else f'below the series high of {_r12.get("best", 0)}')
+                + "</span>",
+                mom_lbl="SERIES BEST", yoy_lbl="WHERE THIS SITS", accent="#c98a56",
+                foot=", ".join(f"{MONTH_ABBR[m]} {y}"
+                               for y, m in _r12.get("months", [])[-6:]),
+            ),
+            _snap_card(
+                "Placements, Last 12 Months", f'{_roll.get("total", 0):,.0f}', "head",
+                f'<span class="snap-neu">{_prec_ord(_roll.get("rank", 0))} of '
+                f'{_roll.get("of", 0)} rolling 12-month windows since '
+                f'{_first}</span>',
+                '<span class="snap-neu">no seasonal adjustment needed</span>',
+                mom_lbl="RANK", yoy_lbl="BASIS",
+                foot="one window ends on every month, and each holds "
+                     "every calendar month once",
+            ),
+            _snap_card(
+                "Placements per 100 Beef Cows", f'{_percow.get("value", 0):.1f}',
+                "per 100 cows",
+                f'<span class="snap-neu">{_prec_ord(_percow.get("rank", 0))} of '
+                f'{_percow.get("of", 0)} rolling 12-month windows since '
+                f'{_first}</span>',
+                '<span class="snap-neu">head placed per 100 Jan-1 beef '
+                'cows</span>',
+                mom_lbl="RANK", yoy_lbl="BASIS",
+                foot="separates fewer cattle placed from fewer cattle existing",
+            ),
+        ]
+        st.html(
+            "<style>"
+            ".prec-grid{display:grid;grid-template-columns:repeat(4,1fr);"
+            "gap:12px;align-items:stretch;}"
+            ".prec-grid>.snap-card{height:100%;box-sizing:border-box;}"
+            "@media (max-width:900px){.prec-grid{grid-template-columns:repeat(2,1fr);}}"
+            "</style>"
+            '<div class="prec-grid">' + "".join(_cards) + "</div>"
+        )
+
+        st.caption(
+            f"A **record low** here means placements came in below every prior year at "
+            f"the **same calendar month**. Placements are seasonal — October is always "
+            f"large and July always small — so a bare \"lowest ever\" would only ever "
+            f"name a summer month. A month also needs **{_pc['min_prior']}+ prior years** "
+            f"to beat before it can set one: the series begins {_pc['first_year']}, and "
+            f"on a shorter requirement its early years manufacture records they never "
+            f"earned."
+        )
+
+        if _pc["runs"]:
+            st.markdown('<div class="sec-hdr">Every run of three or more, and what '
+                        'the herd did next</div>', unsafe_allow_html=True)
+            _rows = []
+            for _row in _pc["runs"]:
+                _rn, _sh = _row["run"], _row["share"]
+                _rows.append({
+                    "Run": (f'{MONTH_ABBR[_rn["start"][1]]}–{MONTH_ABBR[_rn["end"][1]]} '
+                            f'{_rn["end"][0]}'),
+                    "Months": _rn["months"],
+                    "Lowest month": min(_rn["values"]),
+                    "Heifers on feed": (f'{_sh["pct"]:.1f}%' if _sh else "—"),
+                    "Heifer share percentile": (f'{_sh["percentile"]:.0f}th' if _sh else "—"),
+                    "Beef cows, next year": ("—" if _row["cows_next"] is None
+                                             else f'{_row["cows_next"]:+.1f}%'),
+                    "Beef cows, year after": ("—" if _row["cows_then"] is None
+                                              else f'{_row["cows_then"]:+.1f}%'),
+                })
+            st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch",
+                         column_config={"Lowest month":
+                                        st.column_config.NumberColumn(format="%,.0f")})
+            st.caption(
+                "Heifers on feed is heifers as a percent of heifers plus steers, averaged "
+                "over that year, with its percentile across the whole series. **Imported "
+                "feeders are overwhelmingly steers and sit in that denominator**, so a year "
+                "when imports are blocked carries a mechanically higher heifer share than "
+                "the same herd would otherwise show — worth knowing before reading one run "
+                "against another. Beef cow changes are USDA's Jan-1 inventory."
+            )
+
+        # THE TEN LOWEST 12-MONTH TOTALS. Asked for by Ross, 2026-10-27:
+        # *"a list of the top 10 rolling 12 month placements ranking from #1
+        # being the lowest"*, in the shape of the runs table above.
+        #
+        # WINDOWS OVERLAP AND THE CAPTION HAS TO SAY SO. The 12 months ending
+        # August and the 12 months ending September share eleven of their
+        # months, so one quiet stretch fills several rows -- these ten touch
+        # three calendar years, not ten. Ten rows read as ten episodes unless
+        # the page says otherwise, which would overstate how often this has
+        # happened on exactly the figure the panel leads with.
+        # TWO RANKINGS, BECAUSE A LITERAL TOP TEN IS NEARLY DEGENERATE.
+        # "Any window" is what Ross asked for and is the honest answer to the
+        # question -- but six of its ten rows are one 2026 stretch read from
+        # six month-ends. "One per year" takes each calendar year's quietest
+        # 12 months, which reads as a league table of years instead.
+        #
+        # A SWITCH RATHER THAN TWO STACKED TABLES: twenty rows of near
+        # identical shape invite a reader to confuse them, and both rankings
+        # are already computed in compare(), so neither costs a fetch. This is
+        # the Cold Storage shape. The variable is `_low_mode` and never `view`
+        # -- this page binds `view` to a segmented control at module level,
+        # the collision that cost a rename once already.
+        _low_mode = st.segmented_control(
+            "Ranking", ["Any window", "One per year"], default="Any window",
+            key="prec_low_mode",
+            help="Any window ranks every rolling 12-month window. One per "
+                 "year takes each calendar year's quietest 12 months, so ten "
+                 "rows are ten years.",
+        )
+        _per_year = _low_mode == "One per year"
+        _low = _pc["lowest_per_year"] if _per_year else _pc["lowest_windows"]
+        if _low["rows"]:
+            st.markdown('<div class="sec-hdr">The ten lowest 12-month placement '
+                        'totals</div>', unsafe_allow_html=True)
+            _lrows = [{
+                "Rank": _r["rank"],
+                "12 months ending": f'{MONTH_ABBR[_r["month"]]} {_r["year"]}',
+                "Placements": _r["total"],
+                "Per 100 beef cows": ("—" if _r["per100"] is None
+                                      else f'{_r["per100"]:.1f}'),
+                "Heifers on feed": (f'{(_heif.get(_r["year"]) or {})["pct"]:.1f}%'
+                                    if _heif.get(_r["year"]) else "—"),
+                "Heifer share percentile": (
+                    f'{(_heif.get(_r["year"]) or {})["percentile"]:.0f}th'
+                    if _heif.get(_r["year"]) else "—"),
+            } for _r in _low["rows"]]
+            st.dataframe(pd.DataFrame(_lrows), hide_index=True, width="stretch",
+                         column_config={
+                             "Placements":
+                                 st.column_config.NumberColumn(format="%,.0f"),
+                             "Per 100 beef cows": st.column_config.TextColumn(
+                                 help="Head placed on feed over this window, "
+                                      "for every 100 beef cows in the US "
+                                      "breeding herd on January 1 of that "
+                                      "year."),
+                             "Heifers on feed": st.column_config.TextColumn(
+                                 help="Heifers as a percent of the cattle on "
+                                      "feed, averaged over the calendar year "
+                                      "the window ends in."),
+                         })
+            _lead = (f"Each row is the quietest 12 months *ending* in that "
+                     f"calendar year, one year per row, out of {_low['of']} "
+                     f"years since {_first}."
+                     if _per_year else
+                     f"Each row is the 12 months *ending* that month, out of "
+                     f"{_low['of']} such windows since {_first}.")
+            _ovl = (f"Adjacent years can still **overlap** — a December window "
+                    f"and the following January window share eleven months — so "
+                    f"these ten come from **{_prec_stretch(_low['stretches'])}**."
+                    if _per_year else
+                    f"Those windows **overlap** — the 12 months to August and "
+                    f"the 12 months to September share eleven of their months — "
+                    f"so a single quiet stretch fills several rows: these ten "
+                    f"come from **{_prec_stretch(_low['stretches'])}**, not ten.")
+            st.caption(
+                f"**#1 is the lowest.** {_lead} {_ovl} **Per 100 beef cows** "
+                f"is how many head went on feed for every 100 beef cows in the "
+                f"US breeding herd on January 1 of that year. It scales the "
+                f"total to the size of the herd that produced it, which is why "
+                f"a window can be among the lowest on head and ordinary per "
+                f"cow. **Heifers on feed** is that calendar year's average "
+                f"share with its percentile across the whole series — the same "
+                f"figures the runs table and the on-feed table quote."
+                + _prec_spread_line(_low["rows"], _heif)
+            )
+
+        # ── per beef cow, by year, with the heifer share beside it ──────────
+        # Ross, 2026-10-27: a chart of the per-cow figures, what they mean,
+        # "and how they might correlate to retention".
+        #
+        # THE ANSWER IS MEASURED AND IT IS MOSTLY NO. Per-cow placements
+        # against the FOLLOWING year's beef cow change run about r = -0.19
+        # over 30 years, which is close to no relationship; the heifer share
+        # manages about -0.63 on the same question. So the chart carries the
+        # heifer share too and the caption reports both numbers. Asserting a
+        # retention story off the per-cow line would be supplying a plausible
+        # wrong cause, which is the one thing this panel refuses to do.
+        _pc_by_year = _pc["per_cow"].get("by_year", {})
+        _tot_by_year = _pc.get("total_by_year", {})
+        if _pc_by_year:
+            st.markdown('<div class="sec-hdr">Placements by year, against '
+                        'heifers on feed</div>', unsafe_allow_html=True)
+            # TWO BASES, ONE CHART. The tab led with a 12-month placement
+            # total that appeared in no chart at all -- only in tables -- so
+            # the headline figure had no shape over time. Per-cow and total
+            # cover the SAME windows (each year's December), so the switch
+            # changes the normalisation and nothing else, and the heifer line
+            # lines up with both.
+            _basis = st.segmented_control(
+                "Basis", ["Per 100 beef cows", "12-month total"],
+                default="Per 100 beef cows", key="prec_basis",
+                help="The same windows either way — each year's 12 months "
+                     "ending December. Per cow divides by that January 1 herd.",
+            )
+            _is_total = _basis == "12-month total"
+            st.plotly_chart(
+                prec_basis_chart(
+                    _tot_by_year if _is_total else _pc_by_year, _heif,
+                    "Head placed, 12 months" if _is_total
+                    else "Head placed per 100 beef cows",
+                    "%{y:,.0f} head placed" if _is_total
+                    else "%{y:.1f} head per 100 beef cows"),
+                use_container_width=True)
+            st.caption(
+                ("Bars are the total head placed on feed in the 12 months "
+                 "ending each December. This is the figure the tables above "
+                 "rank, drawn over time."
+                 if _is_total else
+                 "Bars are the 12 months ending each December — how many head "
+                 "went on feed for every 100 beef cows in the US breeding herd "
+                 "that January 1. A high bar means more cattle placed per cow "
+                 "in the herd, a low one fewer.")
+                + " The red line is heifers as a percent of the cattle on "
+                  "feed, on its own axis; hover for that year's percentile."
+            )
+            _rs = _pc.get("retention_signal") or {}
+            if _rs.get("per_cow_vs_herd") is not None:
+                st.caption(
+                    f"**Does the per-cow figure track heifer retention? Measured, "
+                    f"not assumed — and mostly it does not.** Against the "
+                    f"*following* year's change in beef cow numbers it runs "
+                    f"**r = {_rs['per_cow_vs_herd']:+.2f}** over "
+                    f"{_rs['n_herd']} years, which is close to no relationship "
+                    f"at all. The heifer share on the same test runs "
+                    f"**r = {_rs['share_vs_herd']:+.2f}** — far closer — so the "
+                    f"red line, not the bars, is the one to read for that "
+                    f"question, and the Heifers on Feed tab is where it lives. "
+                    f"The two series here move together at "
+                    f"**r = {_rs['per_cow_vs_share']:+.2f}**, and even that is "
+                    f"partly definitional: heifers are counted in placements, "
+                    f"so the two cannot be independent. **These are "
+                    f"associations measured over {_rs['n_herd']} years, not "
+                    f"causes**, and two series on separate axes will look "
+                    f"related whatever they do."
+                )
+
+        # ── the same ranking for on-feed inventory ───────────────────────────
+        # Ross: "an on-feed top 10 like we have for placements, and add the
+        # heifers on feed to that".
+        #
+        # AVERAGE, NOT SUM, BECAUSE ON FEED IS A STOCK. Placements are a flow
+        # and twelve months of them add up; inventory is a standing count, so
+        # summing it bills the same animal for every month it stands in the
+        # yard. It is wired through the same `agg` switch rather than a second
+        # function, and the caption names the basis.
+        _onf = (_pc.get("lowest_onfeed_per_year") if _per_year
+                else _pc.get("lowest_onfeed")) or {}
+        if _onf.get("rows"):
+            st.markdown('<div class="sec-hdr">The ten lowest 12-month average '
+                        'on-feed inventories</div>', unsafe_allow_html=True)
+            _orows = []
+            for _r in _onf["rows"]:
+                _h = _heif.get(_r["year"]) or {}
+                _orows.append({
+                    "Rank": _r["rank"],
+                    "12 months ending": f'{MONTH_ABBR[_r["month"]]} {_r["year"]}',
+                    "Avg on feed": _r["total"],
+                    "Heifers on feed": (f'{_h["pct"]:.1f}%' if _h else "—"),
+                    "Heifer share percentile": (f'{_h["percentile"]:.0f}th'
+                                                if _h else "—"),
+                })
+            st.dataframe(pd.DataFrame(_orows), hide_index=True, width="stretch",
+                         column_config={
+                             "Avg on feed":
+                                 st.column_config.NumberColumn(format="%,.0f"),
+                             "Heifers on feed": st.column_config.TextColumn(
+                                 help="Heifers as a percent of the cattle on "
+                                      "feed, averaged over that calendar year."),
+                         })
+            st.caption(
+                f"**#1 is the lowest**, and it is an **average**, not a total: "
+                f"cattle on feed is a standing count, so twelve months of it do "
+                f"not add up the way placements do. Out of {_onf['of']} windows "
+                f"since {_first}, and these ten come from "
+                f"**{_prec_stretch(_onf['stretches'])}** — the same overlap as "
+                f"the table above. Heifers on feed is that calendar year's "
+                f"average share with its percentile across the whole series, "
+                f"the same figures the runs table quotes. The Ranking switch "
+                f"above governs both tables."
+            )
+
+        st.caption(
+            "**The three figures above can disagree, which is why all three are here.** "
+            "The calendar-month record is what a monthly report invites and is the most "
+            "fragile — a margin of a few thousand head sits inside USDA's revision range. "
+            "The 12-month total is seasonality-free and revision-proof. Placements per "
+            "beef cow is the only one that separates *fewer cattle being placed* from "
+            "*fewer cattle existing*. This panel attributes no cause."
+        )
+
+
 with tab_season:
     if tab_season.open:
         SEASON_METRICS = {
@@ -1271,11 +2098,25 @@ with tab_data:
     if tab_data.open:
         st.markdown(f'<div class="sec-hdr">Raw series — {STATE_NAMES.get(state, state)}</div>', unsafe_allow_html=True)
 
+        # The percent of year-ago is computed once per series and carried into
+        # BOTH the table and the Excel sheet, so a downloaded workbook cannot
+        # disagree with the page it came off.
+        #
+        # Each reaches back into the full-history frame rather than its own
+        # nine-year window, so the oldest displayed year has a figure instead
+        # of a "None" -- see with_year_ago_pct. Other disappearance has no
+        # full-history twin and does not need one: it is Excel-only, and a
+        # missing value writes an EMPTY cell there rather than the word.
+        inv_y   = with_year_ago_pct(inv_s,   series_for(inv_full, state))
+        place_y = with_year_ago_pct(place_s, series_for(place_full, state))
+        sales_y = with_year_ago_pct(sales_s, series_for(sales_full, state))
+        other_y = with_year_ago_pct(other_s)
+
         dl_col1, dl_col2 = st.columns([1, 5])
         with dl_col1:
             excel_bytes = _to_excel({
-                "On-feed inventory": inv_s, "Placements": place_s, "Marketings": sales_s,
-                "Other disappearance": other_s, "Heifer-steer split": hpct,
+                "On-feed inventory": inv_y, "Placements": place_y, "Marketings": sales_y,
+                "Other disappearance": other_y, "Heifer-steer split": hpct,
             })
             st.download_button("Download Excel", excel_bytes, file_name=f"cattle_on_feed_{state}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1283,18 +2124,37 @@ with tab_data:
         _date_col = st.column_config.DateColumn("date", format="MMM YYYY")
         _head_col = st.column_config.NumberColumn(format="%,.0f")
         _pct_col  = st.column_config.NumberColumn(format="%.1f%%")
+        # Named so the number reads on its own: 97.0% under "% of year ago" is
+        # three percent BELOW last year, where the same figure under a header
+        # saying "YoY" would read as a near-doubling. This is USDA's own column
+        # and it is not signed.
+        _ya_col = st.column_config.NumberColumn(
+            "% of year ago", format="%.1f%%",
+            help="USDA's percent of previous year: 100 is unchanged from the "
+                 "same month a year earlier, 97.0 is 3% below, 104.0 is 4% above. "
+                 "A row reading None is one where USDA published no figure for "
+                 "that month a year earlier.",
+        )
+        _cols = ["date", "Value", "pct_year_ago"]
+        _cfg = {"date": _date_col, "Value": _head_col, "pct_year_ago": _ya_col}
+
+        st.caption(
+            "**% of year ago** is USDA's own convention, the column their report prints "
+            "beside On Feed, Placed and Marketed — **100 means unchanged** from the same "
+            "month a year earlier, 97.0 means 3% below."
+        )
 
         st.markdown("**On-feed inventory (monthly)**")
-        st.dataframe(inv_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                     column_config={"date": _date_col, "Value": _head_col})
+        st.dataframe(inv_y[_cols].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config=_cfg)
 
         st.markdown("**Placements (monthly)**")
-        st.dataframe(place_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                     column_config={"date": _date_col, "Value": _head_col})
+        st.dataframe(place_y[_cols].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config=_cfg)
 
         st.markdown("**Marketings (monthly)**")
-        st.dataframe(sales_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                     column_config={"date": _date_col, "Value": _head_col})
+        st.dataframe(sales_y[_cols].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config=_cfg)
 
         st.markdown("**Heifer / steer split (quarterly)**")
         st.dataframe(hpct.sort_values("date", ascending=False), hide_index=True, width="stretch",

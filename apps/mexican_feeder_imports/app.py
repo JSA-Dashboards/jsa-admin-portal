@@ -41,10 +41,20 @@ import streamlit as st
 
 # Streamlit puts the MAIN script's directory on sys.path, never the page's, so a
 # multipage app's own sibling modules are not importable without this.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 import snowflake_db as db
 import border as bd
+import corn_demand as cdm
 import mx_prices as mxp
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ─────────────
@@ -157,6 +167,47 @@ def fmt_date(d, fmt="%b %d, %Y"):
     return pd.Timestamp(str(d)).strftime(fmt)
 
 
+def win_span(w):
+    """'Feb 20 - May 12, 2025' -- ONE spelling of a window.
+
+    The caption names two windows and the table names every one, so a span
+    formatted at each site is three chances to describe the same stretch two
+    ways. Same reason border.weight_spans() formats its own label.
+    """
+    if not w:
+        return "—"
+    a, b = w["start"], w["end"]
+    if a[:4] == b[:4]:
+        return (f"{fmt_date(a, '%b %d')} – {fmt_date(b, '%b %d')}, "
+                f"{b[:4]}")
+    return f"{fmt_date(a)} – {fmt_date(b)}"
+
+
+def narrowing_phrase(cur, prev):
+    """How the discount moved, COMPUTED rather than typed.
+
+    "has roughly halved" was true when it was written and is printed in the
+    same breath as the two figures it describes, so it has to be derived from
+    them. The southeast retention caption is this page's precedent: prose
+    naming a high and a low went stale against the chart directly above it,
+    and the fix was to read them off the series at render time.
+    """
+    if not prev:
+        return "has moved"
+    r = cur / prev          # both negative; r < 1 means a narrower discount
+    if r < 0:
+        return "has flipped to a premium"
+    if r < 0.40:
+        return "has all but closed"
+    if r <= 0.60:
+        return "has roughly halved"
+    if r < 0.85:
+        return "has narrowed sharply"
+    if r <= 1.15:
+        return "is little changed"
+    return "has widened"
+
+
 def fmt_month(p):
     if not p:
         return "—"
@@ -166,7 +217,7 @@ def fmt_month(p):
 # ── Data ────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def load_all():
+def load_all(schema=bd.SCHEMA):
     """
     Everything the page needs, in one connection. None on any failure.
 
@@ -199,6 +250,9 @@ def load_all():
             "census_through": through,
             "bands": bands,
             "band_year": band_year,
+            # The same Census rows the annual bar reads, by month. No
+            # extra fetch -- band_shares and this both walk _national().
+            "band_mix": bd.band_mix_monthly(conn),
             "kinds": kinds,
             "kind_year": kind_year,
             "vph": bd.value_per_head(conn),
@@ -221,8 +275,20 @@ def load_all():
             "price_grid": bd.price_grid(conn),
             "price_series": bd.price_series(conn, grade=bd.INDEX_GRADE),
             "spread": bd.index_spread(conn),
-            "spread_yr": bd.spread_by_year(conn),
-            "price_cov": bd.price_coverage(conn),
+            # Keyed on the border's OPEN WINDOWS, not the calendar year.
+            # basis_move defaults to the two newest, so it and the tile read
+            # one ordered dict and cannot pick different spans.
+            "spread_win": bd.spread_by_window(conn),
+            "basis_move": bd.basis_move(conn),
+            # Head is published per crossing per DAY and never per weight
+            # bracket, so this is the volume behind the day, not behind a rung.
+            "price_head": bd.receipts_on(conn, bd.latest_price_date(conn)),
+            "head_priced": bd.priced_day_head(
+                conn, since=bd.reopened_on(conn)),
+            # The weights AMS QUOTED per day. Not an average weight --
+            # there is no published one; weight_spans() records why.
+            "spans": bd.weight_spans(conn),
+            "reopened": bd.reopened_on(conn),
         }
     except Exception as e:
         st.session_state["_mfi_error"] = f"{type(e).__name__}: {e}"
@@ -233,7 +299,10 @@ def load_all():
 
 
 with st.spinner("Loading border reports and Census trade data…"):
-    D = load_all()
+    # PASSED, never left to the default: st.cache_data hashes the
+    # arguments it is CALLED with, so a parameter sitting at its default
+    # contributes nothing to the key.
+    D = load_all(bd.SCHEMA)
 
 if not D:
     st.error("Could not load the Mexican import data.")
@@ -307,8 +376,18 @@ can answer what a feeder calf is worth this week.
 # the Saturday Slaughter view takes for its MARS fetch.
 this_yr = date.today().year
 
-tab_crossings, tab_prices = st.tabs(
-    ["Mexican Feeder Crossings", "Mexican Feeder Prices"])
+# CORN DEMAND IS STAFF-ONLY, on Ross's instruction 2026-10-26. It is an
+# internal read rather than a client one: every figure on it rests on feeding
+# assumptions a client would take for measurement, and the interesting number
+# is about US corn demand rather than about their cattle.
+#
+# HIDING THE LABEL DOES NOT STOP THE BODY -- portal_view.Hidden is a no-op
+# context manager, so an unguarded `with tab_corn:` would run the PSD fetch on
+# a client load and render the panel UNFRAMED into their page. The body is
+# behind portal_view.shown(), which tests/test_client_view.py pins.
+tab_crossings, tab_prices, tab_corn = portal_view.tabs(
+    ["Mexican Feeder Crossings", "Mexican Feeder Prices", "Corn Demand"],
+    hide=["Corn Demand"])
 
 with tab_crossings:
     # ── Status banner ───────────────────────────────────────────────────────────
@@ -392,6 +471,7 @@ with tab_crossings:
     # the last reporting day, what that adds up to since the border reopened, the
     # official year to date, and the same point last year.
     daily = D.get("daily") or []
+    spans = D.get("spans") or {}
     last_day = daily[-1] if daily else None
 
     # Deliberately NOT inside load_all(). That function is @st.cache_data with a
@@ -840,20 +920,36 @@ with tab_crossings:
 
     grid, grid_date = D.get("price_grid", ([], None))
     spread = D.get("spread") or []
-    spread_yr = D.get("spread_yr") or {}
-    cov = D.get("price_cov") or {}
+    spread_win = D.get("spread_win") or {}
 
     if grid:
         latest = spread[-1] if spread else None
-        cur_yr_s = spread_yr.get(str(this_yr))
-        prev_yr_s = spread_yr.get(str(this_yr - 1))
+        # The two newest OPEN WINDOWS. The len() >= 2 guard is not
+        # decoration: one window is the state this page is in after the next
+        # closure plus any rebuild that drops 2025, and [-2] would take the
+        # whole Border Prices block down with an IndexError.
+        _wk = list(spread_win)
+        cur_w = spread_win[_wk[-1]] if _wk else None
+        prev_w = spread_win[_wk[-2]] if len(_wk) >= 2 else None
 
         c = st.columns(4)
         with c[0]:
+            # THE CROSSINGS ARE NAMED FROM THE DATA, NEVER TYPED. This read
+            # "Douglas" over a figure that is AVG(avg_price) across whichever
+            # crossings quoted that day -- on 2026-10-20 that is $324.50, the
+            # mean of Douglas $324.00 and Santa Teresa $325.00, so it was
+            # neither crossing's quote under one crossing's name. Both quote on
+            # 9 of 2026's 32 priced days and Santa Teresa quotes ALONE on
+            # several, where the label was simply the wrong port. Same defect
+            # the Mexican Feeder Prices tab was corrected for.
+            _xing = latest[4] if latest else []
             st.markdown(tile("700–800 lb #1-2 Steers",
                              f"${latest[1]:,.2f}" if latest else "—",
-                             sub(f"Douglas, {fmt_date(latest[0])}" if latest
-                                 else "not quoted")), unsafe_allow_html=True)
+                             sub(f"{' + '.join(_xing)}, {fmt_date(latest[0])}"
+                                 if latest and _xing
+                                 else (fmt_date(latest[0]) if latest
+                                       else "not quoted"))),
+                        unsafe_allow_html=True)
         with c[1]:
             st.markdown(tile("CME Feeder Index",
                              f"${latest[2]:,.2f}" if latest else "—",
@@ -864,26 +960,137 @@ with tab_crossings:
                              f"${latest[3]:,.2f}" if latest else "—",
                              sub("border minus index, $/cwt")), unsafe_allow_html=True)
         with c[3]:
-            st.markdown(tile(f"{this_yr} Avg Basis",
-                             f"${cur_yr_s['mean']:,.2f}" if cur_yr_s else "—",
-                             sub(f"vs ${prev_yr_s['mean']:,.2f} in {this_yr - 1}"
-                                 f" · n={cur_yr_s['n']}" if cur_yr_s and prev_yr_s
-                                 else "")), unsafe_allow_html=True)
+            # THE LABEL CARRIES THE WINDOW, NEVER THE CALENDAR YEAR.
+            # "2026 Avg Basis" was right only while the window and the year
+            # coincided, which they do exactly today and stop doing on 1
+            # January -- when it would roll to a near-empty "2027 Avg Basis"
+            # over a window that began in August and never closed. "Since"
+            # only while the window is open: once the border shuts, asserting
+            # the figure is current is the one thing the label must not do.
+            _nx = len(cur_w["crossings"]) if cur_w else 0
+            st.markdown(tile(
+                (f"Avg Basis Since {fmt_date(cur_w['start'], '%b %Y')}"
+                 if cur_w and cur_w["open"]
+                 else (f"Avg Basis, {win_span(cur_w)}" if cur_w
+                       else "Avg Basis")),
+                f"${cur_w['mean']:,.2f}" if cur_w else "—",
+                # The crossing count stays in the sub. This page's documented
+                # failure is a roster change reading as a market move, so the
+                # size of the roster behind the figure belongs beside it.
+                #
+                # KEPT TO ONE LINE, AND THE BUDGET IS MEASURED RATHER THAN
+                # COUNTED IN CHARACTERS. A .tile-sub here has 264px. The first
+                # version of this read "32 quoted days to Oct 20 · 2 crossings
+                # · prior window $-42.27", which renders 287px: it wrapped, and
+                # took this tile to 131px against its three neighbours' 113.
+                # That is the ragged row CLAUDE.md records for the Cash Cattle
+                # Trade daily tiles -- py_compile, the suite and get_page_text
+                # all pass it, and only a DOM measurement shows it.
+                #
+                # The end date came out because the label already carries the
+                # window: "Since Aug 2026" while it is open (so it runs to
+                # now), and both ends once it has closed.
+                sub(f"{cur_w['n']} quoted days · {_nx} "
+                    f"crossing{'s' if _nx != 1 else ''}"
+                    + (f" · prior ${prev_w['mean']:,.2f}" if prev_w else "")
+                    if cur_w else "")),
+                unsafe_allow_html=True)
 
-        if cur_yr_s and prev_yr_s:
+        # THE DAY'S HEAD, UNDER THE PRICES RATHER THAN BESIDE THEM. Five
+        # tiles in one row is what broke the beef cutout page -- 128px each
+        # and $375.62 split between characters -- and this row is already
+        # four across.
+        #
+        # IT IS THE WHOLE DAY'S FEEDER CATTLE, NOT THE HEAD BEHIND A BRACKET.
+        # AMS publishes the price grid with no volume on it at all, so there
+        # is no head count per weight and none can be derived. Said in the
+        # sentence rather than left to a footnote, because a head figure
+        # printed under a 700-800 lb price reads as that rung's volume.
+        _ph = D.get("price_head")
+        if _ph:
+            _parts = ", ".join(f"{p} {v:,}" for p, _st, v in _ph["by_crossing"])
+            # The named crossings disagree with AMS's published total on 19 of
+            # 463 days -- border_receipts is a hierarchy and the parts are a
+            # BREAKDOWN, not an audit. A day they differ is AMS's arithmetic,
+            # so the page says which figure is theirs and does not cry error.
+            _split = ""
+            if _parts:
+                _split = (f" — {_parts}" if _ph["reconciles"]
+                          else f" — reported by crossing as {_parts}, which "
+                               f"does not add to it")
+            _wtd = (f" Week to date **{_ph['wtd']:,}**."
+                    if _ph.get("wtd") else "")
+            # THE WEIGHTS ARE THE ONES AMS QUOTED, NOT AN AVERAGE OF WHAT
+            # CROSSED, and the two are different populations on the same day:
+            # the head is every feeder animal over the border, the span is the
+            # brackets that traded in enough volume to price. No feed anywhere
+            # publishes a head count against a weight -- see
+            # border.weight_spans() for the four places that were checked --
+            # so no weighted average exists to print instead.
+            _sp = spans.get(grid_date)
+            _wspan = ""
+            if _sp:
+                _cls = " and ".join(c.lower() for c in _sp["classes"]) or "cattle"
+                _wspan = f" AMS quoted {_cls} at **{_sp['label']}**."
+            st.caption(
+                f"**{_ph['head']:,} head crossed that day**{_split}."
+                f"{_wtd}{_wspan} The head is every feeder animal that crossed, "
+                f"whatever it weighed; the span is the weights AMS found enough "
+                f"trade to quote. It publishes no head against any weight, so "
+                f"there is no average weight to be had and no volume behind any "
+                f"single bracket."
+            )
+
+        if cur_w and prev_w:
             # Dollar signs MUST be escaped in st.caption. Two unescaped ones in the
             # same string make Streamlit treat everything between them as LaTeX
             # math, and this caption rendered as a wall of italic variables before
             # the escapes went in. The tiles above are exempt because they are raw
             # HTML. Escape in prose, never inside a code fence.
-            st.caption(
-                f"**The border discount has roughly halved.** Mexican cattle at "
-                f"Douglas averaged **\\${prev_yr_s['mean']:,.2f}/cwt** under the "
-                f"index in {this_yr - 1} and **\\${cur_yr_s['mean']:,.2f}** in "
-                f"{this_yr} — consistent with scarcity, since the few head crossing "
-                f"are bid much closer to the US market. Read the {this_yr} figure "
-                f"with care: it rests on **{cur_yr_s['n']} quoted days** against "
-                f"{prev_yr_s['n']} last year."
+                # THE AVERAGE IS ACROSS CROSSINGS AND IS NOT DOUGLAS'S. This said
+                # "Mexican cattle at Douglas averaged -42.27" where Douglas alone
+                # averaged -45.74 and -42.27 is the mean over four crossings. Both
+                # figures were real and the sentence belonged to neither.
+                _bm = D.get("basis_move")
+                _roster = ""
+                if _bm and _bm.get("same_crossing") is not None:
+                    # THE ROSTER CHANGED AND IT IS WORTH SAYING IT DID NOT
+                    # MATTER. Four crossings quoted this rung in 2025 and two
+                    # do now, which is exactly the setup where a move is really
+                    # a roster change -- the trap six_state.bracket_move()
+                    # exists for. Measured rather than assumed: holding both
+                    # years to the crossings they share moves the narrowing by
+                    # about a third of a point.
+                    _roster = (
+                        f" The crossings quoting it changed between them — "
+                        f"{len(_bm['prior_panel'])} reported this rung in "
+                        f"the earlier window and {len(_bm['year_panel'])} "
+                        f"do now — but holding both windows to the "
+                        f"{' and '.join(_bm['panel'])} pair they share gives "
+                        f"**{_bm['same_crossing']:+.2f}** against the "
+                        f"**{_bm['reported']:+.2f}** above, so the narrowing is "
+                        f"the market rather than the roster."
+                    )
+                # The verb is COMPUTED, and the two periods are named as
+                # SPANS rather than years -- the border was shut for 470
+                # days between them, so "2025" and "2026" named
+                # stretches of calendar that were mostly closed.
+                st.caption(
+                    f"**The border discount "
+                    f"{narrowing_phrase(cur_w['mean'], prev_w['mean'])}.** "
+                    f"Averaged over the crossings that quoted, Mexican "
+                    f"cattle came in **\\${prev_w['mean']:,.2f}/cwt** "
+                    f"under the index over **{win_span(prev_w)}** and "
+                    f"**\\${cur_w['mean']:,.2f}** over "
+                    f"**{win_span(cur_w)}** — consistent with scarcity, "
+                    f"since the few head crossing are bid much closer to "
+                    f"the US market."
+                    + _roster
+                    + f" These are the border's two open windows, not two "
+                    f"calendar years: it was shut between them. Read the "
+                    f"current figure with care — it rests on "
+                    f"**{cur_w['n']} quoted days** against "
+                    f"{prev_w['n']} in the earlier window."
             )
 
         t_now, t_wt, t_sp = st.tabs(
@@ -897,13 +1104,28 @@ with tab_crossings:
                     "Crossing": cp,
                 } for c_, wl, wh, g, lo, hi, mid, cp in grid]),
                 use_container_width=True, hide_index=True)
+            # COUNTED OVER THE WINDOW, not the calendar year, so both
+            # halves of this sentence measure the same span. The quoted count
+            # is the window's own n -- read off the same dict as the tile
+            # rather than recounted here, since two counts of one thing is
+            # how a page comes to disagree with itself.
+            _reop = D.get("reopened")
+            _cov_q = cur_w["n"] if cur_w else 0
+            _cov_r = (len([1 for _d, _v, _w in daily if _d >= _reop])
+                      if _reop else len(daily))
             st.caption(
                 f"AMS quotes for **{fmt_date(grid_date)}**, $/cwt F.O.B. Prices are "
                 f"published only when enough head sell to establish a trend, so a "
-                f"day can report cattle crossing and carry no quote at all — in "
-                f"{this_yr} there were "
-                f"{cov.get(str(this_yr), {}).get('price_days', 0)} quoted days "
-                f"against {len(daily)} reporting days."
+                f"day can report cattle crossing and carry no quote at all — "
+                f"since the border reopened there have been "
+                f"{_cov_q} quoted days against {_cov_r} reporting days."
+                # "32 against 40" reads as though the missing eight were
+                # empty. They were not, and the head that crossed on them is
+                # the figure that says so.
+                + (f" Those unquoted days were not empty: "
+                   f"**{_hp[1] - _hp[0]:,} head** of the {_hp[1]:,} crossed "
+                   f"on a day carrying no price."
+                   if (_hp := D.get("head_priced")) and _hp[1] > _hp[0] else "")
             )
 
         with t_wt:
@@ -939,13 +1161,13 @@ with tab_crossings:
             if spread:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=[pd.Timestamp(d) for d, _b, _f, _s in spread],
-                    y=[b for _d, b, _f, _s in spread], mode="lines+markers",
+                    x=[pd.Timestamp(d) for d, _b, _f, _s, _c in spread],
+                    y=[b for _d, b, _f, _s, _c in spread], mode="lines+markers",
                     name="Border, 700–800 #1-2", line=dict(color=AMBER, width=2),
                     marker=dict(size=5)))
                 fig.add_trace(go.Scatter(
-                    x=[pd.Timestamp(d) for d, _b, _f, _s in spread],
-                    y=[f for _d, _b, f, _s in spread], mode="lines+markers",
+                    x=[pd.Timestamp(d) for d, _b, _f, _s, _c in spread],
+                    y=[f for _d, _b, f, _s, _c in spread], mode="lines+markers",
                     name="CME Feeder Index", line=dict(color=JPSI_BLUE, width=2),
                     marker=dict(size=5)))
                 fig.update_layout(
@@ -958,10 +1180,12 @@ with tab_crossings:
                 st.plotly_chart(fig, use_container_width=True)
 
                 st.dataframe(
-                    pd.DataFrame([{"Year": y, "Quoted days": d["n"],
+                    pd.DataFrame([{"Window": win_span(d),
+                                   "Quoted days": d["n"],
                                    "Mean basis": round(d["mean"], 2),
                                    "Median basis": round(d["median"], 2)}
-                                  for y, d in spread_yr.items()]),
+                                  for d in reversed(
+                                      list(spread_win.values()))]),
                     use_container_width=True, hide_index=True)
                 st.caption(
                     "Both series are **$/cwt F.O.B.**, which is what makes "
@@ -1018,7 +1242,13 @@ with tab_crossings:
                 f"Head counts are AMS estimates, rounded to the nearest hundred."
             )
             st.dataframe(
-                pd.DataFrame([{"Date": d, "Head": v, "Week to date": w}
+                pd.DataFrame([{"Date": d, "Head": v, "Week to date": w,
+                               # A reporting day with no quote gets a dash
+                               # rather than a carried-forward span: the
+                               # head crossed, nothing was priced, and
+                               # those are different facts.
+                               "Weights quoted": (spans.get(d) or {})
+                               .get("label", "–")}
                               for d, v, w in reversed(daily)]),
                 use_container_width=True, hide_index=True)
 
@@ -1211,6 +1441,102 @@ with tab_crossings:
     st.markdown('<div class="sec-header">What Crosses — Weight Composition</div>',
                 unsafe_allow_html=True)
     if D["bands"]:
+        # A SWITCH RATHER THAN A SECOND CHART ALWAYS DRAWN. Both views read
+        # the same already-loaded Census rows, so this is about the length of
+        # the page rather than the cost of it -- the Cold Storage shape.
+        _wc = st.segmented_control(
+            "View", ["By month", "Latest year"], default="By month",
+            label_visibility="collapsed", key="mfi_wc_view")
+        # segmented_control returns None when the reader clears the selection.
+        if _wc is None:
+            _wc = "By month"
+        _mix = D.get("band_mix")
+
+    if D["bands"] and _wc == "By month" and _mix:
+        _x = [pd.Timestamp(m + "-01") for m in _mix["months"]]
+        # Light to heavy: the amber line is the one that collapses and the
+        # dark one is the one that takes its place, so the two that move are
+        # the two furthest apart in the palette.
+        _cols = [AMBER, JPSI_BLUE, JPSI_DARK]
+        fig = go.Figure()
+        for _b, _c in zip(_mix["bands"], _cols):
+            fig.add_trace(go.Scatter(
+                x=_x, y=_mix["share"][_b], name=_b, mode="lines",
+                line=dict(color=_c, width=2),
+                # EXPLICIT, AND LOAD-BEARING. The series has a 14-month hole
+                # where the border was shut; a bridged line would draw a
+                # smooth handover from light cattle to heavy ones across
+                # months in which nothing crossed at all.
+                connectgaps=False,
+                customdata=_mix["head"],
+                hovertemplate="%{x|%b %Y}<br>" + _b +
+                              ": %{y:.1f}%<br>%{customdata:,} head that month"
+                              "<extra></extra>"))
+        if SO and SO.get("from"):
+            fig.add_vline(x=pd.Timestamp(SO["from"]), line_width=1.5,
+                          line_dash="dot", line_color=POS)
+            fig.add_annotation(x=pd.Timestamp(SO["from"]), y=1, yref="paper",
+                               text="reopened", showarrow=False,
+                               yanchor="bottom", font=dict(size=10, color=POS))
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=24, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="% of head",
+                       ticksuffix="%", rangemode="tozero"))
+        st.plotly_chart(fig, use_container_width=True)
+
+        _bl, _lt = _mix.get("baseline"), _mix.get("latest")
+        if _bl and _lt:
+            _lo, _hi = _mix["bands"][0], _mix["bands"][-1]
+            _lab = lambda b: b.split(" (")[0]   # noqa: E731
+            st.caption(
+                f"**The cattle crossing got heavier, and it happened at the "
+                f"closure.** Over the twelve months before the border first "
+                f"shut ({fmt_month(_bl['from'])} – {fmt_month(_bl['to'])}, "
+                f"{_bl['head']:,} head) **{_lab(_lo)}** was "
+                f"**{_bl['share'][_lo]:.1f}%** of head and **{_lab(_hi)}** was "
+                f"**{_bl['share'][_hi]:.1f}%**. In "
+                f"**{fmt_month(_lt['month'])}** they are "
+                f"**{_lt['share'][_lo]:.1f}%** and "
+                f"**{_lt['share'][_hi]:.1f}%**. "
+                f"AMS says the same by a different route — it stopped quoting "
+                f"its 300–400 lb steer bracket after Feb 18, 2025 — and the "
+                f"two are independent, one a customs count and the other a "
+                f"price report."
+            )
+        _notes = []
+        if _mix.get("thin"):
+            # Named and dated rather than counted: a reader looking at the
+            # 2025 spike needs to know THAT month is one load, and "two thin
+            # months" does not tell them which.
+            _notes.append(
+                "One shipment moves a mix this thin — "
+                + " and ".join(f"**{fmt_month(m)}** rests on {h:,} head"
+                               for m, h in _mix["thin"])
+                + ", against 85,000–150,000 in a normal month.")
+        if _mix.get("omitted"):
+            # "across the record" rather than a span in years, which would be
+            # wrong the moment Census publishes another January.
+            _notes.append(
+                "Left off as too small to draw: "
+                + ", ".join(f"{b.split(' (')[0]} at {h:,} head across the "
+                            f"whole record"
+                            for b, h in _mix["omitted"].items()) + ".")
+        st.caption(
+            "Gaps are months in which **no cattle crossed at all**, not months "
+            "Census has yet to publish, and the lines are deliberately broken "
+            "across them. "
+            + (" ".join(_notes) + " " if _notes else "")
+            + "**This is a mix, not an average weight.** Census's top class is "
+            "open-ended — “320 kg or more” — so no average can be computed "
+            "from it, and the one month that matters most is the one where "
+            "that class is largest."
+        )
+
+    elif D["bands"]:
         bands = D["bands"]
         fig = go.Figure()
         fig.add_bar(x=[h for _, h, _ in bands], y=[b for b, _, _ in bands],
@@ -1227,15 +1553,34 @@ with tab_crossings:
                        categoryarray=[b for b, _, _ in bands][::-1]),
         )
         st.plotly_chart(fig, use_container_width=True)
+        # THE SAMPLE GOES BESIDE THE YEAR. band_shares picks the newest year
+        # carrying any volume, and after a reopening that is a year holding
+        # one shipment -- 2026 is 2,453 head against 1.24m in 2024. The
+        # monthly view flags its thin months by name, so leaving this one
+        # unflagged would make the same sample honest in one view and silent
+        # in the other.
+        _by_head = sum(h for _b, h, _s in bands)
         st.caption(
-            f"Latest year with volume: **{D['band_year']}**. Census's top band is "
-            "“320 kg or more”, and 320 kg is 705 lb — the very bottom of the CME "
-            "index's 700–899 lb window. So nearly all Mexican cattle cross *below* "
-            "index weight and only reach it after months on US feed. **An import cut "
-            "moves the index with a lag, through supply — it never shows up in the "
-            "index's own composition.** Imported cattle mostly go straight to "
-            "feedyards under retained ownership and never sell through a "
-            "USDA-reported auction, so they are not index-eligible."
+            f"Latest year with volume: **{D['band_year']}**, {_by_head:,} head."
+            + (f" That is a shipment rather than a year — under "
+               f"{bd.MIN_MIX_HEAD:,} head, where one load moves every share "
+               f"above. The **By month** view shows how it got here."
+               if _by_head < bd.MIN_MIX_HEAD else ""))
+
+    if D["bands"]:
+        # Below the branch on purpose: it describes the weight classes
+        # themselves, so it is as true of the monthly view as of the annual
+        # one, and stating it in only one of them would make the other read
+        # as a different quantity.
+        st.caption(
+            "Census's top band is “320 kg or more”, and 320 kg is 705 lb — the "
+            "very bottom of the CME index's 700–899 lb window. So nearly all "
+            "Mexican cattle cross *below* index weight and only reach it after "
+            "months on US feed. **An import cut moves the index with a lag, "
+            "through supply — it never shows up in the index's own "
+            "composition.** Imported cattle mostly go straight to feedyards "
+            "under retained ownership and never sell through a USDA-reported "
+            "auction, so they are not index-eligible."
         )
 
         if D["kinds"]:
@@ -1297,7 +1642,7 @@ with tab_crossings:
             st.info("No status announcements stored.")
 
     # ── Method ──────────────────────────────────────────────────────────────────
-    with st.expander("Sources and method"):
+    for _ in portal_view.staff_expander("Sources and method"):
         st.markdown(f"""
 **AMS (USDA Market News), current to {fmt_date(F['ams_through'])}**
 
@@ -1505,8 +1850,12 @@ with tab_prices:
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-        t_bands, t_hist, t_method = st.tabs(
-            ["By weight band", "What moved it", "How this is built"])
+        # "How this is built" is provenance -- which AMS report, which rows
+        # are excluded, how a week is defined. It keeps a reader of this code
+        # honest and it is not what a client opened the page for.
+        t_bands, t_hist, t_method = portal_view.tabs(
+            ["By weight band", "What moved it", "How this is built"],
+            hide={"How this is built"})
 
         with t_bands:
             _rows = []
@@ -1659,8 +2008,9 @@ with tab_prices:
                 f"three sales is far too few to call a trend."
             )
 
-        with t_method:
-            st.markdown(_MX_METHOD)
+        if portal_view.shown(t_method):
+            with t_method:
+                st.markdown(_MX_METHOD)
 
         st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
         st.markdown(
@@ -1669,4 +2019,331 @@ with tab_prices:
             f'({C["auction"].title()}) · Border quotes USDA AMS 3486 · '
             f'FX European Central Bank &nbsp;·&nbsp; sale '
             f'{fmt_date(C["sale_date"])}</div>',
+            unsafe_allow_html=True)
+
+
+# ── Corn demand ─────────────────────────────────────────────────────────────
+# STAFF ONLY. See the note at the tab construction above.
+if portal_view.shown(tab_corn):
+    with tab_corn:
+
+        @st.cache_data(ttl=21600, show_spinner=False)
+        def load_corn(schema=cdm.SCHEMA):
+            """Two keyless PSD bulk files, about 4 seconds. No secret, no
+            host, no cron -- which is why this is a page fetch rather than a
+            droplet job."""
+            try:
+                return cdm.load()
+            except Exception as e:                    # noqa: BLE001
+                st.session_state["_corn_err"] = f"{type(e).__name__}: {e}"
+                return None
+
+        # PASSED, never left to the default: st.cache_data hashes the
+        # arguments it is CALLED with, so a parameter sitting at its default
+        # contributes nothing to the key.
+        CD = load_corn(cdm.SCHEMA)
+
+        st.markdown('<div class="sec-header">Corn Demand That Moves With '
+                    'These Cattle</div>', unsafe_allow_html=True)
+
+        if not CD:
+            st.warning(
+                f"USDA PSD is not answering — {st.session_state.get('_corn_err', 'no detail')}"
+            )
+        else:
+            _sf, _base, _ly, _lh = cdm.crossing_shortfall(CD["cattle"])
+
+            st.caption(
+                f"While the border was shut, cattle that would have crossed "
+                f"were kept and fed in **Mexico**, on corn Mexico buys from "
+                f"the **United States**. Mexican exports ran **{_base:,.0f} "
+                f"head** a year over 2022–24 and **{_lh:,.0f}** in MY{_ly}, a "
+                f"shortfall of **{_sf:,.0f} head**. What that is worth in "
+                f"corn, and where the demand goes when they cross again, is "
+                f"below — every figure rests on the feeding assumptions in "
+                f"the controls, which are **assumptions and not measurements**."
+            )
+
+            # THE FULL SHORTFALL IS A SCENARIO, NOT WHAT IS HAPPENING.
+            # Reopening is phased -- Douglas 2026-08-24, Santa Teresa 09-24
+            # capped at 750 head a day, Columbus 10-26, Nogales planned for
+            # 11-30 -- and the flow is running near a third of normal. USDA's
+            # own MY2027 forecast is 625,000 head, half of 2024. Headlining
+            # the full return without a control would size something nobody
+            # expects soon.
+            _psd_next = (CD["cattle"].get(_ly + 1, {}).get("Exports", 0.0)
+                         * 1000)
+            # CAPPED ON THE RECORD, NOT ON A RECENT MEAN. This was capped
+            # at the 2022-24 average of about 1.17m, which is not a ceiling:
+            # that window spans two weak years, and Mexico has shipped
+            # 1.49-1.66m three times. Typing an ordinary 1.3m recovery turned
+            # the box red with nothing saying why.
+            _peak, _peak_yr = cdm.peak_exports(CD["cattle"])
+            _head = st.number_input(
+                "Head a year that stop being fed in Mexico", 0,
+                int(max(_peak, _base)), int(_sf), 25_000, key="cd_head",
+                format="%d",
+                help=f"Defaults to the full shortfall against a normal year "
+                     f"({_sf:,.0f} head). USDA's MY{_ly+1} forecast implies "
+                     f"about {max(0.0, _base - _psd_next):,.0f}; the crossing "
+                     f"pace so far since August is nearer a third of normal "
+                     f"again. The Crossings tab has the live count. The box "
+                     f"accepts up to {_peak:,.0f}, the most Mexico has "
+                     f"shipped in a year on USDA's record ({_peak_yr}) — the "
+                     f"herd grew about a million head during the closure, so "
+                     f"that is a generous bound rather than a hard limit.")
+
+            # THESE ARE YARD WEIGHTS, NOT BORDER WEIGHTS. The pounds between
+            # the crossing and the bunk are grass on both sides -- in Mexico
+            # the first 100-150 kg carries no grain at all -- and charging
+            # them as corn inflates every figure below by about 40%.
+            st.caption(
+                "Feedlot **entry** weight, not crossing weight: the pounds "
+                "between the border and the bunk are put on at grass on both "
+                "sides, and cost no corn. **The two sides are measured on "
+                "different bases** — K-State publishes US feed:gain on dry "
+                "matter, UNAM's Mexican programme is as fed — so each box "
+                "says which it wants, and only the US side carries the "
+                "corn-moisture step."
+            )
+            c2, c3 = st.columns(2)
+            with c2:
+                st.markdown("**Fed in Mexico**")
+                _mxi = st.number_input("On feed at, lb", 400.0, 1000.0,
+                                       float(cdm.MX_FEEDLOT_IN_LB), 25.0,
+                                       key="cd_mxi")
+                _mxf = st.number_input("Finish weight, lb", 800.0, 1500.0,
+                                       float(cdm.MX_FINISH_LB), 25.0,
+                                       key="cd_mxf")
+                _mxc = st.number_input(
+                    "Feed conversion, lb feed per lb gain — AS FED",
+                    4.0, 12.0, float(cdm.MX_CONVERSION), 0.1, key="cd_mxc",
+                    help="UNAM's conventional Mexican finishing programme: "
+                         "6.0–6.5 as fed. As-fed figures already carry the "
+                         "water, so no moisture step is applied to this side.")
+                # WHOLE PERCENTS. On a 0-1 slider Streamlit applies
+                # `format` to the raw value, so 0.65 printed as "1%" while
+                # the arithmetic below was correct -- a label that lies
+                # about a control nobody would doubt.
+                _mxs = st.slider("Corn share of ration", 0, 100,
+                                 int(round(cdm.MX_CORN_SHARE * 100)), 1,
+                                 key="cd_mxs", format="%d%%",
+                                 help="Corn as a share of the AS-FED ration. "
+                                      "UNAM: ration 85% concentrate, of which "
+                                      "60–70% grain, and corn 75–90% of that "
+                                      "grain — so 38–54% of the ration. "
+                                      "Mexican yards lean on sorghum and "
+                                      "byproduct.")
+            with c3:
+                st.markdown("**Fed in the US**")
+                _usi = st.number_input("On feed at, lb ", 500.0, 1100.0,
+                                       float(cdm.US_FEEDLOT_IN_LB), 25.0,
+                                       key="cd_usi")
+                _usf = st.number_input("Finish weight, lb ", 1000.0, 1700.0,
+                                       float(cdm.US_FINISH_LB), 25.0,
+                                       key="cd_usf")
+                _usc = st.number_input(
+                    "Feed conversion, lb feed per lb gain — DRY MATTER",
+                    4.0, 12.0, float(cdm.US_CONVERSION), 0.1, key="cd_usc",
+                    help="K-State Focus on Feedlots, August 2026 closeouts: "
+                         "6.47 on a dry-matter basis. Corn is marketed at "
+                         "about 15.5% moisture, so this side carries a "
+                         "moisture step the Mexican one does not.")
+                _uss = st.slider("Corn share of ration ", 0, 100,
+                                 int(round(cdm.US_CORN_SHARE * 100)), 1,
+                                 key="cd_uss", format="%d%%",
+                                 help="Corn as a share of ration DRY MATTER. "
+                                      "The Samuelson nutritionist survey puts "
+                                      "finishing grain at 50–90% of DM; 65% "
+                                      "is mid-range for a steam-flaked yard. "
+                                      "corn_cost.py's own 80% is an AS-FED "
+                                      "rule of thumb and is not this number.")
+
+            # /100 HERE, not in the widget: the sliders carry whole
+            # percents so their labels read correctly.
+            R = cdm.displaced(_head, mx_in=_mxi, mx_finish=_mxf, mx_conv=_mxc,
+                              mx_share=_mxs / 100.0, us_in=_usi,
+                              us_finish=_usf, us_conv=_usc,
+                              us_share_corn=_uss / 100.0)
+
+            # WHERE EVERY NUMBER COMES FROM, under the controls that set
+            # them. Ross asked twice; the answer was in a docstring and a
+            # tooltip, neither of which is where a reader of the tiles looks.
+            # Built from cdm.SOURCES so a default that moves without its
+            # citation shows up rather than going quiet.
+            with st.expander("Where these figures come from"):
+                st.caption(
+                    "**The two sides are not equally sourced.** The US "
+                    "programme is measured and has two independent "
+                    "cross-checks. The Mexican one rests on a single "
+                    "extension source, a ration share derived from three "
+                    "published parts, and a feedlot entry weight that is "
+                    "**ours** — nothing publishes it. That difference is "
+                    "worth knowing before trading on the gap between the "
+                    "two tiles."
+                )
+                _GRADE = {
+                    "measured": "measured — a published figure, used as published",
+                    "judgement": "judgement — a published RANGE, point chosen here",
+                    "derived": "derived — arithmetic on published parts",
+                    "ours": "OURS — an inference with no published counterpart",
+                }
+                st.dataframe(
+                    pd.DataFrame([{
+                        "Side": r["side"],
+                        "Input": r["input"],
+                        "Published": r["sourced"],
+                        "Grade": _GRADE[r["strength"]].split(" — ")[0],
+                        "Source": r["cite"],
+                        "Note": r["note"],
+                    } for r in cdm.SOURCES]),
+                    use_container_width=True, hide_index=True)
+
+                st.caption("  ·  ".join(_GRADE.values()))
+
+                st.markdown("**Independent cross-checks**")
+                for _cc in cdm.CROSS_CHECKS:
+                    _line = (f"- **{_cc['side']}** — {_cc['says']} "
+                             f"({_cc['cite']})")
+                    if _cc.get("agrees"):
+                        st.markdown(_line + " — agrees.")
+                    else:
+                        st.markdown(_line + f" — **{_cc.get('caveat','')}**")
+
+                st.caption(
+                    "Neither per-head figure is itself published. Each is "
+                    "three inputs multiplied together, which is why they are "
+                    "controls rather than constants, and why the cross-checks "
+                    "above matter more than any single one of them."
+                )
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            t = st.columns(3)
+            with t[0]:
+                st.markdown(tile(
+                    "US corn EXPORT demand lost",
+                    f"{R['export_bu']/1e6:,.0f} mil bu",
+                    sub(f"corn Mexico stops feeding · "
+                        f"{R['per_head_mx_bu']:.0f} bu a head")),
+                    unsafe_allow_html=True)
+            with t[1]:
+                st.markdown(tile(
+                    "US corn DOMESTIC demand gained",
+                    f"{R['domestic_bu']/1e6:,.0f} mil bu",
+                    sub(f"corn US yards feed instead · "
+                        f"{R['per_head_us_bu']:.0f} bu a head")),
+                    unsafe_allow_html=True)
+            with t[2]:
+                # THE NET IS NOT OPTIONAL. The export tile on its own is
+                # arithmetically right and tells a reader the opposite of what
+                # happens to US corn demand, which is the standing failure
+                # this repo records. The two are never shown without it.
+                _net = R["net_bu"] / 1e6
+                st.markdown(tile(
+                    "NET US corn demand",
+                    f"{_net:+,.0f} mil bu",
+                    sub("domestic gain less export loss, a year"),
+                    cls="" if _net >= 0 else "tile-scen"),
+                    unsafe_allow_html=True)
+
+            st.caption(
+                f"**The demand does not disappear — it moves, and it grows.** "
+                f"The same calf eats **{R['per_head_mx_bu']:.0f} bushels** "
+                f"finished in Mexico and **{R['per_head_us_bu']:.0f}** "
+                f"finished in a US yard, because it goes to a heavier finish "
+                f"on a more corn-dense ration north of the border. So "
+                f"reopening costs the **export** line and adds more than that "
+                f"back to **domestic feed**. Where it lands matters for basis: "
+                f"export demand loads the Gulf and rail, feedyard demand loads "
+                f"the Southern Plains."
+            )
+
+            # ── the substitution caveat ──────────────────────────────────────
+            st.markdown("<div style='height:10px'></div>",
+                        unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">What Mexico Actually Fed'
+                        '</div>', unsafe_allow_html=True)
+
+            fg = cdm.feed_grain_total(CD["grains"])
+            fg = [row for row in fg if row[0] >= 2016]
+            fig = go.Figure()
+            for g, col in (("Corn", JPSI_BLUE), ("Sorghum", AMBER),
+                           ("Wheat", JPSI_DARK)):
+                fig.add_trace(go.Scatter(
+                    x=[f"MY{y}" for y, _p, _t in fg],
+                    y=[p.get(g, 0) for _y, p, _t in fg],
+                    name=g, mode="lines+markers",
+                    line=dict(color=col, width=2)))
+            fig.add_trace(go.Scatter(
+                x=[f"MY{y}" for y, _p, _t in fg],
+                y=[t for _y, _p, t in fg], name="All feed grain",
+                mode="lines", line=dict(color=MUTED, width=2, dash="dot")))
+            fig.update_layout(
+                height=300, margin=dict(l=10, r=10, t=24, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                # CATEGORY, not a sniffed axis: "MY2016".."MY2026" would be
+                # read as numeric strings on a linear axis -- the trap
+                # beef_trade.annual_figure documents.
+                xaxis=dict(gridcolor=BORDER, title=None, type="category"),
+                yaxis=dict(gridcolor=BORDER, title="1000 MT"))
+            st.plotly_chart(fig, use_container_width=True)
+
+            _by = {y: (p, t) for y, p, t in fg}
+            _yrs = sorted(_by)
+            if len(_yrs) >= 2:
+                _a, _b = _yrs[-2], _yrs[-1]
+                def _d(y, g):
+                    return _by[y][0].get(g, 0) - _by[y - 1][0].get(g, 0)
+                st.caption(
+                    f"**Read the corn line with the others beside it.** Corn "
+                    f"feed use rose **{_d(_a,'Corn'):+,.0f}** thousand MT in "
+                    f"MY{_a}, which reads as a cattle story — but **all feed "
+                    f"grain together rose "
+                    f"{_by[_a][1]-_by[_a-1][1]:+,.0f}**, because sorghum fell "
+                    f"{_d(_a,'Sorghum'):+,.0f} and feed wheat "
+                    f"{_d(_a,'Wheat'):+,.0f} as Mexico's own crops failed. "
+                    f"Most of that corn replaced other grain rather than "
+                    f"feeding extra animals. The tiles above are a "
+                    f"bottom-up estimate from head and rations; this is what "
+                    f"Mexico's balance sheet actually shows, and the two do "
+                    f"not have to agree."
+                )
+
+            # USDA'S OWN BOOKS DISAGREE WITH THE PREMISE, and the panel
+            # says so rather than letting three tiles imply otherwise.
+            _ly2 = max(CD["corn"])
+            _dimp = (CD["corn"][_ly2].get("Imports", 0)
+                     - CD["corn"].get(_ly2 - 1, {}).get("Imports", 0))
+            if _dimp:
+                st.info(
+                    f"**USDA is not forecasting Mexico to buy less corn.** "
+                    f"The PSD vintage that postdates the reopening still has "
+                    f"MY{_ly2} imports **{_dimp:+,.0f}** thousand MT on the "
+                    f"year, on poultry and feed-sector growth — poultry is "
+                    f"about 47% of Mexican feed demand. What is sized above "
+                    f"is one component moving the other way inside a total "
+                    f"that is still rising, not a forecast that Mexico's "
+                    f"imports fall."
+                )
+
+            _sh, _rep = cdm.us_share(CD["corn"], max(CD["corn"]))
+            st.caption(
+                f"The US supplies **{_sh:.0%}** of Mexico's corn imports"
+                + ("" if _rep else
+                   " — a five-year average, because PSD zero-fills its "
+                   "US-share field for trade years that have not closed and "
+                   "the raw figure reads as nil")
+                + ". Mexico's own crop is mostly white corn for food; the "
+                  "imports are yellow dent for feed, which is the line these "
+                  "cattle sit on."
+            )
+
+        st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="srcline">JSA · John Stewart &amp; Associates '
+            '&nbsp;·&nbsp; USDA FAS PSD (keyless bulk) · head cross-checked '
+            'against US Census imports &nbsp;·&nbsp; feeding assumptions are '
+            'JSA\'s, not USDA\'s</div>',
             unsafe_allow_html=True)

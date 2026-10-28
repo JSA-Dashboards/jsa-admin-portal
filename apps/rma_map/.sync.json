@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "714651d07633f16950b31ac81eabd28529823fda",
+ "commit": "4fb29925e234de74e49a94bddcad1d87778318f7",
  "files": {
-  "app.py": "7fb1a4861d8f1bf7b39be3dc3bbf770e83668fd6243e55d2f8d93f5a64772930",
+  "app.py": "ca1ddb48c10fb9bca3ed4bf647ba8dd4ce6e0ba239b42e9a8b9f9a3fcfa6be8c",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/Transparent Smal logo.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
   "assets/logo-full.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
@@ -19,6 +19,7 @@
   "data/wcmd_county.csv": "10932081505d520525895c952437eee8cb6ad5b0e3c24798c4993b171fda5732",
   "data/wcmd_warehouses.csv": "56f5dca36df5194d17dc3902d4c1c1915526171d77c6049101821ec18172bad8",
   "demand_module.py": "ff7ea21e0228605b0a7da53a3379cbec1066c32d8d1b14b8ba572be35a5b1737",
+  "heat_map.py": "1296829c8cb706fec0fb05f4c8b1c33c7c55652f738683c7d033fd565027bc3a",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
   "wcmd_scraper.py": "f25cc7f0a01f9f703efee8470d56c8d5c0d279c4e4c698d24d5a925efb52a1bb"
  },
