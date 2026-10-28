@@ -39,9 +39,15 @@ def described(e) -> str:
     return f"{kind}: {e.value}" if kind in IMPORT_ERRORS else e.value
 
 
+def _entry(name):
+    """A page's entry file: app.py, or the source repo's own entry name (financial_wire: streamlit_app.py)."""
+    d = ROOT / "apps" / name
+    return d / "app.py" if (d / "app.py").exists() else d / "streamlit_app.py"
+
+
 def pages(names):
     apps = ROOT / "apps"
-    allp = sorted(p.name for p in apps.iterdir() if (p / "app.py").exists())
+    allp = sorted(p.name for p in apps.iterdir() if _entry(p.name).exists())
     return names or allp
 
 
@@ -49,7 +55,7 @@ def main():
     names = pages(sys.argv[1:])
     bad = 0
     for n in names:
-        f = ROOT / "apps" / n / "app.py"
+        f = _entry(n)
         t0 = time.time()
         try:
             at = AppTest.from_file(str(f), default_timeout=int(os.environ.get("SMOKE_TIMEOUT", "25"))).run()

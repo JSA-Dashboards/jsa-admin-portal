@@ -224,6 +224,19 @@
    "branch": "main",
    "preauth": true
   },
+  "financial_wire": {
+   "repo": "JSA-Dashboards/financial-wire",
+   "branch": "main",
+   "entry": "streamlit_app.py",
+   "prefix_modules": "fw_",
+   "exclude": [
+    "*.sql",
+    "push_wire.py",
+    "futures_changes.py",
+    "massive_api.py",
+    "sources.json"
+   ]
+  },
   "farmer_selling_survey": {
    "repo": "JSA-Dashboards/farmer-selling-survey",
    "branch": "main",
