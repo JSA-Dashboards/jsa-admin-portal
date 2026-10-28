@@ -40,10 +40,10 @@ def explain(items: list[str], context: str = "", source: str = "") -> list[str]:
     import anthropic
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(items))
     msg = anthropic.Anthropic(api_key=key).messages.create(
-        model=MODEL, max_tokens=2500, system=SYSTEM,
+        model=MODEL, max_tokens=8000, system=SYSTEM,
         messages=[{"role": "user", "content":
                    f"Source: {source}\n\nHeadlines:\n{numbered}\n\nNewsletter text for context:\n{context[:7000]}"}])
-    text = msg.content[0].text.strip()
+    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()   # skip thinking blocks
     m = re.search(r"\[.*\]", text, re.S)
     try:
         out = json.loads(m.group(0)) if m else None

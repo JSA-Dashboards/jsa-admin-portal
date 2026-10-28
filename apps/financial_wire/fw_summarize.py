@@ -102,6 +102,6 @@ def summarize(title: str, link: str, source: str = "", blurb: str = "") -> dict:
         return {"summary": "", "basis": basis, "error": "no Anthropic API key configured"}
     import anthropic
     msg = anthropic.Anthropic(api_key=key).messages.create(
-        model=MODEL, max_tokens=300, system=SYSTEM,
+        model=MODEL, max_tokens=2000, system=SYSTEM,
         messages=[{"role": "user", "content": f"Headline: {title}\nSource: {source}\n\nText:\n{text}"}])
-    return {"summary": msg.content[0].text.strip(), "basis": basis, "error": err}
+    return {"summary": "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip(), "basis": basis, "error": err}

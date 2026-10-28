@@ -232,6 +232,11 @@ for t in topics:
             tail = f"  \n:gray[{it['source']} \u00b7 {it['when']}]"
             link = f" [:material/open_in_new:]({it['link']})" if it.get("link") else ""
             st.checkbox(_md(build_fin_wire.split_first(title)) + link + tail, key=f"{t}-{n}")
+            # a small summary behind the headline: the AI-drafted explanation for Bloomberg's Five Things,
+            # the publisher's own one-line description for WSJ's feed items
+            small = expl_map.get(it["title"]) or (it.get("blurb") if t == "WSJ" else "")
+            if small:
+                st.caption(small.replace("$", "\\$"))
 
 if entries:
     sec(f"Ticked ({len(entries)})")
