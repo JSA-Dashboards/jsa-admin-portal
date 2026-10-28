@@ -116,7 +116,9 @@ shaded green where it gains and red where it loses, and the spread's full carry 
 On 2026-10-26 it gained a **leg picker** (*Spread from → Live curve*: pick the near and far contract from the
 feed's current curve) and a **seasonal overlay** (the same pair in up to five earlier years, plus a replay of
 each year's move as dots on the payoff chart); on 2026-10-28 the option can be **sold** as well as bought
-(*Option: Buy / Sell*, default Buy). Unlike the Risk Analyzer it needs
+(*Option: Buy / Sell*, default Buy), and a **second option leg** can be added, with one-click *Put spread*,
+*Collar* and *Call spread* buttons (`cso_qs_*` keys: a button's key must not start with `cso_st_`, whose values
+the app re-assigns on every run) and the resulting strategy named for you. Unlike the Risk Analyzer it needs
 no Snowflake, no grant and no new package (scipy, altair and requests were already here), so merging or pushing
 it is the whole deploy. Its one secret is the optional root-level `MASSIVE_API_KEY`, which this portal already
 holds (`Home.py` bridges it): it powers *Fetch futures prices* and the Strategy builder's fed-funds rate,
