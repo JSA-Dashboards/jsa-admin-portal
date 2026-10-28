@@ -8,8 +8,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-import cn_store as store
-import cn_tracker_logic as t
+import store
+import tracker_logic as t
 
 
 def _lbl(r):
@@ -100,7 +100,7 @@ def _weekly(data):
     else:
         key = store.cfg("FAS_API_KEY")
         if key and st.button("Check ESR for a newer week"):
-            import cn_esr as esr
+            import esr
             snap = esr.latest_snapshot(key)
             if snap and snap["cutoff"] > base["cutoff"]:
                 _commit(lambda x: x.__setitem__("pending_weekly", {**snap, "fetched": t._now()}), "Admin: fetch weekly ESR snapshot")
@@ -146,7 +146,7 @@ REASONS = [
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _esr_unknown(key):
-    import cn_esr as esr
+    import esr
     return esr.unknown_weeks(key)
 
 
@@ -261,7 +261,11 @@ def render():
         st.warning("Saving is off: add `CHINA_TRACKER_GITHUB_TOKEN` (or `GITHUB_TOKEN`) as a top-level line in the app secrets, above any [section] heading. "
                    "You can look, but approvals will not save.\n\n"
                    + ("Secret names this app can see that mention GITHUB or CHINA: " + ", ".join(f"`{n}`" for n in seen) if seen
-                      else "This app can see no secret named like GITHUB or CHINA yet (names only are shown, never values)."))
+                      else "This app can see no secret named like GITHUB or CHINA yet (names only are shown, never values).")
+                   + "
+
+All secret names this app has: "
+                   + (", ".join(f"`{n}`" for n in (store.all_secret_names() or [])) or "none could be read"))
     try:
         data, _ = store.load_fresh()
     except Exception as e:
