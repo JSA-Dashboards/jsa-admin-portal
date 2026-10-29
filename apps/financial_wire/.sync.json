@@ -1,13 +1,15 @@
 {
  "branch": "main",
- "commit": "9318a4c46ad5d1dbe11cfb9f68fc8f15b453d6f3",
+ "commit": "302b8e466cb64a7b1ff8f4008bb31ebed3ba7945",
  "files": {
   "fw_build_fin_wire.py": "e076b89c6089084bbb0bd7dfd980a6c3bb834678869f615d7c8c902b7caf421a",
   "fw_explain.py": "ad9a9f16b19b45597d1f40aeed09382f2d05262380d7de3aead78742749eb016",
+  "fw_futures_changes.py": "b08883fe0cfd64058a8773d8e32334d9c3ee519a88126a7add9c856862993209",
   "fw_headlines.py": "e3e38a744f636097f6ff3cc2bed2f7cacab570899245a6100b02c13bc9c668fb",
+  "fw_massive_api.py": "489633f8d3f4d787d3ba5563e78d02272e3ffa72f170f6d40d1ce34521e32651",
   "fw_summarize.py": "a353f685ce4344eb69677167f81ef32d525ca611dc7fc246f680ef21836483a8",
-  "fw_wire_store.py": "413f2102a8f0a7c859249c7d2824d75ebc9c9ae466504f564f4f0256b57c7247",
-  "streamlit_app.py": "3a42d4002a0f04777e416042af8696e8bc207d1a4e88d80c49855fdfe0c0bae1"
+  "fw_wire_store.py": "284cedfa50d19fb73d57102d9e27a57f99300476e25cb346ec48ea895f297e4c",
+  "streamlit_app.py": "9c4188f449dcf0ef08ddae3b55f76d1841f35c1087c2177979f4e78955764ea2"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/financial-wire",

@@ -232,8 +232,6 @@
    "exclude": [
     "*.sql",
     "push_wire.py",
-    "futures_changes.py",
-    "massive_api.py",
     "sources.json"
    ]
   },

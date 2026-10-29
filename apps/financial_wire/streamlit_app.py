@@ -13,12 +13,15 @@ import sys as _sys  # portal-sync: sibling imports resolve to this folder
 from pathlib import Path as _Path  # portal-sync
 _sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import html
+import os
+import re
 from email.message import EmailMessage
 
 import streamlit as st
 
 import fw_build_fin_wire as build_fin_wire
 import fw_explain as explain
+import fw_futures_changes as futures_changes
 import fw_headlines as headlines
 import fw_summarize as summarize
 import fw_wire_store as wire_store
@@ -134,12 +137,70 @@ def load_feeds():
     return headlines.collect(include_mailbox=False)
 
 
+def massive_key():
+    k = os.environ.get("MASSIVE_API_KEY")
+    if k:
+        return k.strip()
+    for look in (lambda: st.secrets["MASSIVE_API_KEY"], lambda: st.secrets["massive"]["api_key"]):
+        try:
+            return str(look()).strip()
+        except Exception:
+            pass
+    return None
+
+
+def do_refresh():
+    """Reload Snowflake and the news feeds, pull Massive live, and ask the PC to re-read Outlook
+    (the hosted app cannot reach it). Results are shown in st.session_state['refresh_msgs']."""
+    msgs = []
+    load_payloads.clear()
+    load_feeds.clear()
+    msgs.append("Reloaded the saved wire and the headline feeds.")
+    key = massive_key()
+    if key:
+        try:
+            st.session_state["live_mkts"] = futures_changes.build(key, wire_store.today_ct())
+            msgs.append("Pulled futures from Massive just now.")
+        except Exception as e:
+            msgs.append(f"Massive pull failed: {type(e).__name__}: {str(e)[:120]}")
+    else:
+        msgs.append("No Massive key in this app's secrets, so the futures stay as last pushed.")
+    err = wire_store.request_refresh()
+    msgs.append("Email pull requested: your PC picks it up within about 10 minutes (4:00 to 8:30 AM Central, "
+                "Outlook open)." if not err else f"Could not request an email pull ({err}).")
+    st.session_state["refresh_msgs"] = msgs
+
+
 payloads, origin = load_payloads()
 wire = (payloads.get("wire") or {}).get("data")
 stamp = (payloads.get("wire") or {}).get("pushed_at")
+_req, _wp = (payloads.get("req") or {}).get("pushed_at"), (payloads.get("wire") or {}).get("pushed_at")
+pending = bool(_req and (not _wp or _req > _wp))
 st.markdown(f'<div class="asof">Source: <b>{html.escape(origin)}</b>'
             + (f" &middot; email items pushed <b>{stamp:%a %b %d %H:%M}</b>" if stamp else "") + "</div>",
             unsafe_allow_html=True)
+
+_c1, _c2 = st.columns([1, 4], vertical_alignment="center")
+_c1.button("Refresh data", on_click=do_refresh, icon=":material/refresh:", type="secondary",
+           help="Reloads the wire and headline feeds, pulls Massive now, and asks your PC to re-read Outlook.")
+if pending:
+    _c2.caption(":material/hourglass_top: Email pull requested. Waiting for your PC; reload in a few minutes.")
+for _m in st.session_state.get("refresh_msgs", []):
+    st.caption(_m)
+
+
+def _stale(wire_) -> list:
+    """Sources whose newest email is older than today (CT): the push ran before it arrived."""
+    out, today = [], wire_store.today_ct()
+    for src in (wire_ or {}).get("sources", []):
+        m = re.search(r"\((\d{4}-\d{2}-\d{2}) [\d:]+\)\s*$", src)
+        if m and m.group(1) < str(today) and today.weekday() < 5:
+            out.append(src)
+    return out
+
+
+for _s in _stale(wire):
+    st.warning(f"Not today's email yet: {_s}. The morning push ran before it arrived.", icon=":material/schedule:")
 
 if not wire:
     st.warning("No wire data yet. Run push_wire.py on the PC that has Outlook.")
@@ -153,7 +214,7 @@ else:
         sec("Market Snapshot" + (f" · Bloomberg, {wire['snapshotAsOf']}" if wire.get("snapshotAsOf") else ""))
         for col, s in zip(st.columns(len(snap)), snap):
             col.markdown(tile(s["name"], s["level"], s["change"]), unsafe_allow_html=True)
-    futs = build_fin_wire.order_futures((payloads.get("mkts") or {}).get("data"))
+    futs = build_fin_wire.order_futures(st.session_state.get("live_mkts") or (payloads.get("mkts") or {}).get("data"))
     if futs:
         sec(f"Nearby Futures · Settlements {futs[0].get('asof', '')} · Change in Contract Units")
         for i in range(0, len(futs), 5):   # five tiles a row; 9 in one row is too narrow to read
@@ -170,7 +231,8 @@ items = list((payloads.get("pj") or {}).get("data") or []) + \
     list((payloads.get("bbg") or {}).get("data") or []) + feed_items
 topics = list(dict.fromkeys(i["topic"] for i in items))
 groups = {t: [i for i in items if i["topic"] == t] for t in topics}
-picked = [it for t in topics for n, it in enumerate(groups[t]) if st.session_state.get(f"{t}-{n}")]
+TICK = f"tick|{wire_store.today_ct()}|"   # a new day is a new key, so yesterday's ticks never carry over
+picked = [it for t in topics for n, it in enumerate(groups[t]) if st.session_state.get(f"{TICK}{t}|{n}")]
 
 # -- PJ-style explanations under the Bloomberg Five Things and the WSJ reading list ----------
 five = [i["title"] for i in (payloads.get("bbg") or {}).get("data") or [] if i.get("feed") == "Five things"]
@@ -221,7 +283,17 @@ else:
 
 # -- headline candidates below ----------------------------------------------------------
 sec("Headline Candidates")
-st.caption("Tick what matters. Ticked items appear in the wire above and in the Outlook template.")
+st.caption("Tick what matters. Ticked items appear in the wire above and in the Outlook template. "
+           "Selections start empty every morning.")
+
+
+def _clear_ticks():
+    for k in [k for k in st.session_state if str(k).startswith("tick|")]:
+        st.session_state[k] = False
+
+
+if picked:
+    st.button("Clear selections", on_click=_clear_ticks, icon=":material/clear_all:")
 if not items:
     st.info("No candidates yet.")
 for t in topics:
@@ -231,7 +303,7 @@ for t in topics:
             title = it["title"] if len(it["title"]) < 400 else it["title"][:397] + "..."
             tail = f"  \n:gray[{it['source']} \u00b7 {it['when']}]"
             link = f" [:material/open_in_new:]({it['link']})" if it.get("link") else ""
-            st.checkbox(_md(build_fin_wire.split_first(title)) + link + tail, key=f"{t}-{n}")
+            st.checkbox(_md(build_fin_wire.split_first(title)) + link + tail, key=f"{TICK}{t}|{n}")
             # a small summary behind the headline: the AI-drafted explanation for Bloomberg's Five Things,
             # the publisher's own one-line description for WSJ's feed items
             small = expl_map.get(it["title"]) or (it.get("blurb") if t == "WSJ" else "")

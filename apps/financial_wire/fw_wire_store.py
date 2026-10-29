@@ -15,7 +15,15 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 KEYS = ("account", "user", "role", "warehouse", "database", "schema", "private_key", "private_key_path")
-KINDS = ("wire", "pj", "bbg", "mkts")
+KINDS = ("wire", "pj", "bbg", "mkts", "req")
+
+
+def ct_now() -> datetime:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Chicago"))
+    except Exception:
+        return datetime.now()
 
 
 def today_ct() -> date:
@@ -134,3 +142,23 @@ def read_latest():
         except Exception as e:   # a bad key or missing grant should read as a notice, not a stack trace
             return {}, f"snowflake unavailable ({type(e).__name__}: {str(e)[:120]})"
     return _read_local(), "local files"
+
+
+def request_refresh() -> str:
+    """Ask the PC to re-read Outlook (the hosted app cannot). Writes a 'req' row that the PC's
+    scheduled push_wire.py --scheduled sees within ~10 minutes. Returns '' or a reason it failed."""
+    try:
+        push("req", {"at": datetime.now().isoformat(timespec="seconds")}, today_ct())
+        return ""
+    except Exception as e:   # e.g. the portal's read-only role has no INSERT on WIRE_PAYLOAD
+        return f"{type(e).__name__}: {str(e)[:160]}"
+
+
+def refresh_pending() -> bool:
+    """True when the newest 'req' is newer than the newest 'wire' push (compared by Snowflake's own clock)."""
+    c = config()
+    if not c:
+        return False
+    p = _read_snowflake(c)
+    req, wire = p.get("req"), p.get("wire")
+    return bool(req and (not wire or req["pushed_at"] > wire["pushed_at"]))
