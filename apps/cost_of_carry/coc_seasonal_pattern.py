@@ -14,8 +14,9 @@ The current year is excluded — the pattern is built only from completed prior 
 
 To draw the pattern over the live market it's mapped onto price with a least-squares
 fit of the current year's observed spread against the pattern index (price = a + b x
-index). The fit is only used when the current market tracks the pattern (b > 0);
-otherwise the index is stretched across the current year's own low-high range.
+index). The fit is only used when the current market tracks the pattern (correlation of
+at least 0.3; a weaker one fits to a nearly flat line); otherwise the index is stretched
+across the current year's own low-high range.
 """
 from __future__ import annotations
 
@@ -23,6 +24,8 @@ import numpy as np
 import pandas as pd
 
 MIN_FIT_POINTS = 10
+# Below this correlation the least-squares fit shrinks the pattern to a near-flat line.
+MIN_FIT_CORR = 0.3
 
 
 def year_grid(by_dte: dict[str, pd.Series], window_days: int) -> pd.DataFrame:
@@ -66,10 +69,10 @@ def scale_to_market(pattern_index: pd.Series, current: pd.Series) -> tuple[pd.Se
         return pd.Series(dtype=float), "none"
     clean = current[~current.index.duplicated(keep="last")]
     overlap = pd.concat({"idx": pattern_index, "px": clean}, axis=1).dropna()
-    if len(overlap) >= MIN_FIT_POINTS and overlap["idx"].std() > 0:
+    if (len(overlap) >= MIN_FIT_POINTS and overlap["idx"].std() > 0 and overlap["px"].std() > 0
+            and overlap["idx"].corr(overlap["px"]) >= MIN_FIT_CORR):
         slope, intercept = np.polyfit(overlap["idx"], overlap["px"], 1)
-        if slope > 0:
-            return intercept + slope * pattern_index, "fit"
+        return intercept + slope * pattern_index, "fit"
     lo, hi = clean.min(), clean.max()
     if hi == lo:
         return pd.Series(dtype=float), "none"
