@@ -70,15 +70,54 @@ def fetch_text(url: str) -> tuple[str, str]:
     return " ".join(p.paras)[:6000], p.meta
 
 
+def _clean(v):
+    v = str(v or "").strip().strip("\"'").strip()
+    return v if v.startswith("sk-ant-") else ""
+
+
+def _secret_names() -> list:
+    """Names (never values) of what the app's secrets hold, to say what was looked at."""
+    try:
+        import streamlit as st
+        return [f"{k}.{{{','.join(v.keys())}}}" if hasattr(v, "keys") else k for k, v in st.secrets.items()]
+    except Exception:
+        return []
+
+
 def api_key():
-    k = os.environ.get("ANTHROPIC_API_KEY")
+    """ANTHROPIC_API_KEY from the environment or from Streamlit secrets, in any of these shapes:
+    ANTHROPIC_API_KEY = "sk-ant-..."   |   [anthropic] api_key = "..."   |   [ANTHROPIC] API_KEY = "..."
+    Each lookup is tried on its own so one odd shape cannot hide the others."""
+    k = _clean(os.environ.get("ANTHROPIC_API_KEY"))
     if k:
         return k
     try:
         import streamlit as st
-        return st.secrets.get("anthropic", {}).get("api_key") or st.secrets.get("ANTHROPIC_API_KEY")
+        sec = st.secrets
     except Exception:
         return None
+    for table, name in (("anthropic", "api_key"), ("ANTHROPIC", "API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")):
+        try:
+            k = _clean(sec[table][name])
+            if k:
+                return k
+        except Exception:
+            pass
+    for name in ("ANTHROPIC_API_KEY", "anthropic_api_key", "anthropic"):
+        try:
+            k = _clean(sec[name])
+            if k:
+                return k
+        except Exception:
+            pass
+    return None
+
+
+def key_problem() -> str:
+    """Why api_key() found nothing, in words a person can act on (no secret values)."""
+    names = _secret_names()
+    return ("no Anthropic key found. Expected ANTHROPIC_API_KEY or [anthropic] api_key starting with sk-ant-. "
+            + ("Secrets here hold: " + ", ".join(names) if names else "Secrets here are empty or unreadable."))
 
 
 def summarize(title: str, link: str, source: str = "", blurb: str = "") -> dict:
@@ -99,7 +138,7 @@ def summarize(title: str, link: str, source: str = "", blurb: str = "") -> dict:
 
     key = api_key()
     if not key:
-        return {"summary": "", "basis": basis, "error": "no Anthropic API key configured"}
+        return {"summary": "", "basis": basis, "error": key_problem()}
     import anthropic
     msg = anthropic.Anthropic(api_key=key).messages.create(
         model=MODEL, max_tokens=2000, system=SYSTEM,

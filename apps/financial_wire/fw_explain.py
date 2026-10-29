@@ -36,7 +36,7 @@ def explain(items: list[str], context: str = "", source: str = "") -> list[str]:
         return []
     key = summarize.api_key()
     if not key:
-        raise RuntimeError("no Anthropic API key configured")
+        raise RuntimeError(summarize.key_problem())
     import anthropic
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(items))
     msg = anthropic.Anthropic(api_key=key).messages.create(
