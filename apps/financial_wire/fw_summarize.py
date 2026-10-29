@@ -121,26 +121,63 @@ def key_problem() -> str:
 
 
 def summarize(title: str, link: str, source: str = "", blurb: str = "") -> dict:
-    """-> {"summary": str, "basis": "article" | "blurb" | "title", "error": str|None}"""
+    """-> {"summary": str, "basis": "article" | "blurb" | "title", "error": str|None, "url": str}
+    url is the publisher's real article address (Google News links are decoded), for hyperlinks."""
     body = meta = ""
     err = None
+    url = link
     try:
-        body, meta = fetch_text(resolve(link))
-    except Exception as e:   # paywall / 403 / timeout: fall back to the blurb
-        err = f"page not readable ({type(e).__name__})"
+        url = resolve(link)
+    except Exception as e:
+        err = f"link not decoded ({type(e).__name__}: {str(e)[:80]})"
+    if err is None or url != link:
+        try:
+            body, meta = fetch_text(url)
+        except Exception as e:   # paywall / 403 / timeout: fall back to the blurb
+            err = f"page not readable ({type(e).__name__}: {str(e)[:80]})"
     blurb = (meta or blurb or "").strip()
     if len(body) >= 500:
         text, basis = body, "article"
     elif blurb:
         text, basis = blurb, "blurb"
     else:
-        return {"summary": "", "basis": "title", "error": err or "no readable text"}
+        return {"summary": "", "basis": "title", "error": err or "no readable text", "url": url}
 
     key = api_key()
     if not key:
-        return {"summary": "", "basis": basis, "error": key_problem()}
+        return {"summary": "", "basis": basis, "error": key_problem(), "url": url}
     import anthropic
-    msg = anthropic.Anthropic(api_key=key).messages.create(
-        model=MODEL, max_tokens=2000, system=SYSTEM,
-        messages=[{"role": "user", "content": f"Headline: {title}\nSource: {source}\n\nText:\n{text}"}])
-    return {"summary": "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip(), "basis": basis, "error": err}
+    try:
+        msg = anthropic.Anthropic(api_key=key).messages.create(
+            model=MODEL, max_tokens=2000, system=SYSTEM,
+            messages=[{"role": "user", "content": f"Headline: {title}\nSource: {source}\n\nText:\n{text}"}])
+    except Exception as e:   # say which call failed: this is the error that looks like "no key"
+        return {"summary": "", "basis": basis, "url": url,
+                "error": f"Anthropic API call failed ({type(e).__name__}: {str(e)[:160]})"}
+    out = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+    return {"summary": out, "basis": basis, "error": err, "url": url}
+
+
+def diagnose() -> list:
+    """Plain lines saying where the key was found (never its value) and whether each model answers."""
+    lines = []
+    src = ("environment ANTHROPIC_API_KEY" if _clean(os.environ.get("ANTHROPIC_API_KEY")) else
+           "Streamlit secrets" if api_key() else None)
+    if not src:
+        return [key_problem()]
+    key = api_key()
+    lines.append(f"Key found in {src}: sk-ant-...{key[-4:]} ({len(key)} characters)")
+    import anthropic
+    client = anthropic.Anthropic(api_key=key)
+    for model in (MODEL, "claude-sonnet-5-5"):
+        try:
+            client.messages.create(model=model, max_tokens=16, messages=[{"role": "user", "content": "Say ok"}])
+            lines.append(f"{model}: answers")
+        except Exception as e:
+            lines.append(f"{model}: FAILED {type(e).__name__}: {str(e)[:200]}")
+    try:
+        d = resolve("https://news.google.com/rss/articles/CBMiXkFVX3lxTE1")   # shape check only
+        lines.append("Google News decoder: loaded")
+    except Exception as e:
+        lines.append(f"Google News decoder: {type(e).__name__}: {str(e)[:100]}")
+    return lines

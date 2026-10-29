@@ -194,9 +194,13 @@ def headlines_section(d: dict) -> str:
         return ""
     lis = ""
     for i in items:
-        title, summ = (i.get("title", ""), i.get("summary", "")) if isinstance(i, dict) else (i, "")
+        title, summ, link = ((i.get("title", ""), i.get("summary", ""), i.get("link", ""))
+                             if isinstance(i, dict) else (i, "", ""))
         sub = (f'<div style="margin-top:3px;font-weight:normal;">{esc(summ)}</div>' if summ else "")
-        lis += f'<li style="padding:5px 0;">{bold_first(title)}{sub}</li>'
+        head = bold_first(title)
+        if link.startswith(("http://", "https://")):   # headline links to the article
+            head = f'<a href="{esc(link)}" style="color:{INK};text-decoration:underline;">{head}</a>'
+        lis += f'<li style="padding:5px 0;">{head}{sub}</li>'
     return heading("Headlines") + row(f'<ul style="margin:0;padding-left:20px;">{lis}</ul>')
 
 

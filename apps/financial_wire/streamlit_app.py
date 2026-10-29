@@ -132,6 +132,11 @@ def get_explanations(items: tuple, context: str, source: str) -> list:
     return explain.explain(list(items), context, source)   # raises on failure, so failures are not cached
 
 
+@st.cache_data(ttl=86400, show_spinner=False, max_entries=500)
+def real_url(link: str) -> str:
+    return summarize.resolve(link)   # raises on failure, so a failed decode is not cached
+
+
 @st.cache_data(ttl=900, show_spinner="Fetching news feeds...")
 def load_feeds():
     return headlines.collect(include_mailbox=False)
@@ -255,8 +260,12 @@ expl_map = dict(zip(five, five_x)) | dict(zip(wsj_items, wsj_x))
 
 entries = []   # {"title": "Headline (Source)", "summary": "...", "note": None | "..."}
 for p in picked:
-    entry = {"title": f"{p['title']} ({p['source']})", "summary": "", "note": None, "basis": ""}
+    entry = {"title": f"{p['title']} ({p['source']})", "summary": "", "note": None, "basis": "", "link": ""}
     if p.get("link"):
+        try:
+            entry["link"] = real_url(p["link"])   # the publisher's own address, not Google News'
+        except Exception:
+            entry["link"] = p["link"]
         with st.spinner(f"Summarizing: {p['title'][:60]}"):
             try:
                 r = get_summary(p["title"], p["link"], p["source"], p.get("blurb", ""))
@@ -316,9 +325,18 @@ if entries:
         if e["note"]:
             st.caption(f":material/warning: no summary for \"{e['title'][:60]}\": {e['note']}")
         elif e["summary"]:
-            st.markdown("\n\n".join([f"**{e['title'][:90]}**", e["summary"].replace("$", "\\$"),
+            head = f"**[{e['title'][:90]}]({e['link']})**" if e.get("link") else f"**{e['title'][:90]}**"
+            st.markdown("\n\n".join([head, e["summary"].replace("$", "\\$"),
                                      f":gray[summary from the {e['basis']}]"]))
-    st.code("\n".join(f"\u2022 {e['title']}" + ("\n  " + e["summary"] if e["summary"] else "") for e in entries),
+    st.code("\n".join(f"\u2022 {e['title']}" + ("\n  " + e["summary"] if e["summary"] else "")
+                      + (f"\n  {e['link']}" if e.get("link") else "") for e in entries),
             language=None, wrap_lines=True)
 for e in feed_errors:
     st.caption(f":material/warning: feed failed: {e}")
+
+with st.expander("Diagnostics: test the Anthropic API"):
+    st.caption("Shows where the key was found (never its value) and whether the models answer from this app.")
+    if st.button("Run test", key="diag_anthropic"):
+        with st.spinner("Calling the API..."):
+            for line in summarize.diagnose():
+                st.write(line)
