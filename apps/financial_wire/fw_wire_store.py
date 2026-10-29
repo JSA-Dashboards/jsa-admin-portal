@@ -162,3 +162,18 @@ def refresh_pending() -> bool:
     p = _read_snowflake(c)
     req, wire = p.get("req"), p.get("wire")
     return bool(req and (not wire or req["pushed_at"] > wire["pushed_at"]))
+
+
+def clear_all() -> int:
+    """The 4:00 AM clean slate: delete every saved payload so nothing from yesterday is shown.
+    The 6:30 AM pull builds the new day. Returns the number of rows removed."""
+    c = config()
+    if not c:
+        raise RuntimeError("No Snowflake config (FINWIRE_SF_* in financial_wire/.env)")
+    conn = _connect(c)
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM WIRE_PAYLOAD")
+        return cur.rowcount or 0
+    finally:
+        conn.close()
