@@ -4,6 +4,7 @@ _sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import os
 import threading
 import streamlit as st
+st.session_state.setdefault("_authed", True)  # portal-sync: portal login already passed
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go

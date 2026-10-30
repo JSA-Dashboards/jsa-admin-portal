@@ -144,7 +144,8 @@
    "repo": "JSA-Dashboards/usda-rail-dashboard"
   },
   "rma_map": {
-   "repo": "JSA-Dashboards/rma-production-map"
+   "repo": "JSA-Dashboards/rma-production-map",
+   "preauth": true
   },
   "vessel_lineup": {
    "repo": "JSA-Dashboards/jsa-vessel-lineup-dashboard",

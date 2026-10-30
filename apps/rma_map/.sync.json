@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "6ead07cd8b79a321d8581c920e0ea9cbf9a9ee53",
+ "commit": "09578287ae1ee77dc9fa0ef47fef6fe3e6501687",
  "files": {
-  "app.py": "293bb234d2196d613178637e2b6120cfeabaf74708f4bb734c6fbd6d4f1565e5",
+  "app.py": "6919c56e68d0ddef4bd11266d3ed31c44b37a2cfdc92b61fce98b25eb34619f5",
   "assemble_draw_inputs.py": "18fcf593dffca617547e7655192e64a61c109b47a67234708558d813dd971c22",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/Transparent Smal logo.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
@@ -45,8 +45,9 @@
   "data/wcmd_county.csv": "10932081505d520525895c952437eee8cb6ad5b0e3c24798c4993b171fda5732",
   "data/wcmd_warehouses.csv": "56f5dca36df5194d17dc3902d4c1c1915526171d77c6049101821ec18172bad8",
   "demand_module.py": "ff7ea21e0228605b0a7da53a3379cbec1066c32d8d1b14b8ba572be35a5b1737",
+  "draw_auth.py": "f27d3a577bc34c638dfaac692f2de5edc105bf70dc1c8dde1ed72f3fa1bbbab7",
   "draw_model.py": "c7335bd48aa3bd2345bfecebdc5ff7a67b0df7966736231475e22a8f8ab6e914",
-  "draw_tab.py": "069cb4fb23145bbb1e9373aa2970765d008cd19ef8a7b3dff515d63de9412005",
+  "draw_tab.py": "598bfa68cb29971e0aa1560642d811df36193dc34e550d70605bb39a2929c223",
   "export_scenario.py": "1c46f5ca75633b60b4d2dde7e424a6c9102adedca629936096d0b8a24fbc3eb6",
   "heat_map.py": "1296829c8cb706fec0fb05f4c8b1c33c7c55652f738683c7d033fd565027bc3a",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
