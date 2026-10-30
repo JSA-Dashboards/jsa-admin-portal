@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "649b600b980b356d5f3fe683424be849a34951db",
+ "commit": "3372cf9bfb4f08251aedb6c94cc9f3362ca9e722",
  "files": {
   "app.py": "293bb234d2196d613178637e2b6120cfeabaf74708f4bb734c6fbd6d4f1565e5",
   "assemble_draw_inputs.py": "b95816f543e826f46bc8f3acef478682274a45bdbfbe4373dc1a5a307135ed62",
@@ -26,6 +26,7 @@
   "data/draw/soy_exports_wasde.json": "75bc6464e97aa96acd4d3e038d4c0d4decd0a6a42ab43931c02d314ab24e8f5b",
   "data/draw/stl_area_docks_corps.csv": "7da5ebb64e48e74bd143989ee35bfe6f2599a6d70fd4658aee7f73ff2d7dafe9",
   "data/draw/usda_barge_annual.csv": "fb17236ce6e97124308f5d685d4c1006744985f70e31c8aff0bc983d616fa7d0",
+  "data/draw/wcus_louisiana_ports.csv": "371bf1e52a719971d7dd8c350c207d22587098456a65db7463a265cbd6d82abb",
   "data/draw/wcus_port_grain.csv": "60bd4897dbfa0846ae70e98e1f5fc7f07c7c8d17d5104a3e5a56396962e79fe9",
   "data/ethanol_plants_asd.csv": "8388afc1e607b9001ce2cdf957f647167fe5047d4846604f52ca98afbfcdbc81",
   "data/nass_corn_silage_state.csv": "298dbc71184033500bfca9c4d352294e6422ecdcd6073452672727f1321d205e",
@@ -42,8 +43,8 @@
   "data/wcmd_county.csv": "10932081505d520525895c952437eee8cb6ad5b0e3c24798c4993b171fda5732",
   "data/wcmd_warehouses.csv": "56f5dca36df5194d17dc3902d4c1c1915526171d77c6049101821ec18172bad8",
   "demand_module.py": "ff7ea21e0228605b0a7da53a3379cbec1066c32d8d1b14b8ba572be35a5b1737",
-  "draw_model.py": "c3fda1a60f07c44d69761dc2704e6a378b2928b61bb7d6eb6c05c4985c29e4c0",
-  "draw_tab.py": "41d08a8a93fcbaa228d95224a5cce332c4c8c6afc0288da0e5e6af81b3d2e8d2",
+  "draw_model.py": "f3665efde1cb1eef2f3d44eba1d8c0bc10772fb15bdaba0407e46f7fd0a1651c",
+  "draw_tab.py": "6e5faa17269a35b5441a195fdb54eabd44aae08c233ca9f19c7c409243eafa6e",
   "export_scenario.py": "f39936221ec7bfe66405de72447a7e49079117d5ed4039eeaaa01bdfd0628cd9",
   "heat_map.py": "1296829c8cb706fec0fb05f4c8b1c33c7c55652f738683c7d033fd565027bc3a",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
