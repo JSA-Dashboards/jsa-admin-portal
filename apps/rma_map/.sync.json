@@ -1,12 +1,13 @@
 {
  "branch": "master",
- "commit": "86f391ea901383a067e3c0842d72cca0a6490d18",
+ "commit": "063f3989559ff79e91bde6b26e1c46b5184678ae",
  "files": {
   "app.py": "6919c56e68d0ddef4bd11266d3ed31c44b37a2cfdc92b61fce98b25eb34619f5",
   "assemble_draw_inputs.py": "9581c2ff2f4b7a2b8a2a9d3c2b9f0bc6373678240f75f4d3b8b479852d64c66d",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/Transparent Smal logo.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
   "assets/logo-full.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
+  "build_canada_census.py": "9ca2e73c77b7fcf00c56ac85431d3fc2a8495025b995eff2c45ce6171993fe7b",
   "build_canada_exports.py": "f1a55c38f79a4d54190a4a3461118a95f1320dd01aeebd4cc9b39383fd350370",
   "build_county_rail_service.py": "7506b1dd97d3ad13e39cdc758ec671492cdc06572f35a4aa33f07875298b6e3d",
   "build_draw_lanes.py": "ebbf5761e7733b8828188898f425d66c99bc96a5d4fed1337f96e8b1bd223b55",
