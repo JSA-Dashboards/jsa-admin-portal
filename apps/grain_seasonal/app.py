@@ -11,13 +11,16 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 import brazil_board
 import brazil_card
+import seasonal_pattern
 import settlement_bank
 import stocks_use
 import trend_board
 from ai_chat import run_chat
+from chart_interact import Y_SCALE_CHOICES, apply_chart_click, remember_traces, yfit_range
 from hl_model import render_hl_tab
 from legacy_history import get_legacy_series, load_legacy_history
 from massive_api import (MassiveApiError, get_daily_bars_many, get_front_contracts, get_futures_curve,
@@ -345,6 +348,20 @@ def _style_axes(fig, y_title, x_title, height=420):
     fig.update_xaxes(gridcolor="#eceff1")
 
 
+def style_clickable_overlay(fig):
+    """What a seasonal overlay needs once its lines can be clicked, applied after _style_axes."""
+    fig.update_layout(
+        # Nearest-point hover, not "x unified": under unified hover a click selects a point on
+        # every line at that date, so there is no telling which line was meant.
+        hovermode="closest",
+        # Legend under the plot: on top it wraps over the chart once a dozen-plus years are
+        # overlaid.
+        legend=dict(orientation="h", yanchor="top", y=-0.10, x=0, font=dict(size=10),
+                    itemsizing="constant"),
+        margin=dict(l=10, r=20, t=30, b=90),
+    )
+
+
 WINDOW_CHOICES = {"6M": 183, "1Y": 365, "18M": 548}
 
 
@@ -538,9 +555,11 @@ def load_stocks_to_use(product_code: str) -> dict[int, float]:
     return stocks_use.fetch_stocks_to_use(product_code, date.today().year, 100)
 
 
-def similar_su_controls(code: str, key: str, candidate_years: list[int], near_expiry: date) -> list[int]:
+def similar_su_controls(code: str, key: str, candidate_years: list[int], near_expiry: date,
+                        row=None) -> list[int]:
     """Toggle and tolerance that auto-highlight prior years whose US stocks/use ratio was
-    close to the current marketing year's. Returns the contract years to emphasise.
+    close to the current marketing year's. Returns the contract years to emphasise. The two
+    controls go into `row` (a horizontal container the caller already has) or a row of their own.
 
     Similarity is judged on the marketing year the contract trades against, which is not its
     calendar year: Dec '25 through Sep '26 corn all trade against the 2025/26 carryout.
@@ -550,7 +569,8 @@ def similar_su_controls(code: str, key: str, candidate_years: list[int], near_ex
         return []
     wheat_note = (" Chicago and KC wheat both use USDA's all-wheat balance sheet."
                   if code in ("ZW", "KE") else "")
-    row = st.container(horizontal=True, vertical_alignment="bottom")
+    if row is None:
+        row = st.container(horizontal=True, vertical_alignment="bottom")
     with row:
         similar_on = st.toggle(
             "Similar S/U years", value=True, key=f"simsu_{key}",
@@ -603,6 +623,159 @@ def similar_su_controls(code: str, key: str, candidate_years: list[int], near_ex
     return similar
 
 
+def highlight_controls(code: str | None, key: str, candidate_years: list[int],
+                       near_expiry: date | None) -> tuple[list[int], str]:
+    """The Highlight years / Y-axis / Similar S/U row above a seasonal chart, as on the Cost of
+    Carry spread builder. Returns the years to emphasise (the multiselect's picks, plus any
+    auto-matched stocks/use years) and the Y-axis zoom level.
+
+    The multiselect's state key is `hl_<key>`, which is what a click on the chart toggles (see
+    chart_interact.apply_chart_click, called before this). `code` None drops the stocks/use
+    part: a cross-commodity spread mixes balance sheets, so there is nothing to match."""
+    row = st.container(horizontal=True, vertical_alignment="bottom")
+    with row:
+        picked = st.multiselect(
+            "Highlight years", candidate_years, key=f"hl_{key}",
+            help="Bold specific prior years to stand out against the rest, or click a line on "
+                 "the chart to bold it and click it again somewhere else along the line to drop it.",
+        )
+        y_scale = st.segmented_control(
+            "Y-axis", Y_SCALE_CHOICES, default="Full", key=f"yscale_{key}",
+            help="Clip the Y-axis to the middle 90/80/70% of values so one outlier year doesn't "
+                 "flatten the rest of the chart.",
+        )
+    years = list(picked or [])
+    if code and near_expiry is not None:
+        years = sorted(set(years) | set(similar_su_controls(code, key, candidate_years, near_expiry, row=row)))
+    return years, y_scale or "Full"
+
+
+# The seasonal-outlook panel under each seasonal chart: the 15- and 5-year patterns.
+OUTLOOK_PATTERNS = (15, 5)
+OUTLOOK_STYLE = {15: dict(color="#1f3a93", dash="dash"), 5: dict(color="#8b1a1a", dash="dash")}
+MASSIVE_FIRST_YEAR = 2021   # earliest contract year Massive has bars for; older ones come from the legacy file
+
+
+def history_years(years_back: int) -> int:
+    """How many prior years to load: the overlay's slider, or the longest outlook pattern if
+    that is more (the pattern reads years the chart doesn't draw)."""
+    return max(years_back, min(max(OUTLOOK_PATTERNS), MAX_YEARS_BACK))
+
+
+def render_seasonal_outlook(label: str, prior_years: dict[int, pd.Series],
+                            current_dte: pd.Series | None, anchor_expiry: date, window_days: int,
+                            y_title: str, fmt: str, as_of: date, key: str, measure: str):
+    """The live series against its 15-year pattern projected to expiration, with the 15- and
+    5-year patterns as 0-100 indexes below. Ported from the Cost of Carry spread builder.
+
+    `prior_years` maps each prior contract year to that year's series by days to expiry (the
+    current year is left out of the pattern); `measure` is what the series is, in the caption."""
+    st.markdown("##### Seasonal outlook")
+
+    patterns: dict[int, tuple[pd.Series, list[int]]] = {}
+    for n in OUTLOOK_PATTERNS:
+        years = sorted(y for y in prior_years if y >= anchor_expiry.year - n)
+        if len(years) < 2:
+            continue
+        # A shorter history can make the 15- and 5-year sets identical; keep one.
+        if any(used == years for _, used in patterns.values()):
+            continue
+        curve = seasonal_pattern.pattern({y: prior_years[y] for y in years}, window_days)
+        if len(curve):
+            patterns[n] = (curve, years)
+    if not patterns:
+        st.info("Not enough prior years with history in this window to build a seasonal pattern.")
+        return
+
+    chosen = st.pills("Patterns", list(patterns), selection_mode="multi", default=list(patterns),
+                      key=f"outlook_{key}", format_func=lambda n: f"{len(patterns[n][1])}-yr") \
+        or list(patterns)
+    chosen = [n for n in chosen if n in patterns] or list(patterns)
+    primary = max(chosen)
+    primary_curve, primary_years = patterns[primary]
+
+    def to_x(index):
+        return [anchor_expiry + timedelta(days=int(d)) for d in index]
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3],
+                        vertical_spacing=0.04)
+    scaled, how = seasonal_pattern.scale_to_market(primary_curve, current_dte)
+    primary_name = (f"{len(primary_years)}-yr pattern "
+                    f"({seasonal_pattern.year_span_label(primary_years)})")
+    if len(scaled):
+        fig.add_trace(go.Scatter(
+            x=to_x(scaled.index), y=list(scaled.values), mode="lines", name=primary_name,
+            line=dict(width=2, **OUTLOOK_STYLE[primary]),
+            hovertemplate=f"{len(primary_years)}-yr pattern<br>%{{y:{fmt}}}<extra></extra>"),
+            row=1, col=1)
+    if current_dte is not None and len(current_dte):
+        fig.add_trace(go.Scatter(
+            x=to_x(current_dte.index), y=list(current_dte.values), mode="lines",
+            name=f"{label} (current market)", line=dict(color=AVG_COLOR, width=2.4),
+            hovertemplate=f"Current<br>%{{y:{fmt}}}<extra></extra>"), row=1, col=1)
+    for n in sorted(chosen, reverse=True):
+        curve, years = patterns[n]
+        fig.add_trace(go.Scatter(
+            x=to_x(curve.index), y=list(curve.values), mode="lines",
+            name=f"{len(years)}-yr index ({seasonal_pattern.year_span_label(years)})",
+            line=dict(width=2, color=OUTLOOK_STYLE[n]["color"],
+                      dash="solid" if n == primary else "dash"),
+            hovertemplate=f"{len(years)}-yr index<br>%{{y:.0f}}<extra></extra>"), row=2, col=1)
+
+    start = anchor_expiry - timedelta(days=window_days)
+    if start <= as_of <= anchor_expiry:
+        today = pd.Timestamp(as_of)
+        fig.add_shape(type="line", xref="x", yref="paper", x0=today, x1=today, y0=0, y1=1,
+                      line=dict(color="#546e7a", dash="dot", width=1.2))
+    wm = watermark_path()
+    if wm:
+        fig.add_layout_image(dict(
+            source=watermark_uri(wm), xref="paper", yref="paper", x=0.5, y=0.62,
+            sizex=0.4, sizey=0.4, xanchor="center", yanchor="middle",
+            sizing="contain", opacity=WATERMARK_OPACITY, layer="below"))
+    fig.update_layout(
+        height=640, margin=dict(l=10, r=20, t=60, b=10),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11)),
+        title=dict(text=f"{label} with {primary_name}", x=0.5, xanchor="center", y=0.99,
+                   yanchor="top", font=dict(size=16)),
+    )
+    fig.update_yaxes(title_text=y_title, tickformat=fmt, gridcolor="#eceff1", row=1, col=1)
+    fig.update_yaxes(title_text="Pattern (0–100)", range=[-5, 105], dtick=20,
+                     gridcolor="#eceff1", row=2, col=1)
+    fig.update_xaxes(gridcolor="#eceff1", tickformat="%b", dtick="M1",
+                     range=[pd.Timestamp(start), pd.Timestamp(anchor_expiry)])
+    st.plotly_chart(fig, width="stretch", key=f"outlook_chart_{key}",
+                    config=plotly_config(f"{key}_seasonal_outlook"))
+
+    export = pd.DataFrame({"days_to_expiry": primary_curve.index,
+                           "date": [f"{d:%m/%d/%Y}" for d in to_x(primary_curve.index)]})
+    for n in chosen:
+        export[f"{len(patterns[n][1])}yr_index"] = patterns[n][0].reindex(primary_curve.index).round(1).values
+    if len(scaled):
+        export[f"{len(primary_years)}yr_pattern_scaled"] = scaled.reindex(primary_curve.index).round(4).values
+    if current_dte is not None:
+        clean = current_dte[~current_dte.index.duplicated(keep="last")]
+        export["current_market"] = clean.reindex(primary_curve.index).values
+    export_row(export, f"{key}_seasonal_outlook", key=f"outlookx_{key}")
+
+    scaling = {
+        "fit": "fitted to the current market's own path so far (least squares), then carried "
+               "forward to expiration",
+        "range": "stretched across the current market's low–high range (the market isn't "
+                 "tracking the pattern closely enough for a fit)",
+        "none": "not drawn — no current-year prices in this window",
+    }[how]
+    st.caption(
+        f"Each prior year's {measure} is rescaled to 0–100 within the season (its own low = 0, "
+        f"high = 100) so wide and narrow years count equally, then the years are averaged and "
+        f"rescaled — the lower panel. 100 marks where the {measure} has typically been strongest "
+        f"in its range, 0 weakest. The current year is excluded. In the top panel the "
+        f"{len(primary_years)}-yr pattern is {scaling}; it shows timing and direction, not a "
+        f"price target. Years are the contract year of the first leg."
+    )
+
+
 def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_dates: dict | None = None):
     code = commodity["product_code"]
     key = commodity["key"]
@@ -640,12 +813,19 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
     window_days = WINDOW_CHOICES.get(window_label or "1Y", 365)
     anchor_expiry = expiries[ticker]
     label = friendly_contract(ticker, code)
-    highlight_years = similar_su_controls(
+    seas_chart_key = f"fut_seas_{key}_{ticker}"
+    # A click on the chart last run is read here, before the Highlight years widget exists.
+    apply_chart_click(seas_chart_key, f"hl_fut_{key}")
+    highlight_years, y_scale = highlight_controls(
         code, f"fut_{key}", [anchor_expiry.year - b for b in range(years_back + 1)], anchor_expiry)
     y_title = "Index (start = 100)" if indexed else f"Price ({unit})"
     fmt = ".1f" if indexed else ".2f"
 
-    shifted = [shift_ticker_year(ticker, code, -b) for b in range(years_back + 1)]
+    # The outlook pattern reads more years than the overlay draws. Massive has no bars before
+    # 2021 (older years come from the legacy file), so it isn't asked for them.
+    load_years = history_years(years_back)
+    shifted = [shift_ticker_year(ticker, code, -b) for b in range(load_years + 1)
+               if anchor_expiry.year - b >= MASSIVE_FIRST_YEAR]
     shifted = [t for t in shifted if t]
     hist = load_histories(tuple(shifted), api_key)
 
@@ -671,6 +851,9 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
             if report_dates:
                 _add_report_markers(fig, report_dates, shown.index.min(), shown.index.max())
             _style_axes(fig, f"Price ({unit})", None)
+            yr = yfit_range(list(shown.values), y_scale)
+            if yr:
+                fig.update_yaxes(range=yr)
             st.plotly_chart(fig, width="stretch", key=f"fut_hist_{key}",
                             config=plotly_config(f"{key}_{ticker}_history"))
             export_row(shown.rename("price").reset_index().rename(columns={"index": "date"}),
@@ -678,44 +861,62 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
 
     st.caption(f"**{label}** — seasonal, aligned on expiration")
     fig = go.Figure()
-    by_dte: dict[str, pd.Series] = {}
+    by_dte: dict[str, pd.Series] = {}                # the years drawn
+    prior_years: dict[int, pd.Series] = {}           # every prior year with data, for the outlook
+    current_dte: pd.Series | None = None
+    trace_years: list[int | None] = []               # trace index -> year, for click-to-bold
     skipped: list[str] = []
     legacy = load_legacy_history_cached()
     base_year = anchor_expiry.year
 
-    for back in range(years_back + 1):
+    for back in range(load_years + 1):
+        drawn = back <= years_back      # years past the slider feed the outlook only
         series, t = _resolve_year_series(hist, code, ticker, back, base_year, legacy)
         if series is None or not len(series):
-            skipped.append(t)
+            if drawn:
+                skipped.append(t)
             continue
         shifted_ticker = shift_ticker_year(ticker, code, -back)
         year_expiry = expiries.get(shifted_ticker, series.index.max()) if shifted_ticker else series.index.max()
         dte = [-(year_expiry - d).days for d in series.index]
         keep = [i for i, d in enumerate(dte) if d >= -window_days]
         if not keep:
-            skipped.append(t)
+            if drawn:
+                skipped.append(t)
             continue
 
         ys = [series.values[i] for i in keep]
         if indexed:
             base = ys[0]
             if not base:
-                skipped.append(t)
+                if drawn:
+                    skipped.append(t)
                 continue
             ys = [y / base * 100 for y in ys]
 
         xs_dte = [dte[i] for i in keep]
+        year_dte = pd.Series(ys, index=pd.Index(xs_dte, name="dte"))
+        if back == 0:
+            current_dte = year_dte
+        else:
+            prior_years[base_year - back] = year_dte
+        if not drawn:
+            continue
+
         xs = [anchor_expiry + timedelta(days=d) for d in xs_dte]
         name = t + (" (current)" if back == 0 else "")
         is_highlighted = base_year - back in highlight_years
+        color = YEAR_COLORS[back % len(YEAR_COLORS)]
         fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="lines", name=name,
-            line=dict(color=YEAR_COLORS[back % len(YEAR_COLORS)],
-                      width=3 if back == 0 else (2.5 if is_highlighted else 1.5)),
+            x=xs, y=ys, mode="lines+markers", name=name,
+            line=dict(color=color, width=3 if back == 0 else (2.5 if is_highlighted else 1.5)),
+            # invisible but hit-testable, so a click anywhere along the line registers
+            marker=dict(size=7, opacity=0, color=color),
             opacity=1.0 if (back == 0 or is_highlighted) else (0.3 if highlight_years else 0.75),
             hovertemplate=f"{name}<br>%{{y:{fmt}}}<extra></extra>",
         ))
-        by_dte[t] = pd.Series(ys, index=pd.Index(xs_dte, name="dte"))
+        trace_years.append(base_year - back)
+        by_dte[t] = year_dte
 
     if not by_dte:
         st.info("No settlement history available for this contract's prior-year analogs.")
@@ -725,8 +926,14 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
             _add_vline(fig, anchor_expiry, "expiration", EXP_COLOR)
             _add_vline(fig, grain_fnd(anchor_expiry), "FND", FND_COLOR)
         _style_axes(fig, y_title, None)
-        st.plotly_chart(fig, width="stretch", key=f"fut_seas_{key}",
-                        config=plotly_config(f"{key}_{ticker}_seasonal"))
+        style_clickable_overlay(fig)
+        yr = yfit_range([v for s in by_dte.values() for v in s.values], y_scale)
+        if yr:
+            fig.update_yaxes(range=yr)
+        st.plotly_chart(fig, width="stretch", key=seas_chart_key,
+                        config=plotly_config(f"{key}_{ticker}_seasonal"),
+                        on_select="rerun", selection_mode="points")
+        remember_traces(seas_chart_key, trace_years)
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
                    f"{key}_{ticker}_seasonal", key=f"futseas_{key}")
         note = (
@@ -739,6 +946,8 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
 
         render_seasonal_strength(by_dte, window_days, anchor_expiry, key=f"{key}_{ticker}",
                                  y_title=y_title, fmt=fmt)
+        render_seasonal_outlook(label, prior_years, current_dte, anchor_expiry, window_days,
+                                y_title, fmt, as_of, key=f"fut_{key}_{ticker}", measure="price")
 
 
 MAX_SPREAD_LEGS = 6
@@ -823,15 +1032,22 @@ def render_leg_picker(curves: dict[str, pd.DataFrame], state_key: str,
     return legs if complete else None
 
 
+def spread_chart_key(key: str) -> str:
+    """The seasonal overlay's widget key, which the callers need before the chart is drawn: a
+    click on it is read ahead of the Highlight years widget (see chart_interact)."""
+    return f"sp_seas_{key}"
+
+
 def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: date,
                          expiries_by_product: dict[str, dict[str, date]], years_back: int,
                          seasonal_line: str, window_label: str, unit: str,
                          report_dates: dict | None, key: str,
-                         highlight_years: list[int] | None = None):
+                         highlight_years: list[int] | None = None, y_scale: str = "Full"):
     """Shared recent-history + seasonal-overlay rendering for both the
     per-commodity calendar spread (fixed product_code across legs) and the
     cross-commodity spread builder (each leg its own product_code).
-    `highlight_years` are leg 1's contract years to draw heavier, the rest fading back."""
+    `highlight_years` are leg 1's contract years to draw heavier, the rest fading back;
+    `y_scale` is the Y-axis zoom level."""
     highlight_years = highlight_years or []
     window_days = WINDOW_CHOICES.get(window_label or "1Y", 365)
     label = _spread_label(legs)
@@ -848,11 +1064,15 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
         for code, ticker, _ in legs
     }
 
-    # Prefetch every Massive ticker any leg might need across all requested
-    # years — a batch fetch, same as before the legacy backfill existed.
+    # Prefetch every Massive ticker any leg might need across all the years loaded (the
+    # outlook pattern reads more than the overlay draws) — a batch fetch. Massive has no bars
+    # before 2021; older years come from the legacy file, so it isn't asked for them.
+    load_years = history_years(years_back)
     all_tickers: set[str] = set()
-    for back in range(years_back + 1):
+    for back in range(load_years + 1):
         for code, ticker, _ in legs:
+            if base_years[(code, ticker)] - back < MASSIVE_FIRST_YEAR:
+                continue
             t = shift_ticker_year(ticker, code, -back)
             if t:
                 all_tickers.add(t)
@@ -861,7 +1081,7 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
     resolved: dict[str, pd.Series] = {}
     year_legsets: list[list[tuple[str, str, int]]] = []
     year_backs: list[int] = []   # how many years back each entry of year_legsets is
-    for back in range(years_back + 1):
+    for back in range(load_years + 1):
         legset = []
         ok = True
         for code, ticker, sign in legs:
@@ -894,6 +1114,9 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
             if report_dates:
                 _add_report_markers(fig, report_dates, shown.index.min(), shown.index.max())
             _style_axes(fig, y_title, None)
+            yr = yfit_range(list(shown.values), y_scale)
+            if yr:
+                fig.update_yaxes(range=yr)
             st.plotly_chart(fig, width="stretch", key=f"sp_hist_{key}",
                             config=plotly_config(f"{key}_history"))
             export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
@@ -901,35 +1124,53 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
 
     st.caption(f"**{label}** — seasonal, aligned on leg 1 expiration")
     fig = go.Figure()
-    by_dte: dict[str, pd.Series] = {}
+    by_dte: dict[str, pd.Series] = {}                # the years drawn
+    prior_years: dict[int, pd.Series] = {}           # every prior year with data, for the outlook
+    current_dte: pd.Series | None = None
+    trace_years: list[int | None] = []               # trace index -> year, for click-to-bold
     skipped: list[str] = []
+    anchor_year = base_years[(anchor_code, anchor_ticker)]
 
     for back, legset in zip(year_backs, year_legsets):
+        drawn = back <= years_back      # years past the slider feed the outlook only
         spread = _combine_series(resolved, legset)
         if spread is None:
-            skipped.append(_spread_label(legset))
+            if drawn:
+                skipped.append(_spread_label(legset))
             continue
         leg0_code, leg0_ticker, _ = legset[0]
         leg0_expiry = expiries_by_product.get(leg0_code, {}).get(leg0_ticker, spread.index.max())
         dte = [-(leg0_expiry - d).days for d in spread.index]
         keep = [i for i, d in enumerate(dte) if d >= -window_days]
         if not keep:
-            skipped.append(_spread_label(legset))
+            if drawn:
+                skipped.append(_spread_label(legset))
             continue
 
         xs_dte = [dte[i] for i in keep]
-        xs = [anchor_expiry + timedelta(days=d) for d in xs_dte]
         ys = [spread.values[i] for i in keep]
+        year_dte = pd.Series(ys, index=pd.Index(xs_dte, name="dte"))
+        if back == 0:
+            current_dte = year_dte
+        else:
+            prior_years[anchor_year - back] = year_dte
+        if not drawn:
+            continue
+
+        xs = [anchor_expiry + timedelta(days=d) for d in xs_dte]
         name = _spread_label(legset) + (" (current)" if back == 0 else "")
-        is_highlighted = base_years[(anchor_code, anchor_ticker)] - back in highlight_years
+        is_highlighted = anchor_year - back in highlight_years
+        color = YEAR_COLORS[back % len(YEAR_COLORS)]
         fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="lines", name=name,
-            line=dict(color=YEAR_COLORS[back % len(YEAR_COLORS)],
-                      width=3 if back == 0 else (2.5 if is_highlighted else 1.5)),
+            x=xs, y=ys, mode="lines+markers", name=name,
+            line=dict(color=color, width=3 if back == 0 else (2.5 if is_highlighted else 1.5)),
+            # invisible but hit-testable, so a click anywhere along the line registers
+            marker=dict(size=7, opacity=0, color=color),
             opacity=1.0 if (back == 0 or is_highlighted) else (0.3 if highlight_years else 0.75),
             hovertemplate=f"{name}<br>%{{y:+.2f}}<extra></extra>",
         ))
-        by_dte[_spread_label(legset)] = pd.Series(ys, index=pd.Index(xs_dte, name="dte"))
+        trace_years.append(anchor_year - back)
+        by_dte[_spread_label(legset)] = year_dte
 
     if not by_dte:
         st.info("No overlapping settlement history for this spread's prior-year analogs.")
@@ -939,8 +1180,14 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
             _add_vline(fig, anchor_expiry, "leg 1 expiration", EXP_COLOR)
             _add_vline(fig, grain_fnd(anchor_expiry), "leg 1 FND", FND_COLOR)
         _style_axes(fig, y_title, None)
-        st.plotly_chart(fig, width="stretch", key=f"sp_seas_{key}",
-                        config=plotly_config(f"{key}_seasonal"))
+        style_clickable_overlay(fig)
+        yr = yfit_range([v for s in by_dte.values() for v in s.values], y_scale)
+        if yr:
+            fig.update_yaxes(range=yr)
+        chart_key = spread_chart_key(key)
+        st.plotly_chart(fig, width="stretch", key=chart_key, config=plotly_config(f"{key}_seasonal"),
+                        on_select="rerun", selection_mode="points")
+        remember_traces(chart_key, trace_years)
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
                    f"{key}_seasonal", key=f"spseas_{key}")
         note = (
@@ -950,6 +1197,9 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
         if skipped:
             note += f" No usable history for {', '.join(skipped)}."
         st.caption(note)
+
+        render_seasonal_outlook(label, prior_years, current_dte, anchor_expiry, window_days,
+                                y_title, "+.2f", as_of, key=f"sp_{key}", measure="spread")
 
 
 def render_seasonal_spread(commodity: dict, api_key: str, as_of: date, report_dates: dict | None = None):
@@ -980,13 +1230,16 @@ def render_seasonal_spread(commodity: dict, api_key: str, as_of: date, report_da
 
     expiries = dict(zip(curve["ticker"], curve["expiration"]))
     near_expiry = expiries.get(legs[0][1])
-    highlight_years = []
+    chart_id = f"{key}_{'_'.join(t for _, t, _ in legs)}"
+    highlight_years, y_scale = [], "Full"
     if near_expiry is not None:
-        highlight_years = similar_su_controls(
+        # A click on the chart last run is read here, before the Highlight years widget exists.
+        apply_chart_click(spread_chart_key(chart_id), f"hl_sp_{key}")
+        highlight_years, y_scale = highlight_controls(
             code, f"sp_{key}", [near_expiry.year - b for b in range(years_back + 1)], near_expiry)
     render_spread_charts(legs, api_key, as_of, {code: expiries}, years_back, seasonal_line or "Average",
-                         window_label, unit, report_dates, key=f"{key}_{'_'.join(t for _, t, _ in legs)}",
-                         highlight_years=highlight_years)
+                         window_label, unit, report_dates, key=chart_id,
+                         highlight_years=highlight_years, y_scale=y_scale)
 
 
 def build_spread_matrix(curve: pd.DataFrame, code: str) -> tuple[pd.DataFrame, list[str]]:
@@ -1221,9 +1474,21 @@ def render_cross_commodity_spread(api_key: str, as_of: date, report_dates: dict 
     units = {c["product_code"]: c["unit"] for c in COMMODITIES}
     unit = units.get(legs[0][0], "¢/bu")
 
+    # Highlight years and the Y-axis zoom, without the stocks/use match: the legs can sit on
+    # different balance sheets.
+    anchor_code, anchor_ticker, _ = legs[0]
+    anchor_expiry = expiries_by_product.get(anchor_code, {}).get(anchor_ticker)
+    chart_id = "xsp_" + "_".join(t for _, t, _ in legs)
+    highlight_years, y_scale = [], "Full"
+    if anchor_expiry is not None:
+        # A click on the chart last run is read here, before the Highlight years widget exists.
+        apply_chart_click(spread_chart_key(chart_id), "hl_xsp")
+        highlight_years, y_scale = highlight_controls(
+            None, "xsp", [anchor_expiry.year - b for b in range(years_back + 1)], anchor_expiry)
+
     render_spread_charts(legs, api_key, as_of, expiries_by_product, years_back, seasonal_line or "Average",
-                         window_label, unit, report_dates,
-                         key="xsp_" + "_".join(t for _, t, _ in legs))
+                         window_label, unit, report_dates, key=chart_id,
+                         highlight_years=highlight_years, y_scale=y_scale)
 
 
 def render_report_calendar(wasde_dates: list[date], nass_dates: list[tuple[date, str]], as_of: date):
