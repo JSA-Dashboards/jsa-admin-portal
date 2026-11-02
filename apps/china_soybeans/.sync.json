@@ -1,11 +1,11 @@
 {
  "branch": "main",
- "commit": "0ca458630ac4d48a3db82f6743e1c4f4f1afd063",
+ "commit": "230c84fc0c8bf6b252015e7ed4a2be99470ad0ab",
  "files": {
   "app.py": "6003afa04d6c0897b9082432ab50ad7cec0b8f25eaa4e11dde57d8d1e96c7451",
-  "cn_admin.py": "ab797235b2e8c9a9a93253f38cd98983afcd827b8030b5fa33e9708dd8c7faac",
+  "cn_admin.py": "5d0e42270d73088dd09eaec81fab25e16092b2d957beae708d70f121f9c9bf40",
   "cn_esr.py": "8fa015884d88aa62b28a79bb7390d2a10abf857fb9c71e72b0a346f4d62a6c9e",
-  "cn_store.py": "4ec8a2f952b50ce05e5df12622dbd413f8bc5abf52fe91d7ef1aaabd4caa6652",
+  "cn_store.py": "3405cc19c8444ac03b69d726ee77a21eadf987f0b4d5ddebe9fa2c00e8560062",
   "cn_tracker_logic.py": "84af25b48486dba95c0ffda97bd3470b31d130f02cac652ef0fa4b14ed79976e"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
