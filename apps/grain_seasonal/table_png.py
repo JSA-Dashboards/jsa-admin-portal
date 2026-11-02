@@ -3,8 +3,8 @@
 Everything happens in the browser when the button is clicked, so nothing is rendered on the
 server and Streamlit Cloud's fragile kaleido isn't involved: the pandas Styler HTML (the same
 colours and number formats as the on-screen table) is laid out off-screen with a title above and
-a note below, then captured with html2canvas. html2canvas is loaded from jsDelivr on the first
-click only. Same approach as cost-of-carry-calculator's snapshot Copy button.
+a note and the JSA disclaimer below, then captured with html2canvas. html2canvas is loaded from
+jsDelivr on the first click only. Same approach as cost-of-carry-calculator's snapshot Copy button.
 """
 from __future__ import annotations
 
@@ -46,7 +46,9 @@ async function tableBlob(data) {{
     ".jsa-png-table th{{font-weight:600;color:#555;background:#f7f8fa;}}" +
     ".jsa-png-table td:first-child,.jsa-png-table th:first-child{{text-align:left;}}" +
     ".jsa-png-title{{font-size:16px;font-weight:600;color:#1f2933;margin:0 0 8px;}}" +
-    ".jsa-png-note{{font-size:11px;line-height:1.4;color:#6b7280;margin-top:8px;}}";
+    ".jsa-png-note{{font-size:11px;line-height:1.4;color:#6b7280;margin-top:8px;}}" +
+    ".jsa-png-disclaimer{{font-size:10px;line-height:1.45;color:#6b7280;margin-top:12px;" +
+    "padding-top:8px;border-top:1px solid #e6e9ef;}}";
   const wrap = document.createElement("div");
   wrap.className = "jsa-png-table";
   wrap.style.position = "relative";
@@ -71,6 +73,15 @@ async function tableBlob(data) {{
       const table = body.querySelector("table");
       if (table) note.style.maxWidth = table.offsetWidth + "px";
       wrap.appendChild(note);
+    }}
+    if (data.disclaimer) {{
+      // The image travels further than the page does, so the legal wording rides along with it.
+      const disclaimer = document.createElement("div");
+      disclaimer.className = "jsa-png-disclaimer";
+      disclaimer.textContent = data.disclaimer;
+      const table = body.querySelector("table");
+      if (table) disclaimer.style.maxWidth = table.offsetWidth + "px";
+      wrap.appendChild(disclaimer);
     }}
     if (data.watermark) {{
       const mark = document.createElement("img");
@@ -128,9 +139,10 @@ def _component():
 
 
 def table_png_button(styler, filename: str, key: str, title: str = "", note: str = "",
-                     watermark_uri: str | None = None) -> None:
-    """PNG download for a table, snapshotting the Styler's HTML (colours and formats)."""
+                     watermark_uri: str | None = None, disclaimer: str = "") -> None:
+    """PNG download for a table, snapshotting the Styler's HTML (colours and formats). `disclaimer`
+    is plain text set under the note, wrapped to the table's width."""
     html = styler.hide(axis="index").to_html()
     _component()(key=f"tablepng_{key}", width=90,
                  data={"html": html, "title": title, "note": note, "watermark": watermark_uri,
-                       "filename": filename})
+                       "disclaimer": disclaimer, "filename": filename})
