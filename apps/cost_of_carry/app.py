@@ -1,5 +1,7 @@
+import sys as _sys  # portal-sync: sibling imports resolve to this folder
+from pathlib import Path as _Path  # portal-sync
+_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import base64
-import sys
 import dataclasses
 import os
 from datetime import date, datetime, timedelta
@@ -11,9 +13,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-# st.Page scripts don't get their own directory on sys.path.
-sys.path.insert(0, str(Path(__file__).parent))
-
 import coc_ethanol_grind as ethanol_grind
 import coc_interest_rates as interest_rates
 import coc_seasonal_pattern as seasonal_pattern
@@ -23,8 +22,7 @@ import coc_storage_rates as storage_rates
 import coc_vsr_tracker as vsr_tracker
 
 from coc_history_archive import ARCHIVE_CUTOFF_YEAR, archive_source, load_price_archive
-from coc_massive_api import (MassiveApiError, get_fed_funds_rate, get_futures_curve,
-                         get_settlement_histories)
+from coc_massive_api import MassiveApiError, get_fed_funds_rate, get_futures_curve, get_settlement_histories
 
 HERE = Path(__file__).parent
 
@@ -44,7 +42,7 @@ except Exception:
 # Streamlit Cloud supplies secrets via st.secrets, but snowflake_db reads os.environ so
 # it stays usable from plain scripts too. Bridge once, at import, before any DB access.
 for _key in ("USE_SNOWFLAKE", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD",
-             "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE"):
+             "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"):
     try:
         if _key in st.secrets and not os.environ.get(_key):
             os.environ[_key] = str(st.secrets[_key])
@@ -77,8 +75,7 @@ def watermark_uri(path: str) -> str:
     return "data:image/png;base64," + base64.b64encode(Path(path).read_bytes()).decode()
 
 
-# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
-# single set_page_config call allowed per multi-page run.
+pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
 
 st.markdown("""<style>
 #MainMenu {visibility: hidden;}
@@ -725,17 +722,35 @@ def highlight_controls(code: str, key: str, candidate_years: list[int],
     return highlight_years, y_scale_label
 
 
-def click_to_highlight(chart_key: str, key: str, trace_years: list[int | None]) -> None:
-    """Click a line to bold it. Plotly hands back the clicked trace's index, which maps
-    to the year drawn at that position; that year is toggled in the Highlight years
-    multiselect so the two controls stay in step.
+def remember_traces(chart_key: str, trace_years: list[int | None]) -> None:
+    """Record which year each trace of the chart just drawn stands for (None for an average,
+    reference or pattern line), so the next run can tell which line a click landed on."""
+    st.session_state[f"{chart_key}__trace_years"] = list(trace_years)
 
-    The selection survives the rerun, so it is fingerprinted and only acted on when it
-    changes — otherwise every rerun would re-toggle the same year."""
+
+def apply_chart_click(chart_key: str, highlight_key: str) -> None:
+    """Click a line to bold it. Plotly hands back the clicked trace's index, which maps to
+    the year drawn at that position; that year is toggled in the Highlight years multiselect
+    (state key `highlight_key`) so the two controls stay in step.
+
+    Call this BEFORE highlight_controls builds that multiselect. Streamlit refuses to change a
+    widget's state once the widget exists in the run (StreamlitAPIException, which inside a
+    fragment only reaches the server log, so the click used to do nothing at all). The click
+    already forced this rerun, so reading it here, ahead of the widget, is enough: the
+    multiselect and the chart below both come out with the year toggled. The trace-to-year
+    list is the one remember_traces saved when the chart was drawn.
+
+    The selection survives later reruns, so it is fingerprinted and only acted on when it
+    changes — otherwise every rerun would re-toggle the same year. Clicking the very point that
+    is already selected clears the selection; that resets the fingerprint so the next click
+    there counts."""
     selection = (st.session_state.get(chart_key) or {}).get("selection") or {}
     points = selection.get("points") or []
+    seen = f"{chart_key}__lastclick"
     if not points:
+        st.session_state.pop(seen, None)
         return
+    trace_years = st.session_state.get(f"{chart_key}__trace_years") or []
     # Under "x unified" hover a click can return one point per line; prefer a point that
     # maps to a year, and ignore the rest.
     point = next((pt for pt in points
@@ -744,7 +759,6 @@ def click_to_highlight(chart_key: str, key: str, trace_years: list[int | None]) 
                   and trace_years[pt["curve_number"]] is not None), points[0])
     fingerprint = str((point.get("curve_number"), point.get("point_index"),
                        point.get("point_number"), point.get("x")))
-    seen = f"{chart_key}__lastclick"
     if st.session_state.get(seen) == fingerprint:
         return
     st.session_state[seen] = fingerprint
@@ -753,14 +767,10 @@ def click_to_highlight(chart_key: str, key: str, trace_years: list[int | None]) 
     year = trace_years[curve] if isinstance(curve, int) and curve < len(trace_years) else None
     if year is None:
         return  # an average, reference or pattern line — nothing to bold
-    picked = list(st.session_state.get(f"hl_{key}") or [])
-    st.session_state[f"hl_{key}"] = (
+    picked = list(st.session_state.get(highlight_key) or [])
+    st.session_state[highlight_key] = (
         [y for y in picked if y != year] if year in picked else picked + [year]
     )
-    try:
-        st.rerun(scope="fragment")
-    except Exception:
-        st.rerun()
 
 
 def yfit_range(values, level: str) -> list[float] | None:
@@ -1085,6 +1095,10 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
         return
 
     candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
+    # Keyed on the pair, so each pair keeps its own selection state; a click on the chart last
+    # run is read here, before the Highlight years widget exists.
+    seas_chart_key = f"seas_{key}_{near}_{far}"
+    apply_chart_click(seas_chart_key, f"hl_{key}_{near}_{far}")
     highlight_years, y_scale_label = highlight_controls(
         code, f"{key}_{near}_{far}", candidate_years, expiries[near], years_back)
 
@@ -1239,10 +1253,10 @@ def render_charts(commodity: dict, table: pd.DataFrame, history: dict, curve: pd
             yr = yfit_range([v for s in by_dte.values() for v in s.values], y_scale_label or "Full")
             if yr:
                 fig.update_yaxes(range=yr)
-            st.plotly_chart(fig, width="stretch", key=f"seas_{key}",
+            st.plotly_chart(fig, width="stretch", key=seas_chart_key,
                             config=plotly_config(f"{key}_seasonal"),
                             on_select="rerun", selection_mode="points")
-            click_to_highlight(f"seas_{key}", f"{key}_{near}_{far}", trace_years)
+            remember_traces(seas_chart_key, trace_years)
             st.caption(
                 f"{drawn} crop year{'s' if drawn != 1 else ''} overlaid · x = 0 is the near leg's "
                 "expiration, so each year lines up at the same point in its life."
@@ -2504,6 +2518,10 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
     curve = load_curve(code, api_key, as_of.isoformat(), BUILDER_CURVE_MONTHS)
     expiries = dict(zip(curve["ticker"], curve["expiration"]))
     candidate_years = [expiries[near].year - back for back in range(years_back + 1)]
+    # Keyed on the pair, so each pair keeps its own selection state; a click on the chart last
+    # run is read here, before the Highlight years widget exists.
+    chart_key = f"builder_chart_{code}_{near}_{far}"
+    apply_chart_click(chart_key, f"hl_b_{code}_{near}_{far}")
     highlight_years, y_scale_label = highlight_controls(
         code, f"b_{code}_{near}_{far}", candidate_years, expiries[near], years_back)
     near_letter, far_letter = month_letter_of(near, code), month_letter_of(far, code)
@@ -2639,10 +2657,10 @@ def render_seasonal_pair(commodity: dict, near: str, far: str, api_key: str, as_
     yr = yfit_range([v for s_dte in by_dte.values() for v in s_dte.values], y_scale_label or "Full")
     if yr:
         fig.update_yaxes(range=yr)
-    st.plotly_chart(fig, width="stretch", key="builder_chart",
+    st.plotly_chart(fig, width="stretch", key=chart_key,
                     config=plotly_config(f"{code}_{near}_{far}_seasonal"),
                     on_select="rerun", selection_mode="points")
-    click_to_highlight("builder_chart", f"b_{code}_{near}_{far}", trace_years)
+    remember_traces(chart_key, trace_years)
     export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
                f"{code}_{near}_{far}_seasonal", key="builder", fig=fig)
 
