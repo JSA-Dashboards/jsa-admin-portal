@@ -5,15 +5,15 @@ on its own. Each is described by a CardSpec (the words, the four figures, the we
 how to print them) and drawn the same way.
 
 A card is one self-contained block of HTML with an inline SVG chart, drawn here rather than by
-Plotly, for two reasons. What is on screen is then exactly what the PNG button saves, because
-both come from the same string; and the PNG is made in the browser (html2canvas, loaded from
-jsDelivr on the first click) so nothing is rendered on the server, where Cloud's kaleido is
-fragile. All chart styling is therefore inline attributes: html2canvas rasterises an inline SVG
-on its own, without the page's stylesheets.
+Plotly, for two reasons. What is on screen is then exactly what the Copy and PNG buttons give,
+because both come from the same string; and the image is made in the browser (html2canvas, in
+snapshot_buttons) so nothing is rendered on the server, where Cloud's kaleido is fragile. All
+chart styling is therefore inline attributes: html2canvas rasterises an inline SVG on its own,
+without the page's stylesheets.
 
-Two small Streamlit components carry it: one shows the card (scaled to the page's width, with a
-hover readout of each week) and one is the PNG button that sits in the export row beside Copy and
-CSV. The PNG always renders at the card's own width, whatever the screen.
+A small Streamlit component shows the card (scaled to the page's width, with a hover readout of
+each week). The image always renders at the card's own width, whatever the screen: card_image() hands
+snapshot_buttons the HTML, the CSS and that width.
 """
 from __future__ import annotations
 
@@ -50,8 +50,6 @@ DISCLAIMER = (
     "buy or sell any commodity interest. John Stewart and Associates is an NFA-registered "
     "Independent Introducing Broker."
 )
-
-HTML2CANVAS_ESM = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm"
 
 
 # ── The card ─────────────────────────────────────────────────────────────────
@@ -360,81 +358,9 @@ export default function (component) {
 }
 """
 
-_PNG_HTML = '<button type="button" class="jb-png" title="Download this graphic as a PNG image">PNG</button>'
-
-_PNG_CSS = _CARD_CSS + """
-/* Dressed like Streamlit's own buttons beside it (Copy, CSV). */
-.jb-png { width: 90px; height: 2.5rem; padding: 0 0.75rem; cursor: pointer; font: inherit; font-size: 1rem;
-  color: inherit; background: var(--st-background-color, #ffffff);
-  border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 0.5rem;
-  white-space: nowrap; }
-.jb-png:hover { border-color: var(--st-primary-color, #ff4b4b); color: var(--st-primary-color, #ff4b4b); }
-.jb-png:disabled { opacity: 0.6; cursor: progress; }
-"""
-
-_PNG_JS = f"""
-const HTML2CANVAS_ESM = "{HTML2CANVAS_ESM}";
-
-async function cardBlob(data) {{
-  const mod = await import(HTML2CANVAS_ESM);
-  const html2canvas = mod.default || mod;
-  // The card is laid out off-screen at its own width, from the same HTML the page shows, so the
-  // image never depends on how wide the page happens to be.
-  const host = document.createElement("div");
-  host.style.cssText = "position:fixed;left:-100000px;top:0;background:#fff;width:" + data.width + "px;";
-  host.innerHTML = data.html;
-  document.body.appendChild(host);
-  try {{
-    await Promise.all([...host.querySelectorAll("img")].map((img) =>
-      img.complete ? null : new Promise((ok) => {{ img.onload = ok; img.onerror = ok; }})));
-    if (document.fonts && document.fonts.ready) await document.fonts.ready;
-    const canvas = await html2canvas(host, {{
-      scale: 2, backgroundColor: "#ffffff", logging: false, windowWidth: data.width,
-    }});
-    return await new Promise((ok) => canvas.toBlob(ok, "image/png"));
-  }} finally {{
-    host.remove();
-  }}
-}}
-
-function download(blob, filename) {{
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename + ".png";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-}}
-
-export default function (component) {{
-  const {{ data, parentElement }} = component;
-  const btn = parentElement.querySelector(".jb-png");
-  if (!btn || !data) return;
-  const flash = (text) => {{
-    btn.textContent = text;
-    setTimeout(() => {{ btn.textContent = "PNG"; btn.disabled = false; }}, 1800);
-  }};
-  btn.onclick = async () => {{
-    btn.disabled = true;
-    btn.textContent = "Saving…";
-    try {{
-      download(await cardBlob(data), data.filename);
-      flash("Saved ✓");
-    }} catch (e) {{
-      flash("Failed");
-    }}
-  }};
-}}
-"""
-
-
 def _view_component():
-    # Registered on every call rather than once at import, for the reason given in table_png.
+    # Registered on every call rather than once at import, for the reason given in snapshot_buttons.
     return st.components.v2.component("jsa_brazil_card", html=_VIEW_HTML, css=_VIEW_CSS, js=_VIEW_JS,
-                                      isolate_styles=False)
-
-
-def _png_component():
-    return st.components.v2.component("jsa_brazil_card_png", html=_PNG_HTML, css=_PNG_CSS, js=_PNG_JS,
                                       isolate_styles=False)
 
 
@@ -445,7 +371,7 @@ def show_card(card_html: str, hover: list[dict], key: str) -> None:
                             "svgW": SVG_W, "svgH": SVG_H})
 
 
-def png_button(card_html: str, filename: str, key: str) -> None:
-    """A PNG download button that saves the card at its own size, twice the pixel density."""
-    _png_component()(key=f"brazilpng_{key}", width=90,
-                     data={"html": card_html, "width": CARD_W, "filename": filename})
+def card_image(card_html: str) -> dict:
+    """What snapshot_buttons needs to draw the card as an image at its own size: the HTML, the CSS
+    the card relies on and its width."""
+    return {"html": card_html, "css": _CARD_CSS, "width": CARD_W}

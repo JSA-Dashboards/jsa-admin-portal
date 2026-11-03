@@ -12,6 +12,7 @@ Data sources:
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -20,6 +21,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import snapshot_buttons
+from disclaimer import disclaimer_text
 from legacy_history import get_legacy_series
 from massive_api import get_daily_bars_many
 
@@ -383,7 +386,7 @@ def _build_display_table(df, ratio_col, ratio_label, current_ratio, current_jan1
     d = _rank_df(df, ratio_col, current_ratio, current_jan1)
     if d.empty:
         return pd.DataFrame()
-    out = pd.DataFrame()
+    out = pd.DataFrame(index=d.index)   # ranks 1..n: columns assigned below must line up with them
     out["Rank"] = d.index
     out["Year"] = d["year"].astype(int)
     if "section" in d.columns:
@@ -663,12 +666,35 @@ def _headline_tile(contract, label, price, pct, top5, kind):
 # Per-contract sub-tab renderer
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def _chart_snapshot(chart_key: str, filename: str) -> None:
+    """Copy / PNG buttons under the chart drawn with `chart_key`."""
+    snapshot_buttons.chart_buttons(chart_key, filename, f"hlx_{chart_key}", disclaimer=disclaimer_text())
+
+
+def _grid_cell(value):
+    """A float the way Streamlit's grid shows it, without pandas' six trailing decimals."""
+    return f"{value:.4f}".rstrip("0").rstrip(".") if isinstance(value, float) else value
+
+
+def _table_snapshot(tbl: pd.DataFrame, filename: str, title: str) -> None:
+    """Copy / PNG buttons under a table."""
+    if tbl.empty:
+        return
+    snapshot_buttons.table_buttons(tbl.style.format(_grid_cell, na_rep=""), filename, f"hlx_{filename}",
+                                   title=title, disclaimer=disclaimer_text())
+
+
 def _render_contract_tab(
     label, D_low, D_high, ratio_col, ratio_label, current_ratio,
     current_jan1, hl_low, lp, t5_low, hl_high, hp, t5_high,
     price_low_label, price_high_label, scatter_title, season_title,
     current_section=None, tile_low_label="Indicated Low", tile_high_label="Indicated High",
 ):
+    slug = _slug(label)
     t1, t2 = st.columns(2)
     t1.markdown(_headline_tile(label, tile_low_label,  hl_low,  lp,  t5_low,  "low"),  unsafe_allow_html=True)
     t2.markdown(_headline_tile(label, tile_high_label, hl_high, hp, t5_high, "high"), unsafe_allow_html=True)
@@ -676,10 +702,13 @@ def _render_contract_tab(
 
     st.markdown("#### Historical Scatter: Ratio vs Price as % of Jan 1")
     st.plotly_chart(_make_scatter(D_low, D_high, ratio_col, ratio_label, current_ratio, scatter_title),
-                    use_container_width=True)
+                    use_container_width=True, key=f"hl_scatter_{slug}")
+    _chart_snapshot(f"hl_scatter_{slug}", f"hl_{slug}_scatter")
 
     st.markdown("#### Timing: Month of Annual High / Low")
-    st.plotly_chart(_make_seasonality_chart(D_low, D_high, season_title), use_container_width=True)
+    st.plotly_chart(_make_seasonality_chart(D_low, D_high, season_title), use_container_width=True,
+                    key=f"hl_timing_{slug}")
+    _chart_snapshot(f"hl_timing_{slug}", f"hl_{slug}_timing")
 
     col_l, col_h = st.columns(2)
     with col_l:
@@ -694,6 +723,7 @@ def _render_contract_tab(
             unsafe_allow_html=True,
         )
         st.dataframe(tbl, use_container_width=True, hide_index=True, height=480)
+        _table_snapshot(tbl, f"hl_{slug}_lows", f"{label}: lows ranked by similarity")
     with col_h:
         tbl = _build_display_table(D_high, ratio_col, ratio_label, current_ratio, current_jan1,
                                     price_high_label, current_section=current_section)
@@ -706,9 +736,10 @@ def _render_contract_tab(
             unsafe_allow_html=True,
         )
         st.dataframe(tbl, use_container_width=True, hide_index=True, height=480)
+        _table_snapshot(tbl, f"hl_{slug}_highs", f"{label}: highs ranked by similarity")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+#─────────────────────────────────────────────────────────────────────────────
 # Main render entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1041,6 +1072,7 @@ def render_hl_tab(api_key: str, legacy_df) -> None:
                 ),
                 use_container_width=True, key=f"hl_seas_clean_{seas_contract}",
             )
+            _chart_snapshot(f"hl_seas_clean_{seas_contract}", f"hl_{_slug(seas_contract)}_key_averages")
 
             # Chart 2: all historical years
             st.markdown(
@@ -1057,6 +1089,7 @@ def render_hl_tab(api_key: str, legacy_df) -> None:
                 ),
                 use_container_width=True, key=f"hl_seas_full_{seas_contract}",
             )
+            _chart_snapshot(f"hl_seas_full_{seas_contract}", f"hl_{_slug(seas_contract)}_all_years")
 
             with st.expander("📋 Year-by-Year Summary Table", expanded=False):
                 _j2 = cfg["jan1_price"] / 100 / 100
@@ -1071,7 +1104,7 @@ def render_hl_tab(api_key: str, legacy_df) -> None:
                         "Range":         f"${(g['price_pct'].max() - g['price_pct'].min()) * _j2:.2f}",
                         "Current Yr":    "★" if yr == cfg["current_year"] else "",
                     })
-                st.dataframe(
-                    pd.DataFrame(rows).sort_values("Year", ascending=False),
-                    use_container_width=True, hide_index=True,
-                )
+                summary = pd.DataFrame(rows).sort_values("Year", ascending=False)
+                st.dataframe(summary, use_container_width=True, hide_index=True)
+                _table_snapshot(summary, f"hl_{_slug(seas_contract)}_year_by_year",
+                                f"{cfg['title'].split('—')[0].strip()}: year-by-year summary")

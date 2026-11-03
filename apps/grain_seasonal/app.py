@@ -3,9 +3,7 @@ from pathlib import Path as _Path  # portal-sync
 _sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import base64
 import os
-import re
 from datetime import date, datetime, timedelta
-from html import unescape
 from pathlib import Path
 
 import anthropic
@@ -20,16 +18,17 @@ import brazil_card
 import png_disclaimer
 import seasonal_pattern
 import settlement_bank
+import snapshot_buttons
 import stocks_use
 import trend_board
 from ai_chat import run_chat
 from chart_interact import Y_SCALE_CHOICES, apply_chart_click, remember_traces, yfit_range
+from disclaimer import disclaimer_text, render_disclaimer_footer
 from hl_model import render_hl_tab
 from legacy_history import get_legacy_series, load_legacy_history
 from massive_api import (MassiveApiError, get_daily_bars_many, get_front_contracts, get_futures_curve,
                          get_fx_history, get_prices, get_settlement_histories)
 from report_dates import NASS_2021_FALLBACK, ReportDatesError, get_nass_dates, get_wasde_dates
-from table_png import table_png_button
 
 HERE = Path(__file__).parent
 
@@ -243,46 +242,29 @@ def plotly_config(filename: str) -> dict:
     }
 
 
-@st.cache_data(show_spinner=False, max_entries=32)
-def figure_png(fig_json: str) -> bytes | None:
-    try:
-        import plotly.io as pio
-        return pio.from_json(fig_json).to_image(format="png", width=1400, height=700, scale=2)
-    except Exception:
-        return None
-
-
-def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, table: dict | None = None,
-               extra=None):
-    """Copy + CSV, plus PNG for a chart (`fig`) or for a styled table (`table`: a dict with the
-    pandas "styler" to snapshot and an optional "title" and "note" to put around it). `extra` is
-    called inside the row to add one more button, for an export that isn't either of those."""
+def export_row(frame: pd.DataFrame, filename: str, key: str, chart_key: str | None = None,
+               table: dict | None = None, card: dict | None = None):
+    """Copy and PNG buttons that picture what is above, then a CSV of `frame`. Pass `chart_key`, the
+    key the chart was drawn under; or `table`, a dict with the on-screen pandas "styler" and an
+    optional "title" and "note"; or `card`, a ready-made graphic ({html, css, width}). With none of
+    them the frame itself is pictured as a table."""
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
-        tsv = frame.to_csv(sep="\t", index=False)
-        with st.popover("Copy", width=90):
-            st.caption("Tab-separated — use the copy icon, then paste into Excel.")
-            st.code(tsv, language=None, height=260)
+        text = disclaimer_text()
+        if card is not None:
+            snapshot_buttons.card_buttons(card["html"], card["css"], card["width"], filename, key)
+        elif chart_key:
+            snapshot_buttons.chart_buttons(chart_key, filename, key, disclaimer=text)
+        else:
+            table = table or {}
+            styler = table.get("styler")
+            wm = watermark_path()
+            snapshot_buttons.table_buttons(
+                frame.style if styler is None else styler, filename, key, title=table.get("title", ""),
+                note=table.get("note", ""), watermark_uri=watermark_uri(wm) if wm else None,
+                disclaimer=text)
         st.download_button("CSV", frame.to_csv(index=False).encode(), f"{filename}.csv",
                            "text/csv", key=f"csv_{key}", width=90)
-        if table is not None:
-            wm = watermark_path()
-            table_png_button(table["styler"], filename, key, table.get("title", ""),
-                             table.get("note", ""), watermark_uri=watermark_uri(wm) if wm else None,
-                             disclaimer=disclaimer_text())
-        if extra is not None:
-            extra()
-        if fig is not None:
-            if st.button("PNG", key=f"png_btn_{key}", width=90,
-                         help="Render this chart as a PNG for download."):
-                st.session_state[f"png_ready_{key}"] = True
-            if st.session_state.get(f"png_ready_{key}"):
-                data = figure_png(fig.to_json())
-                if data:
-                    st.download_button("Save PNG", data, f"{filename}.png", "image/png",
-                                       key=f"png_dl_{key}", width=120)
-                else:
-                    st.caption("PNG export unavailable — use the camera icon on the chart.")
 
 
 def _add_vline(fig, x, text, color):
@@ -416,6 +398,10 @@ def render_seasonal_strength(by_dte: dict[str, pd.Series], window_days: int, anc
     fig.update_xaxes(dtick="M1", tickformat="%b", gridcolor="#e5e7eb", griddash="dot")
     st.plotly_chart(fig, width="stretch", key=f"strength_{key}",
                     config=plotly_config(f"{key}_seasonal_strength"))
+    export = pd.DataFrame({current_label: current_series, f"Avg ({len(by_dte)}yr)": avg}).sort_index()
+    export.index.name = "days_to_expiry"
+    export_row(export.reset_index(), f"{key}_seasonal_strength", key=f"strengthx_{key}",
+               chart_key=f"strength_{key}")
 
 
 def _year_grid_average(by_dte: dict[str, pd.Series], window_days: int) -> pd.Series:
@@ -761,7 +747,8 @@ def render_seasonal_outlook(label: str, prior_years: dict[int, pd.Series],
     if current_dte is not None:
         clean = current_dte[~current_dte.index.duplicated(keep="last")]
         export["current_market"] = clean.reindex(primary_curve.index).values
-    export_row(export, f"{key}_seasonal_outlook", key=f"outlookx_{key}")
+    export_row(export, f"{key}_seasonal_outlook", key=f"outlookx_{key}",
+               chart_key=f"outlook_chart_{key}")
 
     scaling = {
         "fit": "fitted to the current market's own path so far (least squares), then carried "
@@ -861,7 +848,7 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
             st.plotly_chart(fig, width="stretch", key=f"fut_hist_{key}",
                             config=plotly_config(f"{key}_{ticker}_history"))
             export_row(shown.rename("price").reset_index().rename(columns={"index": "date"}),
-                       f"{key}_{ticker}_history", key=f"futhist_{key}")
+                       f"{key}_{ticker}_history", key=f"futhist_{key}", chart_key=f"fut_hist_{key}")
 
     st.caption(f"**{label}** — seasonal, aligned on expiration")
     fig = go.Figure()
@@ -939,7 +926,7 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date, report_d
                         on_select="rerun", selection_mode="points")
         remember_traces(seas_chart_key, trace_years)
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   f"{key}_{ticker}_seasonal", key=f"futseas_{key}")
+                   f"{key}_{ticker}_seasonal", key=f"futseas_{key}", chart_key=seas_chart_key)
         note = (
             f"{len(by_dte)} contract year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"{label}'s expiration, so every year lines up at the same point in its life."
@@ -1124,7 +1111,7 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
             st.plotly_chart(fig, width="stretch", key=f"sp_hist_{key}",
                             config=plotly_config(f"{key}_history"))
             export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
-                       f"{key}_history", key=f"sphist_{key}")
+                       f"{key}_history", key=f"sphist_{key}", chart_key=f"sp_hist_{key}")
 
     st.caption(f"**{label}** — seasonal, aligned on leg 1 expiration")
     fig = go.Figure()
@@ -1193,7 +1180,7 @@ def render_spread_charts(legs: list[tuple[str, str, int]], api_key: str, as_of: 
                         on_select="rerun", selection_mode="points")
         remember_traces(chart_key, trace_years)
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   f"{key}_seasonal", key=f"spseas_{key}")
+                   f"{key}_seasonal", key=f"spseas_{key}", chart_key=chart_key)
         note = (
             f"{len(by_dte)} contract year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"leg 1's expiration, so every year lines up at the same point in its life."
@@ -1295,7 +1282,8 @@ def render_spread_matrix(commodity: dict, api_key: str, as_of: date):
     with st.container(key=f"tablewrap_mx_{key}"):
         st.dataframe(styler, hide_index=True, width="stretch",
                      height=min(35 * (len(display) + 1) + 3, 500))
-    export_row(display, f"spread_matrix_{key}", key=f"mx_{key}")
+    export_row(display, f"spread_matrix_{key}", key=f"mx_{key}",
+               table={"styler": styler, "title": f"{commodity['label']} spread matrix, near − far ({unit})"})
 
 
 TIMEFRAME_RULES = {"Daily": None, "Weekly": "W-FRI", "Monthly": "ME"}
@@ -1402,7 +1390,7 @@ def render_contract_history(commodity: dict, api_key: str, as_of: date, report_d
     st.plotly_chart(fig, width="stretch", key=f"hist_candle_{key}",
                     config=plotly_config(f"{key}_{target}_{timeframe}"))
     export_row(plot_bars.reset_index().rename(columns={"index": "date"}),
-               f"{key}_{target}_{timeframe}", key=f"histchart_{key}")
+               f"{key}_{target}_{timeframe}", key=f"histchart_{key}", chart_key=f"hist_candle_{key}")
 
     st.caption(f"**{label}** — monthly highs & lows")
     stats = monthly_high_low(bars)
@@ -1415,7 +1403,8 @@ def render_contract_history(commodity: dict, api_key: str, as_of: date, report_d
         with st.container(key=f"tablewrap_hilo_{key}"):
             st.dataframe(display, hide_index=True, width="stretch",
                         height=min(35 * (len(display) + 1) + 3, 480))
-        export_row(stats, f"{key}_{target}_monthly_hilo", key=f"histstats_{key}")
+        export_row(stats, f"{key}_{target}_monthly_hilo", key=f"histstats_{key}",
+                   table={"styler": display.style, "title": f"{label}: monthly highs & lows"})
     st.caption(
         f"{label} traded {len(bars):,} sessions from "
         f"{pd.Timestamp(bars.index.min()):%b %d, %Y} to {pd.Timestamp(bars.index.max()):%b %d, %Y}. "
@@ -1538,7 +1527,8 @@ def render_report_calendar(wasde_dates: list[date], nass_dates: list[tuple[date,
     with st.container(key="tablewrap_calendar"):
         st.dataframe(display, hide_index=True, width="stretch",
                     height=min(35 * (len(display) + 1) + 3, 620))
-    export_row(display, "report_calendar", key="calendar")
+    export_row(display, "report_calendar", key="calendar",
+               table={"styler": display.style, "title": "Report release calendar"})
     st.caption(f"{len(filtered):,} report dates shown, {year_range[0]}–{year_range[1]}.")
 
 
@@ -2264,8 +2254,7 @@ def render_brazil(api_key: str, as_of: date):
     for key, spec, frame, filename in cards:
         card_html, hover = brazil_card.build_card(spec, logo_uri=logo, watermark_uri=mark_uri, year=as_of.year)
         brazil_card.show_card(card_html, hover, key=key)
-        export_row(frame, filename, key=f"brazil_{key}",
-                   extra=lambda: brazil_card.png_button(card_html, filename, key))
+        export_row(frame, filename, key=f"brazil_{key}", card=brazil_card.card_image(card_html))
     if markets:
         st.caption(history_source_note(bank))
 
@@ -2274,35 +2263,6 @@ def refresh_prices():
     # Quotes only: settlement history is cached for hours on purpose and re-pulling it takes minutes.
     for loader in (load_curve, _load_trend_prices):
         loader.clear()
-
-
-DISCLAIMER_FOOTER_HTML = (
-    '<hr style="border-color:#3a3a3a;margin-top:32px;margin-bottom:16px">'
-    '<div style="font-family:inherit;color:#888;font-size:inherit;line-height:1.6;text-align:center;padding:0 24px 24px;">'
-    'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative '
-    'products involves substantial risk of loss and may not be suitable for all investors. '
-    'This communication is provided for informational purposes only and does not constitute investment '
-    'advice, a recommendation, or an offer or solicitation to buy or sell any futures, options, cash '
-    'commodities, or derivative products. John Stewart &amp; Associates, Inc. does not accept orders to '
-    'buy or sell any financial instruments via email. The information contained herein has been obtained '
-    'from sources believed to be reliable; however, its accuracy and completeness are not guaranteed. '
-    'Any opinions expressed are solely those of the author, are subject to change without notice, and '
-    'should not be relied upon as a basis for investment decisions. Past performance is not indicative of '
-    'future results. This message may contain confidential or proprietary information intended solely for '
-    'the use of the designated recipient. &copy; John Stewart &amp; Associates, Inc. {year}</div>'
-)
-
-
-def render_disclaimer_footer():
-    """The standard JSA legal footer used across the dashboard family (verbatim, see
-    e.g. beef-trimmings-dashboard/app.py)."""
-    st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
-
-
-def disclaimer_text() -> str:
-    """The footer's wording as plain text, for the images that leave the app."""
-    plain = unescape(re.sub(r"<[^>]*>", "", DISCLAIMER_FOOTER_HTML))
-    return plain.format(year=datetime.now().year)
 
 
 def main():
