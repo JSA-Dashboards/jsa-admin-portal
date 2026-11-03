@@ -12,8 +12,18 @@ import streamlit as st
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
 # local massive_api import below raises ModuleNotFoundError.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 
+import portal_view  # noqa: E402
+
+import ls_snapshot_buttons as snapshot_buttons
 from ls_massive_api import MassiveApiError, get_futures_curve, get_settlement_histories
 
 # st.set_page_config removed -- the Livestock Portal shell (Home.py) makes the
@@ -321,35 +331,37 @@ def plotly_config(filename: str) -> dict:
     }
 
 
-@st.cache_data(show_spinner=False, max_entries=32)
-def figure_png(fig_json: str) -> bytes | None:
-    try:
-        import plotly.io as pio
-        return pio.from_json(fig_json).to_image(format="png", width=1400, height=700, scale=2)
-    except Exception:
-        return None
-
-
-def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
+def export_row(frame: pd.DataFrame, filename: str, key: str, chart_key: str | None = None,
+               table: dict | None = None):
+    """Copy and PNG buttons that picture what is above, then a CSV of `frame`. Pass `chart_key`, the
+    key the chart was drawn under, or `table`, a dict with the on-screen pandas "styler" and an
+    optional "title". With neither the frame itself is pictured as a table."""
+    # NOT DRAWN FOR A CLIENT -- standing rule 2, "the download panels". Gated
+    # HERE rather than at the eleven call sites, which is the whole reason this
+    # is one line: a twelfth call site added later is covered by construction,
+    # and there is no site to forget. The three buttons below hand over the
+    # settlement series, the seasonal overlay matrix, the yearly high/low
+    # table, the month-frequency summary and the USDA report calendar as
+    # files; this was the last ungated export panel in the portal, and every
+    # other one is already behind a staff gate (cot_report:844,
+    # beef_trade:1081, us_cow_herd:1018).
+    #
+    # An early return, not an `if` around the body: nothing here is computed
+    # for a client either, so no frame is serialised and no snapshot is
+    # drawn on a page nobody can download from.
+    if portal_view.is_client():
+        return
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
-        tsv = frame.to_csv(sep="\t", index=False)
-        with st.popover("Copy", width=90):
-            st.caption("Tab-separated — use the copy icon, then paste into Excel.")
-            st.code(tsv, language=None, height=260)
+        if chart_key:
+            snapshot_buttons.chart_buttons(chart_key, filename, key)
+        else:
+            table = table or {}
+            styler = table.get("styler")
+            snapshot_buttons.table_buttons(
+                frame.style if styler is None else styler, filename, key, title=table.get("title", ""))
         st.download_button("CSV", frame.to_csv(index=False).encode(), f"{filename}.csv",
                            "text/csv", key=f"csv_{key}", width=90)
-        if fig is not None:
-            if st.button("PNG", key=f"png_btn_{key}", width=90,
-                         help="Render this chart as a PNG for download."):
-                st.session_state[f"png_ready_{key}"] = True
-            if st.session_state.get(f"png_ready_{key}"):
-                data = figure_png(fig.to_json())
-                if data:
-                    st.download_button("Save PNG", data, f"{filename}.png", "image/png",
-                                       key=f"png_dl_{key}", width=120)
-                else:
-                    st.caption("PNG export unavailable — use the camera icon on the chart.")
 
 
 def _add_vline(fig, x, text, color):
@@ -465,7 +477,7 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date):
             st.plotly_chart(fig, width="stretch", key=f"fut_hist_{key}",
                             config=plotly_config(f"{key}_{ticker}_history"))
             export_row(shown.rename("price").reset_index().rename(columns={"index": "date"}),
-                       f"{key}_{ticker}_history", key=f"futhist_{key}")
+                       f"{key}_{ticker}_history", key=f"futhist_{key}", chart_key=f"fut_hist_{key}")
             if report_dates:
                 st.caption(report_legend_caption(code))
 
@@ -533,7 +545,7 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date):
         st.plotly_chart(fig, width="stretch", key=f"fut_seas_{key}",
                         config=plotly_config(f"{key}_{ticker}_seasonal"))
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   f"{key}_{ticker}_seasonal", key=f"futseas_{key}")
+                   f"{key}_{ticker}_seasonal", key=f"futseas_{key}", chart_key=f"fut_seas_{key}")
         note = (
             f"{len(by_dte)} contract year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"{label}'s expiration, so every year lines up at the same point in its life."
@@ -618,7 +630,7 @@ def render_seasonal_spread(commodity: dict, api_key: str, as_of: date):
             st.plotly_chart(fig, width="stretch", key=f"sp_hist_{key}",
                             config=plotly_config(f"{key}_{near}_{far}_history"))
             export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
-                       f"{key}_{near}_{far}_history", key=f"sphist_{key}")
+                       f"{key}_{near}_{far}_history", key=f"sphist_{key}", chart_key=f"sp_hist_{key}")
             if report_dates:
                 st.caption(report_legend_caption(code))
 
@@ -680,7 +692,7 @@ def render_seasonal_spread(commodity: dict, api_key: str, as_of: date):
         st.plotly_chart(fig, width="stretch", key=f"sp_seas_{key}",
                         config=plotly_config(f"{key}_{near}_{far}_seasonal"))
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   f"{key}_{near}_{far}_seasonal", key=f"spseas_{key}")
+                   f"{key}_{near}_{far}_seasonal", key=f"spseas_{key}", chart_key=f"sp_seas_{key}")
         note = (
             f"{len(by_dte)} contract year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"the near leg's expiration, so every year lines up at the same point in its life."
@@ -741,7 +753,8 @@ def render_spread_matrix(commodity: dict, api_key: str, as_of: date):
     with st.container(key=f"tablewrap_mx_{key}"):
         st.dataframe(styler, hide_index=True, width="stretch",
                      height=min(35 * (len(display) + 1) + 3, 500))
-    export_row(display, f"spread_matrix_{key}", key=f"mx_{key}")
+    export_row(display, f"spread_matrix_{key}", key=f"mx_{key}",
+               table={"styler": styler, "title": f"{commodity['label']} spread matrix, near − far ({unit})"})
 
 
 CONTINUOUS_FREQ = {"Daily": None, "Weekly": "W-FRI", "Monthly": "ME"}
@@ -793,7 +806,7 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
     st.plotly_chart(fig, width="stretch", key=f"cont_chart_{key}",
                     config=plotly_config(f"{key}_continuous_{freq_label}"))
     export_row(series.rename("price").reset_index().rename(columns={"index": "date"}),
-               f"{key}_continuous_{freq_label}", key=f"cont_{key}")
+               f"{key}_continuous_{freq_label}", key=f"cont_{key}", chart_key=f"cont_chart_{key}")
 
     st.divider()
     st.caption(f"**{commodity['label']}** — historical highs & lows by calendar month (nearby continuous)")
@@ -807,7 +820,9 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
     display_year["Low price"] = display_year["Low price"].map(lambda v: f"{v:.3f}")
     display_year = display_year[["Year", "High date", "High price", "Low date", "Low price"]]
     st.dataframe(display_year, hide_index=True, width="stretch")
-    export_row(display_year, f"{key}_yearly_highlow", key=f"yrhl_{key}")
+    export_row(display_year, f"{key}_yearly_highlow", key=f"yrhl_{key}",
+               table={"styler": display_year.style,
+                      "title": f"{commodity['label']}: yearly highs and lows (nearby continuous)"})
 
     if not summary.empty:
         note = f"Frequency across {len(per_year) - len(excluded)} complete calendar year"
@@ -816,7 +831,9 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
             note += f" (excludes partial year{'s' if len(excluded) != 1 else ''} {', '.join(map(str, excluded))})"
         st.caption(note + ".")
         st.dataframe(summary, hide_index=True, width="stretch")
-        export_row(summary, f"{key}_month_frequency", key=f"mf_{key}")
+        export_row(summary, f"{key}_month_frequency", key=f"mf_{key}",
+                   table={"styler": summary.style,
+                          "title": f"{commodity['label']}: how often the high and low fall in each month"})
     else:
         st.info("Not enough complete calendar years yet to compute a month-frequency summary.")
 
@@ -838,7 +855,9 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
     else:
         calendar = pd.DataFrame(rows).sort_values("Date", ascending=False).reset_index(drop=True)
         st.dataframe(calendar, hide_index=True, width="stretch", height=min(35 * (len(calendar) + 1) + 3, 400))
-        export_row(calendar, f"{key}_report_calendar", key=f"rptcal_{key}")
+        export_row(calendar, f"{key}_report_calendar", key=f"rptcal_{key}",
+                   table={"styler": calendar.style,
+                          "title": f"{commodity['label']}: USDA report release calendar"})
 
 
 def _init_builder_legs():
@@ -997,7 +1016,7 @@ def render_spread_builder(api_key: str, as_of: date):
             st.plotly_chart(fig, width="stretch", key="sb_hist",
                             config=plotly_config("spread_builder_history"))
             export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
-                       "spread_builder_history", key="sb_hist_exp")
+                       "spread_builder_history", key="sb_hist_exp", chart_key="sb_hist")
             if report_dates:
                 st.caption("Dotted vertical lines mark USDA report release dates for the commodities "
                           "in this spread: " + ", ".join(
@@ -1067,7 +1086,7 @@ def render_spread_builder(api_key: str, as_of: date):
         st.plotly_chart(fig, width="stretch", key="sb_seas",
                         config=plotly_config("spread_builder_seasonal"))
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   "spread_builder_seasonal", key="sb_seas_exp")
+                   "spread_builder_seasonal", key="sb_seas_exp", chart_key="sb_seas")
         note = (
             f"{len(by_dte)} year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"leg 1's expiration, so every year lines up at the same point in its life."
@@ -1477,8 +1496,9 @@ def render_chat(massive_key: str, as_of: date):
 
 
 def render_commodity(commodity: dict, api_key: str, as_of: date):
-    tab_futures, tab_spread, tab_matrix, tab_continuous = st.tabs(
-        ["Seasonal futures", "Seasonal spread", "Spread matrix", "Continuous chart"]
+    tab_futures, tab_spread, tab_matrix, tab_continuous = portal_view.tabs(
+        ["Seasonal futures", "Seasonal spread", "Spread matrix", "Continuous chart"],
+        hide={"Spread matrix"},
     )
     with tab_futures:
         render_seasonal_futures(commodity, api_key, as_of)
@@ -1486,8 +1506,14 @@ def render_commodity(commodity: dict, api_key: str, as_of: date):
         render_seasonal_spread(commodity, api_key, as_of)
     with tab_continuous:
         render_continuous_chart(commodity, api_key, as_of)
-    with tab_matrix:
-        render_spread_matrix(commodity, api_key, as_of)
+    # `shown()` rather than `if tab_matrix.open:`, because these tabs do not
+    # pass on_change="rerun" -- a real tab's `.open` is None without it, which
+    # is falsy, so the guard would skip the body on the STAFF view too. Adding
+    # on_change here would make every sibling lazy, and that is not a change to
+    # make while passing through.
+    if portal_view.shown(tab_matrix):
+        with tab_matrix:
+            render_spread_matrix(commodity, api_key, as_of)
 
 
 def main():
@@ -1496,11 +1522,21 @@ def main():
         st.image(JSA_LOGO_FULL, width=140)
     with col_title:
         st.title("Livestock Seasonal Futures & Spreads")
-    st.caption(
-        "Live CME livestock futures, aligned across prior contract years to reveal seasonal "
-        "patterns in outright price and in calendar spreads. "
-        f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
-    )
+    asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+    with asof_col:
+        st.caption(
+            "Live CME livestock futures, aligned across prior contract years to reveal seasonal "
+            "patterns in outright price and in calendar spreads. "
+            f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
+        )
+    with refresh_col:
+        # A cache control, so staff only: a client has no use for one.
+        if portal_view.pick(False, lambda: st.button(
+                "Refresh prices", icon=":material/refresh:", width="stretch",
+                help="Re-read live quotes now instead of waiting out the 5-minute cache. "
+                     "Settlement-history charts are not re-pulled.")):
+            load_curve.clear()
+            st.toast("Fetching fresh prices…")
     st.caption(DATA_START_NOTE)
 
     api_key = get_api_key()
@@ -1513,18 +1549,27 @@ def main():
 
     as_of = date.today()
 
+    # SPREAD BUILDER AND CHAT BOTH COME OUT FOR A CLIENT, for different
+    # reasons. The builder constructs an arbitrary calendar spread -- a tool,
+    # and one that needs you to know which two months you want before it says
+    # anything. Chat is the Ask AI tab: it spends the Anthropic budget and sits
+    # behind CHAT_PASSPHRASE, so on the client deployment it could only ever
+    # render a passphrase box that nobody has the passphrase for. A tab that
+    # cannot answer is worse than no tab.
     labels = [c["label"] for c in COMMODITIES] + ["Spread Builder", "Chat"]
-    tabs = st.tabs(labels)
+    tabs = portal_view.tabs(labels, hide={"Spread Builder", "Chat"})
     for tab, commodity in zip(tabs, COMMODITIES):
         with tab:
             st.caption(commodity["sublabel"])
             if commodity["product_code"] == "LE":
                 st.caption(FND_NOTE)
             render_commodity(commodity, api_key, as_of)
-    with tabs[-2]:
-        render_spread_builder(api_key, as_of)
-    with tabs[-1]:
-        render_chat(api_key, as_of)
+    if portal_view.shown(tabs[-2]):
+        with tabs[-2]:
+            render_spread_builder(api_key, as_of)
+    if portal_view.shown(tabs[-1]):
+        with tabs[-1]:
+            render_chat(api_key, as_of)
 
 
 main()

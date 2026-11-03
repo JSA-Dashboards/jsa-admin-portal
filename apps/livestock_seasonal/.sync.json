@@ -1,9 +1,10 @@
 {
  "branch": "master",
- "commit": "4609acec093681b64417b919b2679bf0205a7226",
+ "commit": "b5cf410010ba738791f357c16a76e72fadd60ea1",
  "files": {
-  "app.py": "84a9eb7a2d342e0ccadcb9cd5308bd987086aed8f03d10c5181de2912076cc56",
-  "ls_massive_api.py": "0a8a953d5a945f7f10b56f32c4190d0d929513f88bf92afcbf06c1c5b0f87337"
+  "app.py": "1ce895fd6bf2f14b087cf3f5d32f61b421896166fce57b3742652ca66ab6fe8f",
+  "ls_massive_api.py": "0a8a953d5a945f7f10b56f32c4190d0d929513f88bf92afcbf06c1c5b0f87337",
+  "ls_snapshot_buttons.py": "c27bd1ed34e4ade1dd4e159706eb9c39246429a019f6b6dd7561fad30e78a618"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/livestock-portal",
