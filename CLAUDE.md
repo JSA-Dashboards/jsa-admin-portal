@@ -84,6 +84,17 @@ are none. Both apps also had every tab body run alone with the rest skipped. Cos
 a tab are discarded when you leave it, so its dropdowns reset on return.
 
 
+## Crop Conditions removed from the portal (2026-11-03)
+
+Kolten asked for the Crop Conditions & Yield Model dashboard to come off the portal "for now" because it was
+hurting the other apps here (its first load reads a lot from the NASS cache and shares this one process).
+Removed: its tile, `apps/crop_conditions/`, its `sync/apps.json` entry (with the `FIELD_CHECK` pin) and the
+Yield Observations "Field check (beta)" page that ran it. NOT touched: the standalone Crop Conditions app, the
+NASS ETL and cache, and the separate **Crop Progress** tile. To bring it back: re-add the `apps.json` entry
+(`repo` `JSA-Dashboards/crop-conditions-dashboard`, `"private": true`, `pin_env` `FIELD_CHECK` `"1"`), the
+`LIVE_DASHBOARDS` tile (`apps/crop_conditions/app.py`, url_path `crop-conditions`), then `apply crop_conditions`;
+the yield portal's Field check page reappears on its own.
+
 ## Risk Analyzer (`apps/risk_analyzer/`, added 2026-10-12)
 
 A synced mirror of `JSA-Dashboards/jsa-risk-analyzer`, tile under "Futures, Options & Spreads".
@@ -134,7 +145,7 @@ session and widget keys are `cso_`-prefixed because every bundled app shares one
   the portal login stays the only gate here. Take `preauth` away and the tile asks for a second password.
 - **Source visibility:** it is public, so CI clones it without a token. If it goes private again, put
   `"private": true` back in `sync/apps.json` and make sure the `SYNC_TOKEN` PAT (as for `cftc_cot` and
-  `crop_conditions`) can read it. A fine-grained PAT limited to selected repos would otherwise make `apply`
+  `crop_conditions`, which left the portal 2026-11-03) can read it. A fine-grained PAT limited to selected repos would otherwise make `apply`
   skip this app (the tile stays at its last synced version, with a warning on the run) until the token can
   read it. This portal repo is public, so every mirrored app's code is readable here whatever its source
   repo's visibility.
@@ -148,7 +159,7 @@ Several bundled dashboards read Snowflake, and each defaults
 
 | module | its default |
 |---|---|
-| `apps/*/nass_cache_client.py` (crop_conditions, domestic_production) | `NASS_CACHE` |
+| `apps/*/nass_cache_client.py` (domestic_production, livestock apps) | `NASS_CACHE` |
 | `apps/teams_broadcast/app.py` | `TEAMS_BROADCAST` |
 
 Setting `SNOWFLAKE_SCHEMA` to any one value overrides all of them and silently
@@ -279,7 +290,6 @@ Where each bundled app reads Snowflake:
 | rail_fob basis cross-read | `JSA.BASIS_TRACKER` | `apps/rail_fob/rail_data.py::_sf_connect` |
 | rail_fob river (CIF) cross-read | `RIVER_FOB.PUBLIC` | `apps/rail_fob/river_data.py::_sf_connect` |
 | yield_portal (JSA Yield Observations tile) | `YIELD_REPORTS.PUBLIC` + `JSA.NASS_CACHE` | pinned in `apps/yield_portal/yp_db.py` |
-| crop_conditions Field Check tab (beta, internal) | `YIELD_REPORTS.PUBLIC.FIELD_SIGNAL` | fully qualified in the query; the tab shows only where `FIELD_CHECK` is "1", which only this portal's sync pins (`pin_env`), so the public standalone app never shows it |
 
 **JSA Yield Observations (`apps/yield_portal/`) is the whole yield portal, a synced mirror
 of `JSA-Dashboards/yield-portal`**: Explore, Report text, Reports vs normal, Field issues,
@@ -293,15 +303,10 @@ so `ADMIN_PORTAL_ROLE` needs INSERT/UPDATE/DELETE on `YIELD_OBSERVATIONS` and
 SELECT it already had. `yp_db.py` pins `YIELD_REPORTS.PUBLIC` itself, so the shell's
 `SNOWFLAKE_DATABASE` doesn't matter.
 
-**Field check (beta)** in that tile (2026-10-14, Kolten: "I want it in the JSA Yield
-observations as well but under the admin page") is not a yield portal page: the wrapper
-runs `apps/crop_conditions/app.py` with `FIELD_CHECK_ONLY = True` in its globals
-(`runpy` `init_globals`), and the Conditions script then shows a commodity/season picker
-and only its Field Check (the conditions model beside the yield portal's
-`FIELD_SIGNAL`), then stops. Same code and numbers as the Crop Conditions tab, no copy of
-the model; it needs both mirrors present and `FIELD_CHECK` pinned for crop_conditions.
-First open is as slow as the Conditions page (shared caches after). ISA states its copyright and no other terms, which is
-why the strip trials live only behind passwords. The old `apps/strip_trials/` copy is deleted.
+**Field check (beta)** used to be a page of that tile: the wrapper ran `apps/crop_conditions/app.py` with
+`FIELD_CHECK_ONLY = True`. It left with Crop Conditions on 2026-11-03 (below); the wrapper only lists it while that
+mirror exists, so it stays hidden until Crop Conditions is bundled again. ISA states its copyright and no other
+terms, which is why the strip trials live only behind passwords. The old `apps/strip_trials/` copy is deleted.
 
 The local `.streamlit/secrets.toml` still holds the old `GNC89034` personal key,
 which Snowflake refuses ("JWT token is invalid"); the deployed Secrets are the

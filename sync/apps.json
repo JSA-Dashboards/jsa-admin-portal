@@ -117,13 +117,6 @@
     "canola_cash.py"
    ]
   },
-  "crop_conditions": {
-   "repo": "JSA-Dashboards/crop-conditions-dashboard",
-   "private": true,
-   "pin_env": {
-    "FIELD_CHECK": "1"
-   }
-  },
   "crop_progress": {
    "repo": "JSA-Dashboards/crop-progress-dashboard",
    "branch": "main"

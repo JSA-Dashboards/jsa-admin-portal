@@ -26,6 +26,8 @@ st.session_state["view_only"] = False
 # filter bar and tabs for a commodity/season picker and the Field Check. Same code,
 # same numbers as the tab. Only this portal has the page; the yield portal's own app
 # never shows the field signal.
+# (Crop Conditions left the portal 2026-11-03, so the page below is hidden by the exists() filter
+# until apps/crop_conditions is bundled again.)
 FIELD_CHECK_APP = HERE.parent / "crop_conditions" / "app.py"
 
 PAGES = {

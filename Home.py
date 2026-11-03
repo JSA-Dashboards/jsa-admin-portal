@@ -69,8 +69,6 @@ _ENV_SECRET_KEYS = (
     # Microsoft Graph app-only mail (basis_tracker's rail rundown / client reports read these
     # from st.secrets themselves; rail_shipments' email report reads os.environ).
     "GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "GRAPH_SENDER",
-    # crop_conditions reads NASS_API_KEY straight from st.secrets (with a
-    # working hardcoded fallback) — no os.environ bridge needed for it.
 )
 for _key in _ENV_SECRET_KEYS:
     try:
@@ -143,9 +141,6 @@ LIVE_DASHBOARDS = [
     {"title": "Domestic Production", "category": "Supply & Demand",
      "desc": "USDA NASS corn production — national overview and state-level detail.",
      "page": "apps/domestic_production/app.py", "url_path": "domestic-production"},
-    {"title": "Crop Conditions & Yield Model", "category": "Supply & Demand",
-     "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
-     "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
     {"title": "Crop Progress", "category": "Supply & Demand",
      "desc": "NASS weekly crop progress by state: planted, emerged, harvested and more vs last week, last year and the 5-year average.",
      "page": "apps/crop_progress/app.py", "url_path": "crop-progress"},
