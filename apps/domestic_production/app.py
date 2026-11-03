@@ -1740,10 +1740,10 @@ with st.spinner("Fetching USDA NASS data..."):
     snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_nat, tab_state, tab_county, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
+tab_nat, tab_state, tab_asdc, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
     "  📊  National Overview  ",
     "  🗺️  State Level  ",
-    "  📍  County / ASD  ",
+    "  🧭  ASD & County Level  ",
     "  📦  Quarterly Stocks  ",
     "  🔄  Revision Tracker  ",
     "  🌾  WASDE  ",
@@ -2892,128 +2892,19 @@ with tab_state:
                         col_r.plotly_chart(fig_vs, use_container_width=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 3 — COUNTY / ASD
+# TAB 3b — ASD & COUNTY LEVEL
+# The NASS Production tab of the RMA dashboard (state → ASD → county, county production tied to the state total, wheat by class), generated into asd_county_tab.py
+# by sync_nass_mirror.py --module in JSA-Dashboards/rma-production-map: change it there and regenerate, do not edit asd_county_tab.py here.
+# It reads NASS QuickStats directly, so the app needs the NASS_API_KEY secret.
 # ═════════════════════════════════════════════════════════════════════════════
-with tab_county:
-    if tab_county.open:
-        # ── Controls ─────────────────────────────────────────────────────────
-        county_metrics   = metric_list
-        prod_dflt_c      = next((m for m in county_metrics if "Production" in m), county_metrics[0])
-        ctrl_a, ctrl_b, ctrl_c = st.columns([4, 2, 3])
-        with ctrl_a:
-            county_metric = st.radio(
-                "County metric",
-                county_metrics,
-                index=county_metrics.index(prod_dflt_c),
-                horizontal=True,
-                label_visibility="collapsed",
-                key="county_metric",
-            )
-        with ctrl_b:
-            county_year = st.selectbox(
-                "Year",
-                list(range(THIS_YEAR, 2014, -1)),
-                key="county_year",
-            )
-        with ctrl_c:
-            state_opts   = ["All States"] + sorted(ABBREV_STATE.keys())
-            county_state = st.selectbox(
-                "State drill-down",
-                state_opts,
-                key="county_state",
-            )
-
-        # ── Load ─────────────────────────────────────────────────────────────
-        with st.spinner("Loading county data from NASS cache..."):
-            c_raw = load_county_data(commodity, county_metric, county_year)
-
-        if c_raw.empty:
-            st.info(
-                f"County-level data for **{commodity} — {county_metric}** is not yet "
-                "in the NASS cache. The ETL job will be updated to include county-level "
-                "queries. Check back after the next scheduled cache run.",
-                icon="ℹ️",
-            )
+with tab_asdc:
+    if tab_asdc.open:
+        try:
+            import asd_county_tab
+        except ImportError as _e:
+            st.error(f"The ASD & County Level tab needs a package this app does not have yet ({_e}). Add geopandas and shapely to requirements.txt.")
         else:
-            # Filter to selected state
-            if county_state != "All States":
-                map_cdf = c_raw[c_raw["State"] == county_state].copy()
-            else:
-                map_cdf = c_raw.copy()
-
-            if map_cdf.empty:
-                st.warning(f"No county data found for {county_state} in {county_year}.")
-            else:
-                # ── ASD view toggle (state drill-down only) ───────────────────
-                has_asd  = "asd_desc" in map_cdf.columns and map_cdf["asd_desc"].notna().any()
-                asd_view = False
-                if county_state != "All States" and has_asd:
-                    view_mode = st.radio(
-                        "View",
-                        ["County", "ASD Districts"],
-                        horizontal=True,
-                        label_visibility="collapsed",
-                        key="county_view_mode",
-                    )
-                    asd_view = view_mode == "ASD Districts"
-
-                # ── KPI cards ────────────────────────────────────────────────
-                is_yield_c = "Yield" in county_metric
-                summary_val = map_cdf["Value"].mean() if is_yield_c else map_cdf["Value"].sum()
-                n_counties  = map_cdf["fips"].nunique()
-                unit_lbl_c  = "Bu/Ac" if is_yield_c else ("Ac" if "Acres" in county_metric else "Bu")
-                val_str_c   = f"{summary_val:,.1f}" if is_yield_c else f"{summary_val:,.0f}"
-                kc1, kc2, _ = st.columns([1, 1, 4])
-                with kc1:
-                    st.markdown(
-                        f"<div style='background:{CARD_BG};border:1px solid {BORDER};"
-                        f"border-radius:8px;padding:12px 16px;'>"
-                        f"<div style='font-size:11px;color:{TXT_SEC};text-transform:uppercase;"
-                        f"letter-spacing:.05em;'>{'Avg Yield' if is_yield_c else 'Total'}</div>"
-                        f"<div style='font-size:22px;font-weight:700;color:{TXT};margin-top:4px;'>"
-                        f"{val_str_c} <span style='font-size:13px;color:{TXT_SEC};'>{unit_lbl_c}</span></div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                with kc2:
-                    st.markdown(
-                        f"<div style='background:{CARD_BG};border:1px solid {BORDER};"
-                        f"border-radius:8px;padding:12px 16px;'>"
-                        f"<div style='font-size:11px;color:{TXT_SEC};text-transform:uppercase;"
-                        f"letter-spacing:.05em;'>Counties Reporting</div>"
-                        f"<div style='font-size:22px;font-weight:700;color:{TXT};margin-top:4px;'>"
-                        f"{n_counties:,}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
-
-                # ── Map ───────────────────────────────────────────────────────
-                with st.spinner("Rendering map..."):
-                    geo_data = _load_county_geojson()
-                    if asd_view:
-                        fig_county = _build_asd_fig(map_cdf, geo_data, county_metric)
-                    else:
-                        sfips_c = STATE_FIPS.get(county_state) if county_state != "All States" else None
-                        fig_county = _build_county_fig(map_cdf, geo_data, county_metric, sfips_c)
-                st.plotly_chart(fig_county, use_container_width=True)
-
-                # ── Data table ────────────────────────────────────────────────
-                with st.expander("Data table", expanded=False):
-                    if asd_view and has_asd:
-                        agg_mode = "mean" if is_yield_c else "sum"
-                        tbl_c = (map_cdf.groupby(
-                                    [c for c in ["asd_code", "asd_desc"] if c in map_cdf.columns],
-                                    as_index=False)["Value"]
-                                 .agg(agg_mode)
-                                 .rename(columns={"asd_desc": "District", "asd_code": "Code"}))
-                        tbl_c = tbl_c.sort_values("Code") if "Code" in tbl_c.columns else tbl_c
-                    else:
-                        tbl_c = map_cdf[["State", "County", "Value"]].copy()
-                    tbl_c["Value"] = tbl_c["Value"].apply(
-                        lambda v: f"{v:,.1f}" if is_yield_c else f"{v:,.0f}"
-                    )
-                    st.dataframe(tbl_c, use_container_width=True, hide_index=True)
+            asd_county_tab.render()
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 4 — QUARTERLY STOCKS

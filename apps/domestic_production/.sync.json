@@ -1,9 +1,12 @@
 {
  "branch": "master",
- "commit": "c9f79bb685008e474b6ff248713e0c65231f5ef4",
+ "commit": "17a48a0907b468611fbc705e97f46bb33e6b773d",
  "files": {
-  "app.py": "f71f233033fd8af98d637b24d3eac478e1f532db7828ed113dc8221d7142a566",
+  "app.py": "5414280885afa4319bbbb8913934d68fbb11cccb3c743eb032fe2b23a1f53d39",
+  "asd_county_tab.py": "7903ad3652c3294999a872c76a1130fbb01a2d095cc07b8a731c35871bb985f0",
+  "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/jsa_50th_logo.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
+  "data/wheat/county_class_prior.csv": "2a3bf0bd68ab66b741671e22384931fcecfc4e246cf2819980e0fd7098d54a80",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
