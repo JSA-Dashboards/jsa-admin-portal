@@ -22,6 +22,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import cot_client as cc
+import cot_groups as cg
 import futures_move as fm
 
 pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
@@ -64,7 +65,11 @@ LABELS = {
     "LIVE_HOGS": "Live hogs (to 1996)", "MILK_CLASS_III": "Class III milk",
     "COTTON": "Cotton", "SUGAR_11": "Sugar #11", "COFFEE": "Coffee", "COCOA": "Cocoa",
 }
+for _k, (_name, _members) in cg.BASKETS.items():   # groups come after the single markets
+    LABELS[_k] = f"{_name} (group)"
+LABELS[cg.CUSTOM] = "Custom group"
 ORDER = list(LABELS)
+UNIT = "contracts"   # what position numbers are counted in; "$ millions" when markets are added up by dollar value
 HERO_MARKETS = ["CORN", "SOYBEANS", "WHEAT_SRW"]
 HERO_COLORS = {"CORN": "#6fa8c4", "SOYBEANS": "#c4785a", "WHEAT_SRW": "#9b89c4"}
 LOOKBACKS = {"1Y": 52, "3Y": 156, "5Y": 260, "10Y": 520, "All": None}
@@ -210,7 +215,8 @@ def trim(df: pd.DataFrame, lookback: str) -> pd.DataFrame:
     return df if n is None else df.tail(n)
 
 
-def style_fig(fig: go.Figure, height=340, yaxis_title="contracts", legend=True) -> go.Figure:
+def style_fig(fig: go.Figure, height=340, yaxis_title=None, legend=True) -> go.Figure:
+    yaxis_title = UNIT if yaxis_title is None else yaxis_title
     wm = watermark_uri()
     if wm:
         fig.add_layout_image(dict(
@@ -245,7 +251,7 @@ def net_figure(w: pd.DataFrame, col: str, color: str, as_share=False, price: pd.
         fig.add_trace(go.Scatter(x=list(price.index), y=price.values, yaxis="y2", mode="lines",
                                  name=price_name, line=dict(width=1.3, color=DM_TEXT),
                                  hovertemplate="%{x|%b %d, %Y}<br>price %{y:,.2f}<extra></extra>"))
-    style_fig(fig, 380 if has_price else 340, "% of open interest" if as_share else "contracts",
+    style_fig(fig, 380 if has_price else 340, "% of open interest" if as_share else UNIT,
               legend=has_price)
     if has_price:
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, zeroline=False,
@@ -269,7 +275,94 @@ def load_disagg_or_stop(rt: str) -> pd.DataFrame:
 def pick_market(series, key: str) -> str:
     present = set(series)
     avail = [s for s in ORDER if s in present] or sorted(present)
+    if st.session_state.get(key) not in avail:   # a group that is gone (custom members changed, or the measure)
+        st.session_state.pop(key, None)
     return st.selectbox("Market", avail, format_func=label, key=key)
+
+
+# -- Groups of markets (soy complex ...) -------------------------------------------
+MEASURES = ["Contracts", "Dollar value"]
+
+
+def measure_control(key: str) -> str:
+    """How markets are added up. Remembered across the tabs: a tab's widgets are dropped when it is
+    left, so the choice is copied to a plain session value as it changes."""
+    def _save():
+        st.session_state["cot_measure_saved"] = st.session_state[key]
+    saved = st.session_state.get("cot_measure_saved", MEASURES[0])
+    return st.segmented_control(
+        "Add markets up by", MEASURES, default=saved if saved in MEASURES else MEASURES[0], key=key,
+        on_change=_save,
+        help="Contracts: a plain sum, so a meal contract counts the same as a soybean contract. Dollar value: "
+             "every position is first multiplied by its contract size and the latest futures settle (shown "
+             "in $ millions), so soybeans, meal and oil are added on the same footing.") or MEASURES[0]
+
+
+def custom_picker(key: str, options: list[str]) -> list[str]:
+    def _save():
+        st.session_state["cot_custom_saved"] = st.session_state[key]
+    saved = [m for m in st.session_state.get("cot_custom_saved", []) if m in options]
+    return st.multiselect("Your own group", options, default=saved, key=key, format_func=label, on_change=_save,
+                          placeholder="Pick two or more markets to add up, e.g. Corn + Soybeans")
+
+
+@st.cache_data(ttl=1800, show_spinner="Pricing the futures contracts…")
+def front_prices(cot_iso: str, today_iso: str) -> dict[str, float]:
+    """COT series -> latest front-month settle, for the markets that have a settle source."""
+    cot_date, today = date.fromisoformat(cot_iso), date.fromisoformat(today_iso)
+    since = (cot_date - timedelta(days=21)).isoformat()
+    settles = cc.load_settlements(since)
+    try:
+        ls = cc.load_livestock_settles(since, today_iso)
+        if not ls.empty:
+            settles = pd.concat([settles, ls], ignore_index=True)
+    except Exception:  # noqa: BLE001 -- grains must still be priced
+        pass
+    m = fm.price_moves(settles, cot_date, today)
+    by_code = {r.code: float(r.latest_settle) for r in m.itertuples() if pd.notna(r.latest_settle)}
+    return {s: by_code[c] for s, c in cc.PRICE_PRODUCT.items() if c in by_code}
+
+
+def with_measure(df: pd.DataFrame, measure: str, custom: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """`df` in the chosen measure plus the groups (soy complex ...). Sets UNIT for the rest of the run
+    and returns notes for anything that could not be built."""
+    global UNIT
+    notes: list[str] = []
+    UNIT = "contracts"
+    if measure == "Dollar value":
+        try:
+            prices = front_prices(latest_date.date().isoformat(), datetime.now(cc.CT).date().isoformat())
+        except Exception as e:  # noqa: BLE001
+            prices = {}
+            notes.append(f"Futures prices could not be loaded, so everything is shown in contracts. `{e}`")
+        weights = cg.dollar_weights(prices)
+        if weights:
+            df, dropped = cg.to_dollars(df, weights)
+            UNIT = "$ millions"
+            if dropped:
+                notes.append("No price or contract size for " + ", ".join(label(s) for s in dropped) +
+                             ", so those markets are left out of the dollar view.")
+        elif not notes:
+            notes.append("No futures prices are available, so everything is shown in contracts.")
+    custom = [m for m in custom if m in set(df.series)]
+    if len(custom) >= 2:
+        LABELS[cg.CUSTOM] = "Custom group: " + " + ".join(label(m) for m in custom)
+    out, gnotes = cg.with_groups(df, custom, label)
+    return out, notes + gnotes
+
+
+def custom_options(df: pd.DataFrame, measure: str) -> list[str]:
+    """Markets that can go in a custom group: any in contracts, only the priceable ones by dollar value."""
+    present = set(df.series)
+    return [s for s in ORDER if s in present and not s.startswith("GRP_")
+            and (measure == "Contracts" or s in cg.DOLLARS_PER_POINT)]
+
+
+def explain_measure() -> str:
+    return ("Added up in **contracts**: a plain sum, so a meal contract counts the same as a soybean contract."
+            if UNIT == "contracts" else
+            "Added up by **dollar value**: each position is multiplied by its contract size and the latest "
+            "front-month settle (a fixed weight over the whole history), in $ millions.")
 
 
 # -- as-of band and hero tiles (futures only, above the tabs) -------------------
@@ -423,6 +516,14 @@ def tab_snapshot():
     rt_label = st.segmented_control("Report", list(REPORT_TYPES), default="Futures only",
                                     key="snap_rt", label_visibility="collapsed")
     df = load_disagg_or_stop(REPORT_TYPES[rt_label or "Futures only"])
+    mc1, mc2 = st.columns([2, 3])
+    with mc1:
+        measure = measure_control("snap_measure")
+    with mc2:
+        custom = custom_picker("snap_custom", custom_options(df, measure))
+    df, notes = with_measure(df, measure, custom)
+    for n in notes:
+        st.caption(n)
     rows = []
     for s, g in df.groupby("series"):
         g = g.sort_values("report_date")
@@ -440,14 +541,16 @@ def tab_snapshot():
     t = pd.DataFrame(rows)
     t["_o"] = t["_s"].map({s: i for i, s in enumerate(ORDER)}).fillna(99)
     t = t.sort_values("_o").drop(columns=["_s", "_o"]).set_index("Market")
-    st.caption("Managed money (MM) net = long − short, in contracts. Index = where MM net sits in its "
-               "1- or 3-year range (0 = most short, 100 = most long); shaded green ≥ 80, red ≤ 20.")
+    st.caption(f"Managed money (MM) net = long − short, in {UNIT}. Index = where MM net sits in its "
+               "1- or 3-year range (0 = most short, 100 = most long); shaded green ≥ 80, red ≤ 20. "
+               "Rows marked (group) add several markets together. " + explain_measure())
+    nf = "{:+,.0f}" if UNIT == "contracts" else "{:+,.1f}"
     sty = (t.style
            .map(tint_change, subset=["Wk chg", "OI chg"])
            .map(tint_index, subset=["Index 1Y", "Index 3Y"])
-           .format({"MM net": "{:+,.0f}", "Wk chg": "{:+,.0f}", "MM % of OI": "{:+.1f}%",
-                    "Index 1Y": "{:.0f}", "Index 3Y": "{:.0f}", "Prod/merc net": "{:+,.0f}",
-                    "Swap net": "{:+,.0f}", "Open interest": "{:,.0f}", "OI chg": "{:+,.0f}"},
+           .format({"MM net": nf, "Wk chg": nf, "MM % of OI": "{:+.1f}%",
+                    "Index 1Y": "{:.0f}", "Index 3Y": "{:.0f}", "Prod/merc net": nf,
+                    "Swap net": nf, "Open interest": "{:,.0f}", "OI chg": nf},
                    na_rep="–"))
     with st.container(key="tablewrap_snapshot"):
         st.dataframe(sty, width="stretch", height=min(40 + 35 * len(t), 780))
@@ -460,8 +563,20 @@ def tab_detail():
     rt_label = c2.segmented_control("Report", list(REPORT_TYPES), default="Futures only", key="det_rt") \
         or "Futures only"
     df = load_disagg_or_stop(REPORT_TYPES[rt_label])
+    mc1, mc2 = st.columns([2, 3])
+    with mc1:
+        measure = measure_control("det_measure")
+    with mc2:
+        custom = custom_picker("det_custom", custom_options(df, measure))
+    df, notes = with_measure(df, measure, custom)
+    for note in notes:
+        st.caption(note)
     with c1:
         s = pick_market(df.series.unique(), "det_mkt")
+    is_group = s.startswith("GRP_")
+    if is_group:
+        st.caption(f"{label(s)} adds its markets together. " + explain_measure() +
+                   " It exists only on report dates when every market in it reported.")
     g = df[df.series == s].sort_values("report_date")
     L, P = g.iloc[-1], g.iloc[-2]
     color = HERO_COLORS.get(s, MM_COLOR)
@@ -477,9 +592,9 @@ def tab_detail():
     hi, lo = g.loc[g.mm_net.idxmax()], g.loc[g.mm_net.idxmin()]
     hm, hw = signed_words(hi.mm_net)
     lm, lw = signed_words(lo.mm_net)
-    c[2].markdown(tile("Most net long ever, in contracts", f"{hm} {hw}",
+    c[2].markdown(tile(f"Most net long ever, in {UNIT}", f"{hm} {hw}",
                        sub=f"week of {_us(hi.report_date)}", color=color), unsafe_allow_html=True)
-    c[3].markdown(tile("Most net short ever, in contracts" if lo.mm_net < 0 else "Least net long ever, in contracts",
+    c[3].markdown(tile(f"Most net short ever, in {UNIT}" if lo.mm_net < 0 else f"Least net long ever, in {UNIT}",
                        f"{lm} {lw}", sub=f"week of {_us(lo.report_date)}", color=color), unsafe_allow_html=True)
     st.write("")
     c = st.columns(4)
@@ -494,7 +609,7 @@ def tab_detail():
                        delta=f'<div class="tile-delta-neu">{"▲" if oi_chg >= 0 else "▼"} '
                              f'{abs(oi_chg):,.0f} vs week earlier</div>', color=color),
                   unsafe_allow_html=True)
-    c[3].markdown(tile("Traders reporting", fmt(L.traders_total), sub="all categories", color=color),
+    c[3].markdown(tile("Traders reporting", fmt(L.traders_total), sub="not added across markets" if is_group else "all categories", color=color),
                   unsafe_allow_html=True)
 
     st.write("")
@@ -516,7 +631,8 @@ def tab_detail():
     w = trim(g, lb)
     price, price_note = None, ""
     if code is None:
-        price_note = f"No futures price source is wired for {label(s)} yet."
+        price_note = ("A price line is not drawn for a group: its markets are quoted in different units."
+                      if is_group else f"No futures price source is wired for {label(s)} yet.")
     elif show_price:
         try:
             since = (w.report_date.min() - pd.Timedelta(days=45)).date().isoformat()
@@ -554,10 +670,10 @@ def tab_detail():
     cats = [(nm, float(L[col_])) for nm, (col_, _) in GROUPS.items()][::-1]
     fig = go.Figure(go.Bar(x=[v for _, v in cats], y=[n_ for n_, _ in cats], orientation="h",
                            marker_color=[COL_POS if v >= 0 else COL_NEG for _, v in cats],
-                           hovertemplate="%{y}<br>net %{x:,.0f} contracts<extra></extra>"))
+                           hovertemplate="%{y}<br>net %{x:,.0f} " + UNIT + "<extra></extra>"))
     fig.add_vline(x=0, line_width=1.2, line_color=DM_MUTED)
     style_fig(fig, 250, "", legend=False)
-    fig.update_layout(xaxis=dict(**AXIS, title="net contracts — long above zero, short below"),
+    fig.update_layout(xaxis=dict(**AXIS, title=f"net {UNIT} — long above zero, short below"),
                       yaxis={**AXIS, "showgrid": False}, hovermode="closest")
     st.plotly_chart(fig, width="stretch", key="det_cats")
     bal = sum(v for _, v in cats)
