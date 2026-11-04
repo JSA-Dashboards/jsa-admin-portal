@@ -1478,6 +1478,7 @@ def _load_nass_state_forecast_raw(crop: str, stat_type: str, cache_ver: str) -> 
     }
     params.update(NASS_STAT_BASE[stat_type])
     params.update(NASS_CROP_STAT_PARAMS[crop][stat_type])
+    _wc_class_param(params, crop, cache_ver, county=False)
     try:
         with urllib.request.urlopen(
             NASS_BASE_URL + "?" + urllib.parse.urlencode(params), timeout=45
@@ -1515,7 +1516,8 @@ def _load_nass_state_forecast_raw(crop: str, stat_type: str, cache_ver: str) -> 
     return df[["State", "Value"]].reset_index(drop=True)
 
 def _load_nass_state_forecast(crop: str, stat_type: str, cache_ver: str) -> pd.DataFrame:
-    return _ho_adjust(_load_nass_state_forecast_raw(crop, stat_type, _base_ver(cache_ver)),
+    return _ho_adjust(_wc_adjust(_load_nass_state_forecast_raw(crop, stat_type, _base_ver(cache_ver)),
+                                 crop, FORECAST_YEAR, stat_type, ["Value"], cache_ver),
                       crop, stat_type, ["Value"])
 
 @st.cache_data(show_spinner=False)
@@ -1619,9 +1621,14 @@ def get_forecast_county_data(crop: str, state: str, yield_est: float,
     st_pl = float(p_df[p_df["State"] == state]["Value"].iloc[0]) if state in p_df["State"].values else 0.0
     st_hv = float(h_df[h_df["State"] == state]["Value"].iloc[0]) if state in h_df["State"].values else 0.0
     st_pr = yield_est * st_hv if (yield_est and st_hv) else 0.0
+    _lab = _wc_of(cache_ver)
+    if crop == "Wheat" and _lab and _WC_CLASSES[_lab][1]:
+        # Market class: the NASS group's production (yield x group harvested) times the state's class share.
+        _f, _d = _wc_factors(FORECAST_YEAR, _lab)
+        st_pr *= _f.get(state, _d)
     st_sup = st_pr + (_ts_state_stocks(crop, FORECAST_YEAR).get(state, 0.0) if (_ts_on() and st_pr) else 0.0)
 
-    cols = ["fips", "County", "District", "DistrictCode", "Value", "is_estimated"]
+    cols =["fips", "County", "District", "DistrictCode", "Value", "is_estimated"]
 
     def _alloc(stat: str, total: float) -> pd.DataFrame:
         sh = _county_avg_shares(crop, state, stat, _hist, cache_ver)
@@ -2654,9 +2661,6 @@ def render():
                 _wc_col, _ = st.columns([1.3, 3])
                 with _wc_col:
                     nass_wc = st.selectbox("Wheat class", ["All classes"] + list(_WC_CLASSES), key="nass_wheat_class")
-                if nass_wc != "All classes" and nass_year == FORECAST_YEAR:
-                    st.info(f"{FORECAST_YEAR} is a forecast year with no class detail; showing all classes.")
-                    nass_wc = "All classes"
             _tls.wc = None if nass_wc == "All classes" else nass_wc
             nass_lbl = f"{nass_crop} ({_tls.wc})" if _tls.wc else nass_crop       # titles and captions only; the loaders take nass_crop
             if _tls.wc:
