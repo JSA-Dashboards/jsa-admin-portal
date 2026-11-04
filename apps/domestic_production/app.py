@@ -8,8 +8,37 @@ import plotly.express as px
 import requests
 import base64
 import pathlib
+import sys
 from datetime import date
 from io import BytesIO
+
+
+def _fresh_modules() -> None:
+    """Streamlit Cloud pulls every push but keeps project modules the process already imported (asd_county_tab,
+    nass_cache_client) until the app is rebooted, so a pushed change to one silently does not run. Sign the project's
+    .py files (name and mtime); when the signature moves, forget those modules so the imports load the new code, and empty
+    st.cache_data (its functions live in them). The signature lives on `sys`, which outlives script reruns; app.py is
+    left out because Streamlit re-reads it anyway."""
+    try:
+        here = pathlib.Path(__file__).resolve().parent
+        files = [p for p in here.glob("*.py") if p.name != pathlib.Path(__file__).name]
+        sig = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in files))
+        if getattr(sys, "_jsa_domprod_code", None) == sig:
+            return
+        sys._jsa_domprod_code = sig
+        for name, mod in list(sys.modules.items()):
+            f = getattr(mod, "__file__", None)
+            if not f or name == "__main__":
+                continue
+            p = pathlib.Path(f).resolve()
+            if here in p.parents and ".venv" not in p.parts and "site-packages" not in p.parts:
+                sys.modules.pop(name, None)
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+_fresh_modules()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 # This dashboard reads NASS data from a shared, scheduled-pull cache (see
