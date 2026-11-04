@@ -1,0 +1,29 @@
+# One Streamlit Cloud app per line; the keep-alive job (sync/keep_alive.py) visits each one so
+# it never sleeps (Cloud sleeps an app after ~12 h without a visitor) and wakes it if it already has.
+# Blank lines and # comments are ignored. Checked 2026-11-03: every URL below exists.
+https://jsatools-corporate.streamlit.app/
+https://basis-tracker-view.streamlit.app/
+https://jsa-basis-tracker.streamlit.app/
+https://river-fob.streamlit.app/
+https://grain-seasonal-dashboard.streamlit.app/
+https://jsa-cso-risk-analyzer.streamlit.app/
+https://jsa-risk-analyzer.streamlit.app/
+https://jsa-livestock.streamlit.app/
+https://jsa-wasde-dashboard.streamlit.app/
+https://yield-app-jsa.streamlit.app/
+https://jsa-farmer-selling-survey.streamlit.app/
+https://jsa-domestic-dashboard.streamlit.app/
+https://global-exports-dashboard-jsa.streamlit.app/
+https://crop-progress-dashboard-jsa.streamlit.app/
+https://jsacropconditions.streamlit.app/
+https://eia-energy-dashboard-jsa.streamlit.app/
+https://jsa-oilseed-crush-margins.streamlit.app/
+https://jsa-grain-marketing.streamlit.app/
+https://teams-broadcast.streamlit.app/
+https://jsa-offer-app.streamlit.app/
+# Older standalone copies of dashboards that now also live in the Livestock Portal; they exist and
+# were asleep on 2026-11-03. Uncomment any that is still in use.
+# https://cme-feeder-cattle-index-jsa.streamlit.app/
+# https://jsa-cash-trade.streamlit.app/
+# https://jsa-beef-trimmings.streamlit.app/
+# https://livestock-seasonal-dashboard.streamlit.app/
