@@ -336,17 +336,29 @@ def tint_index(v):
     return "background-color: #e8f5e9" if v >= 80 else ("background-color: #ffebee" if v <= 20 else "")
 
 
-def price_move_figure(m: pd.DataFrame) -> go.Figure:
-    """Bars of settle-to-settle change since the COT Tuesday, one per market (cents/bu, $/ton, cents/lb)."""
-    txt = [("" if pd.isna(v) else f"{v:,.2f}".rstrip("0").rstrip(".")) for v in m.change]
+def pct_change(m: pd.DataFrame) -> pd.Series:
+    """Change since the COT Tuesday as a percent of that Tuesday's settle (blank where there is none)."""
+    return m.change / m.cot_settle.where(m.cot_settle > 0) * 100
+
+
+def price_move_figure(m: pd.DataFrame, pct: bool = False) -> go.Figure:
+    """Bars of settle-to-settle change since the COT Tuesday, one per market: in the contract's own units
+    (cents/bu, $/ton, cents/lb), or as a percent of the COT Tuesday settle when `pct`."""
+    if pct:
+        y, title = pct_change(m), "price movement (% of the COT Tuesday settle)"
+        txt = [("" if pd.isna(v) else f"{v:+.2f}%") for v in y]
+        hover = "%{x} (%{customdata[0]})<br>%{y:+.2f}%<extra></extra>"
+    else:
+        y, title = m.change, "price movement (cents/bu, $/ton, cents/lb)"
+        txt = [("" if pd.isna(v) else f"{v:,.2f}".rstrip("0").rstrip(".")) for v in y]
+        hover = "%{x} (%{customdata[0]})<br>%{y:+,.2f} %{customdata[1]}<extra></extra>"
     fig = go.Figure(go.Bar(
-        x=m.market, y=m.change, text=txt, textposition="outside", cliponaxis=False,
-        marker_color="#165f80", customdata=m[["contract", "unit"]].values,
-        hovertemplate="%{x} (%{customdata[0]})<br>%{y:+,.2f} %{customdata[1]}<extra></extra>"))
+        x=m.market, y=y, text=txt, textposition="outside", cliponaxis=False,
+        marker_color="#165f80", customdata=m[["contract", "unit"]].values, hovertemplate=hover))
     fig.add_hline(y=0, line_width=1.2, line_color=DM_MUTED)
-    style_fig(fig, 380, "price movement (cents/bu, $/ton, cents/lb)", legend=False)
+    style_fig(fig, 380, title, legend=False)
     fig.update_layout(hovermode="closest",
-                      yaxis={**AXIS, "title": "price movement (cents/bu, $/ton, cents/lb)", "side": "right"},
+                      yaxis={**AXIS, "title": title, "side": "right", **({"ticksuffix": "%"} if pct else {})},
                       xaxis={**AXIS, "showgrid": False, "tickfont": dict(color=DM_TEXT, size=13)})
     return fig
 
@@ -375,7 +387,12 @@ def price_moves_section():
     if m.empty or m.change.isna().all():
         st.info(f"No futures settles after Tuesday {_us(latest_date)} yet.")
         return
-    st.plotly_chart(price_move_figure(m), width="stretch", key="price_move")
+    mode = st.segmented_control("Show the move as", ["Price", "% change"], default="Price",
+                                key="cot_price_move_mode", label_visibility="collapsed",
+                                help="Price: cents/bu, $/ton or cents/lb. % change: the same move as a percent of "
+                                     "each market's settle on the COT Tuesday, so markets can be compared.")
+    pct = (mode == "% change")
+    st.plotly_chart(price_move_figure(m, pct), width="stretch", key="price_move")
     # Each market is measured through its OWN newest settle, and the grain bank trails Massive by
     # a day until the 4:30pm CT load, so say which date each group runs to.
     through = {}
@@ -387,14 +404,16 @@ def price_moves_section():
         "front month rolls to the next contract once the date passes a contract's first notice day, and "
         "both ends of each bar are the same contract. Cents per bushel for corn, soybeans and wheat, "
         "dollars per ton for meal, cents per pound for oil and livestock. Livestock futures are cash-settled "
-        "and have no notice day, so their front month rolls after the last trading day." + livestock_note)
+        "and have no notice day, so their front month rolls after the last trading day. "
+        "In % change mode each bar is that move divided by the market's settle on the COT Tuesday." + livestock_note)
     with st.expander("Contracts and settles"):
         t = m.assign(Contract=m.market + " " + m.contract, **{"Roll date": m.fnd.map(_us), "Rolls after": m.roll_kind,
                      f"Settle {_us(latest_date)}": m.cot_settle, "Latest settle": m.latest_settle, "Through": m.latest_date.map(_us),
-                     "Change": m.change, "Unit": m.unit})
+                     "Change": m.change, "% change": pct_change(m), "Unit": m.unit})
         with st.container(key="tablewrap_price_moves"):
             st.dataframe(t[["Contract", "Roll date", "Rolls after", f"Settle {_us(latest_date)}", "Latest settle", "Through",
-                            "Change", "Unit"]], width="stretch", hide_index=True)
+                            "Change", "% change", "Unit"]], width="stretch", hide_index=True,
+                         column_config={"% change": st.column_config.NumberColumn("% change", format="%+.2f%%")})
 
 
 @st.fragment
