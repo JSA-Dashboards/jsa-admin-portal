@@ -23,7 +23,8 @@ from playwright.async_api import async_playwright
 APPS_FILE = Path(__file__).with_name("keep_alive_apps.txt")
 WAKE_BUTTON = "button:has-text('get this app back up')"
 ATTEMPTS = 3
-ATTEMPT_SECONDS = 200      # a sleeping app can take a couple of minutes to come back
+ATTEMPT_SECONDS = 60       # an awake app connects within seconds
+WAKE_SECONDS = 200         # a sleeping app can take a couple of minutes to come back
 CONCURRENCY = 4
 
 
@@ -45,10 +46,18 @@ async def rendered(page) -> bool:
 
 
 async def attempt(browser, url: str) -> str | None:
-    """'awake' / 'woken' when the app rendered, else None."""
+    """'awake' / 'woken' when the app counted a visit, else None.
+
+    A visit is what Cloud counts for keep-awake: the app's own websocket (`/_stcore/stream`)
+    connecting. A fully drawn page is not required, because Cloud's file server sometimes 500s
+    some of the page's JavaScript and the page then stays blank even though the connection
+    went through; a drawn app (`stApp`) counts too. A sleeping app gets its wake button clicked
+    and then longer to come back."""
     context = await browser.new_context()
     try:
         page = await context.new_page()
+        sockets: list[str] = []
+        page.on("websocket", lambda ws: sockets.append(ws.url))
         await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         deadline = time.time() + ATTEMPT_SECONDS
         woke = False
@@ -56,7 +65,8 @@ async def attempt(browser, url: str) -> str | None:
             if not woke and await page.query_selector(WAKE_BUTTON):
                 await page.click(WAKE_BUTTON)
                 woke = True
-            if await rendered(page):
+                deadline = time.time() + WAKE_SECONDS
+            if any("_stcore/stream" in u for u in sockets) or await rendered(page):
                 await asyncio.sleep(8)  # stay connected a moment so it counts as a visit
                 return "woken" if woke else "awake"
             await asyncio.sleep(3)
