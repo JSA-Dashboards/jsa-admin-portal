@@ -1479,13 +1479,9 @@ def _load_nass_state_forecast_raw(crop: str, stat_type: str, cache_ver: str) -> 
     params.update(NASS_STAT_BASE[stat_type])
     params.update(NASS_CROP_STAT_PARAMS[crop][stat_type])
     _wc_class_param(params, crop, cache_ver, county=False)
-    try:
-        with urllib.request.urlopen(
-            NASS_BASE_URL + "?" + urllib.parse.urlencode(params), timeout=45
-        ) as r:
-            records = json.load(r).get("data", [])
-    except Exception:
-        return pd.DataFrame(columns=["State", "Value"])
+    # _nass_json rides out NASS throttling; a failure raises so it is not cached as "no data"
+    # (_load_nass_state_forecast catches it).
+    records = _nass_json(NASS_BASE_URL + "?" + urllib.parse.urlencode(params)).get("data", [])
     if not records:
         return pd.DataFrame(columns=["State", "Value"])
     df = pd.DataFrame(records)
@@ -1516,38 +1512,12 @@ def _load_nass_state_forecast_raw(crop: str, stat_type: str, cache_ver: str) -> 
     return df[["State", "Value"]].reset_index(drop=True)
 
 def _load_nass_state_forecast(crop: str, stat_type: str, cache_ver: str) -> pd.DataFrame:
-    return _ho_adjust(_wc_adjust(_load_nass_state_forecast_raw(crop, stat_type, _base_ver(cache_ver)),
-                                 crop, FORECAST_YEAR, stat_type, ["Value"], cache_ver),
+    try:
+        raw = _load_nass_state_forecast_raw(crop, stat_type, _base_ver(cache_ver))
+    except Exception:
+        raw = pd.DataFrame(columns=["State", "Value"])
+    return _ho_adjust(_wc_adjust(raw, crop, FORECAST_YEAR, stat_type, ["Value"], cache_ver),
                       crop, stat_type, ["Value"])
-
-@st.cache_data(show_spinner=False)
-def _build_asd_hist_shares(crop: str, state: str, stat_type: str,
-                            history_years: tuple, cache_ver: str) -> dict:
-    """Olympic-average ASD share of state total per district. Returns {district: share}."""
-    yearly: dict = {}
-    for yr in history_years:
-        cdf = get_completed_county_data(crop, state, yr, stat_type, cache_ver)
-        if cdf.empty or "District" not in cdf.columns:
-            continue
-        sdf = _load_state_for_stat(crop, yr, stat_type, cache_ver)
-        if sdf.empty or state not in sdf["State"].values:
-            continue
-        srow = sdf[sdf["State"] == state]
-        st_val = float(srow["Value"].mean() if stat_type in ("yield", "pct_harvested")
-                       else srow["Value"].sum())
-        if st_val <= 0:
-            continue
-        dist_vals = (cdf.groupby("District")["Value"].mean()
-                     if stat_type in ("yield", "pct_harvested")
-                     else cdf.groupby("District")["Value"].sum())
-        for dist, dval in dist_vals.items():
-            yearly.setdefault(dist, []).append(float(dval) / st_val)
-    if not yearly:
-        return {}
-    def _olympic(vals):
-        v = sorted(vals)
-        return float(np.mean(v[1:-1] if len(v) >= 4 else v))
-    return {d: _olympic(v) for d, v in yearly.items() if v}
 
 def _default_yield_sources(crop: str, state: str, cache_ver: str) -> dict:
     """Reference yields for the forecast-year estimate box.
