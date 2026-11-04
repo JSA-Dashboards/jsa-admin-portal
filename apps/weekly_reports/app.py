@@ -184,7 +184,7 @@ elif kind == "am":
     # have already moved once.
     st.caption("**Morning brief** — one page, under three minutes, "
                f"{commentary.sections_summary('am')} to write. Quotes "
-               f"{config.change_basis_label(kind)}, and reads the last "
+               f"{config.change_basis_label(kind)} by default, and reads the last "
                "COMPLETED session rather than the newest bar — at 07:30 "
                "today's row is the session opening, not a settle — so "
                "rebuilding after the open is safe.")
@@ -734,8 +734,60 @@ with st.expander("On this day — for a closing line", expanded=False):
                    "— write it in your own words; nothing here goes into the "
                    "letter on its own.")
     else:
-        st.caption("Sporting firsts, US milestones and the odd agricultural one, "
-                   "for the bottom of the letter. Nothing is inserted for you.")
+        st.caption("Everything This Day in History lists for the date, minus "
+                   "anything grim. Nothing is inserted for you.")
+
+
+# -- which change the futures figures quote ------------------------------------
+#
+# Ross, 2026-11-03, writing Monday's full format on a Tuesday having not sent
+# Monday's: "it shows the prices through the close on 11/3 as just today's
+# move - not the weekly closes so far." config.CHANGE_BASIS_BY_KIND is right
+# for a letter covering one session and wrong for one letter covering two.
+#
+# ABOVE "Your read", AND THAT IS THE ORDERING THAT MATTERS, not the layout.
+# The write_template() call a few lines down passes hints(ctx, kind), and
+# hints() reads ctx["change_basis"] to choose both the number it quotes and
+# the "(session)" / "(week to date)" it labels it with. Resolve the override
+# below that and the figures Ross writes against are a different move from
+# the one the letter prints -- the same trap the technicals picker further
+# down carries, and the reason select_change_basis exists in one place.
+#
+# Defaults to the format every time. Nobody's letter changes until they pick.
+_BASIS_PICK = {"Prior session": "day", "Week to date": "week"}
+_basis_follow = f"Follow the format — {config.change_basis_label(kind)}"
+
+# Seeded from the saved ctx so a choice survives the reboot that empties
+# session_state, the same reason the technicals months are seeded.
+if "wcr_change_basis" not in st.session_state and ctx.get("change_basis_choice"):
+    _seed = {v: k for k, v in _BASIS_PICK.items()}.get(ctx["change_basis_choice"])
+    if _seed:
+        st.session_state["wcr_change_basis"] = _seed
+
+_bc1, _bc2 = st.columns([1, 3])
+with _bc1:
+    _basis_label = st.selectbox("Futures change quotes",
+                                [_basis_follow, *_BASIS_PICK],
+                                key="wcr_change_basis")
+ctx["change_basis_choice"] = _BASIS_PICK.get(_basis_label, "")
+letter_build.select_change_basis(ctx, kind)
+
+with _bc2:
+    # The BASE DATE, not just the word, because "week to date" on a Tuesday
+    # and on a Friday are different spans and the letter itself prints no
+    # label at all -- render.futures_block renders "Dec: -2.80 at 218.15"
+    # and nothing says which move that is.
+    _wk_base = next((r.get("week_base_date")
+                     for r in (ctx.get("live_cattle") or [])
+                     if isinstance(r, dict) and r.get("week_base_date")), "")
+    if ctx["change_basis"] == "week":
+        _what = f"the move since {_wk_base or 'the prior Friday'}'s settle"
+    else:
+        _what = "the move from the previous session's settle"
+    _note = ("" if not ctx["change_basis_choice"] else
+             f" Overridden — this format normally quotes "
+             f"{config.change_basis_label(kind)}.")
+    st.caption(f"Live Cattle and Feeder Cattle print {_what}.{_note}")
 
 
 st.subheader("Your read")
@@ -824,10 +876,19 @@ letter_build.select_technicals(ctx)
 if data_path.exists():
     import json as _json
     _saved = _json.loads(data_path.read_text(encoding="utf-8"))
-    if any(_saved.get(f"{k}_month") != ctx.get(f"{k}_month")
-           for k in letter_build.TECH_KEYS):
+    # The basis override rides in this same write rather than getting one of
+    # its own: it is the same kind of thing -- a choice `build.main
+    # --no-fetch` has to reproduce when it renders the emailed PDF -- and on
+    # a page that reruns per keystroke a second write is a second disk write
+    # per character.
+    _changed = any(_saved.get(f"{k}_month") != ctx.get(f"{k}_month")
+                   for k in letter_build.TECH_KEYS)
+    if _saved.get("change_basis_choice", "") != ctx.get("change_basis_choice", ""):
+        _changed = True
+    if _changed:
         for _k in letter_build.TECH_KEYS:
             _saved[f"{_k}_month"] = ctx.get(f"{_k}_month")
+        _saved["change_basis_choice"] = ctx.get("change_basis_choice", "")
         data_path.write_text(
             _json.dumps(_saved, indent=2, default=letter_build._jsonable),
             encoding="utf-8")
@@ -1269,10 +1330,14 @@ with tab_letter:
     ctx_for_render["issue_date"] = issue
     ctx_for_render["kind"] = kind
     ctx_for_render["session"] = session
-    # Follows the FORMAT, so switching the Letter radio re-bases the change column
-    # without a refetch -- and a cache written before 2026-09-24 cannot impose the
-    # old week-over-week basis on a Monday letter.
-    ctx_for_render["change_basis"] = config.change_basis_for(kind)
+    # RESOLVED ONCE, ABOVE, and copied rather than recomputed -- the format's
+    # basis unless this issue overrides it. Switching the Letter radio still
+    # re-bases the column with no refetch, because select_change_basis() runs
+    # on every rerun and is handed the LIVE `kind` rather than the cached
+    # ctx["kind"]. A cache written before 2026-09-24 still cannot impose the
+    # old week-over-week basis on a Monday: that lives in `change_basis`, and
+    # only `change_basis_choice` is read as a choice. See select_change_basis.
+    ctx_for_render["change_basis"] = ctx["change_basis"]
     ctx_for_render["commentary"] = sections
 
     # -- Chart of the day (morning brief only) ------------------------------------

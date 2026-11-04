@@ -1,178 +1,245 @@
-[
- {
-  "origin": "Breckenridge, MN",
-  "state": "MN",
-  "pnw": {
-   "aug": 6358.44,
-   "sep": 6442.65,
-   "oct": 7190.02,
-   "nov": 6890.02
+{
+  "source": "Origins: Fob BN Corn Plus.xlsx > 'PNW Facing Corn Rates' (H16:Y100), extracted 2026-10-28 \u2014 J22:N34 (PWN Rate K, Herf Rate L, PNW miles M, Herf miles N). Freight $/car = rate + miles x FSC + BN Cars (Hereford takes cars / 2). 'defaults' is what the tab uses until inputs are saved in Snowflake (bn_inputs.py): the BN 110-car shuttle sheet of 2026-10-28 (the BID is the BN Cars premium) and the FSC $/mile by month (Jan-Mar = the workbook's JFM .50; Apr-Sep not entered yet, so no freight for them).",
+  "index_periods": [
+    "Oct",
+    "Nov",
+    "Dec",
+    "JFM",
+    "AM",
+    "JJ"
+  ],
+  "defaults": {
+    "as_of": "2026-10-28",
+    "fsc_mode": "formula",
+    "hold_fsc": true,
+    "bid_overrides": {
+      "Hereford": {
+        "Oct": {
+          "bid": 85,
+          "offer": null
+        }
+      },
+      "PNW": {
+        "Dec": {
+          "bid": 100,
+          "offer": null
+        }
+      }
+    },
+    "quotes": [
+      {
+        "period": "Return Trip",
+        "bid": 0,
+        "offer": null
+      },
+      {
+        "period": "F/H November",
+        "bid": null,
+        "offer": 100
+      },
+      {
+        "period": "L/H November",
+        "bid": null,
+        "offer": 50
+      },
+      {
+        "period": "F/H December",
+        "bid": 25,
+        "offer": 100
+      },
+      {
+        "period": "December",
+        "bid": 0,
+        "offer": 100
+      },
+      {
+        "period": "Jan, Feb, Mar 2027",
+        "bid": 450,
+        "offer": 700
+      },
+      {
+        "period": "April May 2027",
+        "bid": 100,
+        "offer": 400
+      },
+      {
+        "period": "April - July",
+        "bid": 100,
+        "offer": 300
+      },
+      {
+        "period": "April - September 2027",
+        "bid": 0,
+        "offer": 250
+      }
+    ],
+    "months": [
+      {
+        "key": "oct",
+        "fsc": 0.45,
+        "cars_override": null
+      },
+      {
+        "key": "nov",
+        "fsc": 0.61,
+        "cars_override": null
+      },
+      {
+        "key": "dec",
+        "fsc": 0.55,
+        "cars_override": null
+      },
+      {
+        "key": "jan",
+        "fsc": 0.5,
+        "cars_override": null
+      },
+      {
+        "key": "feb",
+        "fsc": 0.5,
+        "cars_override": null
+      },
+      {
+        "key": "mar",
+        "fsc": 0.5,
+        "cars_override": null
+      },
+      {
+        "key": "apr",
+        "fsc": null,
+        "cars_override": null
+      },
+      {
+        "key": "may",
+        "fsc": null,
+        "cars_override": null
+      },
+      {
+        "key": "jun",
+        "fsc": null,
+        "cars_override": null
+      },
+      {
+        "key": "jul",
+        "fsc": null,
+        "cars_override": null
+      },
+      {
+        "key": "aug",
+        "fsc": null,
+        "cars_override": null
+      },
+      {
+        "key": "sep",
+        "fsc": null,
+        "cars_override": null
+      }
+    ]
   },
-  "hereford": {
-   "aug": 6473.08,
-   "sep": 6511.05,
-   "oct": 6897.14,
-   "nov": 6747.14
-  }
- },
- {
-  "origin": "Casselton, ND",
-  "state": "ND",
-  "pnw": {
-   "aug": 6378.28,
-   "sep": 6463.05,
-   "oct": 7208.74,
-   "nov": 6908.74
-  },
-  "hereford": {
-   "aug": 6573.24,
-   "sep": 6610.65,
-   "oct": 6998.42,
-   "nov": 6848.42
-  }
- },
- {
-  "origin": "Hebron, ND",
-  "state": "ND",
-  "pnw": {
-   "aug": 6238.52,
-   "sep": 6324.95,
-   "oct": 7065.66,
-   "nov": 6765.66
-  },
-  "hereford": {
-   "aug": 6729.2,
-   "sep": 6764.5,
-   "oct": 7158.6,
-   "nov": 7008.6
-  }
- },
- {
-  "origin": "Lemmon, SD",
-  "state": "SD",
-  "pnw": {
-   "aug": 6316,
-   "sep": 6402.5,
-   "oct": 7143,
-   "nov": 6843
-  },
-  "hereford": {
-   "aug": 6600.6,
-   "sep": 6637.25,
-   "oct": 7027.3,
-   "nov": 6877.3
-  }
- },
- {
-  "origin": "Canton, SD",
-  "state": "SD",
-  "pnw": {
-   "aug": 6500.72,
-   "sep": 6583.2,
-   "oct": 7335.76,
-   "nov": 7035.76
-  },
-  "hereford": {
-   "aug": 5939.84,
-   "sep": 5980.4,
-   "oct": 6358.72,
-   "nov": 6208.72
-  }
- },
- {
-  "origin": "Hinton, IA",
-  "state": "IA",
-  "pnw": {
-   "aug": 6565.5599999999995,
-   "sep": 6647.35,
-   "oct": 7401.98,
-   "nov": 7101.98
-  },
-  "hereford": {
-   "aug": 5678.24,
-   "sep": 5719.4,
-   "oct": 6095.92,
-   "nov": 5945.92
-  }
- },
- {
-  "origin": "Funk, NE",
-  "state": "NE",
-  "pnw": {
-   "aug": 6398.36,
-   "sep": 6480.35,
-   "oct": 7234.38,
-   "nov": 6934.38
-  },
-  "hereford": {
-   "aug": 4948.4,
-   "sep": 4991.5,
-   "oct": 5362.2,
-   "nov": 5212.2
-  }
- },
- {
-  "origin": "Red Oak, IA",
-  "state": "IA",
-  "pnw": {
-   "aug": 6800.12,
-   "sep": 6880.95,
-   "oct": 7638.46,
-   "nov": 7338.46
-  },
-  "hereford": {
-   "aug": 5302.24,
-   "sep": 5344.4,
-   "oct": 5717.92,
-   "nov": 5567.92
-  }
- },
- {
-  "origin": "Waverly, IL",
-  "state": "IL",
-  "pnw": {
-   "aug": 6891.52,
-   "sep": 6968.7,
-   "oct": 7737.16,
-   "nov": 7437.16
-  },
-  "hereford": {
-   "aug": 5015.88,
-   "sep": 5056.55,
-   "oct": 5434.54,
-   "nov": 5284.54
-  }
- },
- {
-  "origin": "Ransom, IL",
-  "state": "IL",
-  "pnw": {
-   "aug": 6878.2,
-   "sep": 6955.75,
-   "oct": 7723.1,
-   "nov": 7423.1
-  },
-  "hereford": {
-   "aug": 5101.28,
-   "sep": 5141.8,
-   "oct": 5520.24,
-   "nov": 5370.24
-  }
- },
- {
-  "origin": "Polo, IL",
-  "state": "IL",
-  "pnw": {
-   "aug": 6827.08,
-   "sep": 6406.05,
-   "oct": 6469.14,
-   "nov": 6469.14
-  },
-  "hereford": {
-   "aug": 5203.04,
-   "sep": 5242.4,
-   "oct": 5624.32,
-   "nov": 5474.32
-  }
- }
-]
+  "origins": [
+    {
+      "origin": "Breckenridge, MN",
+      "state": "MN",
+      "pnw_rate": 5590,
+      "pnw_miles": 1579,
+      "herf_rate": 6040,
+      "herf_miles": 1203
+    },
+    {
+      "origin": "Clarkfield, MN",
+      "state": "MN",
+      "pnw_rate": 5670,
+      "pnw_miles": 1600,
+      "herf_rate": 5800,
+      "herf_miles": 1225
+    },
+    {
+      "origin": "Casselton, ND",
+      "state": "ND",
+      "pnw_rate": 5630,
+      "pnw_miles": 1523,
+      "herf_rate": 6120,
+      "herf_miles": 1259
+    },
+    {
+      "origin": "Hebron, ND",
+      "state": "ND",
+      "pnw_rate": 5550,
+      "pnw_miles": 1357,
+      "herf_rate": 6200,
+      "herf_miles": 1470
+    },
+    {
+      "origin": "Lemmon, SD",
+      "state": "SD",
+      "pnw_rate": 5630,
+      "pnw_miles": 1350,
+      "herf_rate": 6120,
+      "herf_miles": 1335
+    },
+    {
+      "origin": "Canton, SD",
+      "state": "SD",
+      "pnw_rate": 5670,
+      "pnw_miles": 1752,
+      "herf_rate": 5520,
+      "herf_miles": 944
+    },
+    {
+      "origin": "Miller, SD",
+      "state": "SD",
+      "pnw_rate": 5870,
+      "pnw_miles": 1500,
+      "herf_rate": 6000,
+      "herf_miles": 1150
+    },
+    {
+      "origin": "Hinton, IA",
+      "state": "IA",
+      "pnw_rate": 5710,
+      "pnw_miles": 1821,
+      "herf_rate": 5200,
+      "herf_miles": 884
+    },
+    {
+      "origin": "Funk, NE",
+      "state": "NE",
+      "pnw_rate": 5550,
+      "pnw_miles": 1801,
+      "herf_rate": 4700,
+      "herf_miles": 690
+    },
+    {
+      "origin": "Red Oak, IA",
+      "state": "IA",
+      "pnw_rate": 5910,
+      "pnw_miles": 1917,
+      "herf_rate": 4820,
+      "herf_miles": 784
+    },
+    {
+      "origin": "Waverly, IL",
+      "state": "IL",
+      "pnw_rate": 5870,
+      "pnw_miles": 2282,
+      "herf_rate": 4480,
+      "herf_miles": 933
+    },
+    {
+      "origin": "Ransom, IL",
+      "state": "IL",
+      "pnw_rate": 5870,
+      "pnw_miles": 2245,
+      "herf_rate": 4560,
+      "herf_miles": 948
+    },
+    {
+      "origin": "Polo, IL",
+      "state": "IL",
+      "pnw_rate": 5870,
+      "pnw_miles": 2103,
+      "herf_rate": 4620,
+      "herf_miles": 1064
+    }
+  ]
+}

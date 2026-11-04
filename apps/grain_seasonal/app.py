@@ -2279,7 +2279,7 @@ def main():
             f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
         )
     with refresh_col:
-        if st.button("Refresh prices", icon=":material/refresh:", width="stretch",
+        if not __import__("portal_view").is_client() and st.button("Refresh prices", icon=":material/refresh:", width="stretch",
                      help="Re-read live quotes now instead of waiting out the 5-minute cache. "
                           "Settlement-history charts are not re-pulled."):
             refresh_prices()
@@ -2326,7 +2326,7 @@ def main():
     # Trends leads, so it is also the tab the app opens on. Don't pass st.tabs(default=) to keep
     # Corn as the landing tab: with the lazy .open logic below, Streamlit 1.56 highlights the
     # first tab in the browser but renders the default one, leaving a blank page.
-    tabs = st.tabs(tab_labels, on_change="rerun")
+    tabs = __import__("portal_view").tabs(tab_labels, hide={"Ask AI", "📊 H/L Forecast"}, on_change="rerun")
     with tabs[0]:
         if tabs[0].open:
             render_trends(api_key, as_of)

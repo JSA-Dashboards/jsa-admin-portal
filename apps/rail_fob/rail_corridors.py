@@ -37,7 +37,7 @@ MANUAL_SECTIONS = [
     ("UP Western Rail",  ["UP Group 3", "UP Interior IA", "UP Illinois (Dom)",
                            "UP Illinois (Mex)", "UP 110 Shuttle"]),
     ("BN Western Rail",  ["BN Hereford", "BN PNW", "BN COBO", "BN 110 Shuttle",
-                           "BN PNW BE", "BN PNW CP"]),
+                           "BN PNW BE"]),      # CP PNW ("BN PNW CP") dropped from the Bids tab (Kolten, 2026-11-02); still a corridor for Net Carry
 ]
 
 PALMETTO_SECTIONS = [

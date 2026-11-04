@@ -18,7 +18,7 @@ import zipfile
 import numpy as np
 import pandas as pd
 
-import build_draw_lanes as B
+import rma_build_draw_lanes as B
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 D = os.path.join(HERE, "data")
@@ -41,7 +41,7 @@ def main():
     clon = np.array([c["lon"] for c in cty])[:, None]
     blat = np.array([b["lat"] for b in river])[None, :]
     blon = np.array([b["lon"] for b in river])[None, :]
-    import assemble_draw_inputs as A
+    import rma_assemble_draw_inputs as A
     miles = np.round(A.hav(clat, clon, blat, blon) * CIRC).astype(int)
     out = {"built": pd.Timestamp.today().strftime("%Y-%m-%d"), "source": f"straight-line miles x {CIRC} (the soybean model's median OSRM / straight-line ratio)",
            "crop": "wheat", "counties": cty, "plants": [], "river": river, "miles": miles.tolist()}

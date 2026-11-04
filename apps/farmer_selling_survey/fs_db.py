@@ -105,3 +105,33 @@ def save_monthly(rows: pd.DataFrame) -> None:
                 (r.commodity, r.kind, r.crop_year, r.month, float(r.pct)))
     finally:
         conn.close()
+
+
+# -- anonymous monthly survey (Snowflake only) ------------------------------------------------------
+def save_survey_response(month_key: str, rows) -> None:
+    """Insert one anonymous submission: rows of (commodity, crop_year, pct_lo, pct_hi, price_target, location)."""
+    import uuid
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        for com, cy, lo, hi, price, loc in rows:
+            cur.execute(
+                "INSERT INTO SURVEY_RESPONSES (RESPONSE_ID, MONTH_KEY, COMMODITY, CROP_YEAR, PCT_LO, PCT_HI, "
+                "PRICE_TARGET, LOCATION) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (uuid.uuid4().hex, month_key, com, cy, lo, hi, None if price is None else float(price), loc))
+    finally:
+        conn.close()
+
+
+def load_survey_responses(month_key: str) -> pd.DataFrame:
+    conn = connect()
+    try:
+        df = pd.read_sql(
+            "SELECT RESPONSE_ID, COMMODITY, CROP_YEAR, PCT_LO, PCT_HI, PRICE_TARGET, LOCATION, SUBMITTED_ON "
+            "FROM SURVEY_RESPONSES WHERE MONTH_KEY = %s ORDER BY SUBMITTED_ON", conn, params=[month_key])
+    finally:
+        conn.close()
+    df.columns = [c.lower() for c in df.columns]
+    for c in ("pct_lo", "pct_hi", "price_target"):  # NUMBER columns arrive as Decimal
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df

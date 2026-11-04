@@ -2926,7 +2926,7 @@ def main():
             f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · {DELAYED_QUOTES_NOTE}"
         )
     with refresh_col:
-        if st.button("Refresh prices", icon=":material/refresh:", width="stretch",
+        if not __import__("portal_view").is_client() and st.button("Refresh prices", icon=":material/refresh:", width="stretch",
                      help="Re-read live quotes now instead of waiting out the 5-minute cache. "
                           "Settlement-history charts are not re-pulled."):
             refresh_prices()

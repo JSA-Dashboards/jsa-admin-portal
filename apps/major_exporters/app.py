@@ -7424,7 +7424,7 @@ def main():
     # ── Refresh + Unit toggle ─────────────────────────────────────────────
     col_btn, col_toggle, col_note = st.columns([1, 1.6, 4.4])
     with col_btn:
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if not __import__("portal_view").is_client() and st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.cache_resource.clear()
             st.toast("Data cache cleared — reloading…", icon="🔄")

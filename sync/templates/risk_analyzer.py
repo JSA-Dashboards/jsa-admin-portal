@@ -14,6 +14,8 @@ from pathlib import Path
 
 import streamlit as st
 
+import portal_view
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "src"))
 
@@ -23,6 +25,9 @@ from jsa_risk.ui.theme import render_header_and_disclaimer
 
 st.session_state["authenticated"] = True   # the portal's own login already passed
 st.session_state["_embedded"] = True       # add_position asks us, not st.switch_page, to move
+# In the CLIENT portal a typed or fetched contract price (and an import preset) stays in that browser session
+# instead of overwriting the shared rows staff read; see state.session_only() in the app.
+st.session_state["_session_only"] = portal_view.is_client()
 
 init_session_state()
 

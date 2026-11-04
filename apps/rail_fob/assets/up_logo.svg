@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="120" viewBox="0 0 100 120">
+  <title>Union Pacific</title>
+  <defs>
+    <clipPath id="shield"><path d="M4 4H96V66Q96 104 50 117Q4 104 4 66Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#shield)">
+    <rect x="0" y="0" width="100" height="120" fill="#ffffff"/>
+    <rect x="0" y="0" width="100" height="46" fill="#1b4f9c"/>
+    <g fill="#d6202f">
+      <rect x="4" y="46" width="9.2" height="80"/>
+      <rect x="22.4" y="46" width="9.2" height="80"/>
+      <rect x="40.8" y="46" width="9.2" height="80"/>
+      <rect x="59.2" y="46" width="9.2" height="80"/>
+      <rect x="77.6" y="46" width="9.2" height="80"/>
+    </g>
+  </g>
+  <text x="50" y="21" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="14" text-anchor="middle">UNION</text>
+  <text x="50" y="38" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="14" text-anchor="middle">PACIFIC</text>
+  <path d="M4 4H96V66Q96 104 50 117Q4 104 4 66Z" fill="none" stroke="#1b4f9c" stroke-width="3"/>
+</svg>

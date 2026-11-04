@@ -1,0 +1,541 @@
+"""
+Front-month CME Feeder Cattle futures, and their basis to the published index.
+
+SHARED BETWEEN TWO REPOS AND BYTE-IDENTICAL IN BOTH -- this copy and
+livestock-portal/apps/cme_feeder_cattle/feeder_futures.py. tests/test_no_drift.py
+compares them. Same arrangement as six_state.py, and for the same reason: the
+dashboard exists twice and a number that can differ between the copies is a
+number nobody can defend.
+
+Self-contained for that reason. It talks to Massive directly rather than
+importing apps/livestock_seasonal/massive_api.py, because that module lives in
+only one of the two repos and sharing it would put a second file under the
+drift test to buy nothing this one needs -- it wants /aggs and nothing else.
+test_feeder_futures.py pins the import set, exactly as six_state.py's does.
+
+WHAT BASIS MEANS HERE
+---------------------
+basis = front-month settle MINUS CME's published Feeder Cattle Index, same day.
+
+Three things make that subtraction legitimate, and each has a wrong-looking
+alternative that renders perfectly:
+
+1. THE NEARBY SERIES IS UNADJUSTED. On each date it is the settle of whichever
+   contract expires soonest -- a price that actually traded. The usual default
+   in charting packages is a BACK-ADJUSTED continuous series, which shifts every
+   historical contract so the roll gaps vanish. That series is a fiction carried
+   back from today, and subtracting a cash index from a fiction gives a number
+   that looks like basis and is not one. A roll gap is a feature here, not a
+   defect to smooth away.
+
+2. THE UNITS ALREADY MATCH. CME quotes feeder futures in cents per pound and
+   the index in dollars per hundredweight, which are the SAME NUMBER: 351.425
+   c/lb = $3.51425/lb = $351.425/cwt. No scaling, and a scale factor applied
+   "to be safe" would be a 100x error. Checked live on 2026-10-28, where the
+   front month settled 351.425 against an index of 351.43.
+
+3. THE INDEX SIDE IS CME'S OWN PUBLISHED SERIES, not this fleet's
+   reconstruction of it. The reconstruction exists to publish an estimate
+   before CME does and only reaches back to 2024-02-08; basis measured against
+   an estimate of the index is not basis. Callers pass the published series in.
+
+THE SAWTOOTH IS THE CALENDAR, PARTLY
+------------------------------------
+A cash-settled contract must converge to the index at expiry -- that is what
+settlement means -- so nearby basis is widest just after a roll and near zero at
+the end of one. Measured over 1,251 sessions to 2026-10-28, mean |basis| by
+sessions remaining:
+
+    0-4    1.24        20-29   4.45
+    5-9    2.72        30-44   6.19
+    10-19  3.66        45+     9.53
+
+Sessions-to-expiry explains r^2 = 0.285 of |basis| but correlates only +0.141
+with its SIGN, so the width is substantially calendar and the level is not.
+`sessions_to_expiry` is returned on every row so a caller can say so rather than
+leaving a reader to read the sawtooth as market noise. `convergence()` is the
+check that both series are on the same footing at all: it should sit near zero,
+and it did in every year measured (0.41 to 0.99).
+"""
+
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta
+
+import requests
+
+#: Massive's futures API. Settlement history is /aggs at resolution 1session.
+BASE_URL = "https://api.massive.com/futures/v1"
+
+#: CME feeder cattle. Standard contract months, confirmed from a live /contracts
+#: pull: Jan, Mar, Apr, May, Aug, Sep, Oct, Nov.
+PRODUCT_CODE = "GF"
+MONTH_LETTERS = "FHJKQUVX"
+MONTH_ORDER = {letter: i for i, letter in enumerate("FGHJKMNQUVXZ")}
+
+#: How many contract years of tickers to ask for. Massive's daily settlement
+#: history begins 2021-09-02, so six years of tickers reaches past the floor and
+#: the surplus simply returns nothing -- cheaper than discovering the floor.
+YEARS_BACK = 6
+
+#: A contract is "at expiry" inside this many sessions of its last settle. Two,
+#: because convergence is what the final print IS; a wider window measures the
+#: approach to convergence instead of the thing itself.
+EXPIRY_SESSIONS = 1
+
+TIMEOUT = 20
+
+
+class FuturesError(RuntimeError):
+    """Massive could not be reached, or answered with something unusable."""
+
+
+def contract_tickers(as_of: date, years_back: int = YEARS_BACK) -> list:
+    """Every GF ticker that could be front month in the window, newest last.
+
+    Returns (ticker, sort_key) pairs. THE SORT KEY IS DERIVED FROM THE TICKER,
+    not from the data, and that matters: ordering legs by each series' last
+    observed date -- the obvious alternative -- ties the current front month
+    against the one behind it, since both carry a settle for today. A
+    (year, month) key cannot tie.
+    """
+    out = []
+    for back in range(years_back):
+        year = as_of.year - back
+        for letter in MONTH_LETTERS:
+            out.append((f"{PRODUCT_CODE}{letter}{year % 10}", (year, MONTH_ORDER[letter])))
+    out.sort(key=lambda pair: pair[1])
+    return out
+
+
+def settlement_history(ticker: str, api_key: str, timeout: int = TIMEOUT) -> dict:
+    """{date: settle} for one contract, or {} if Massive has nothing for it.
+
+    An empty answer is ORDINARY, not an error: the ticker list deliberately
+    reaches past the start of Massive's history, so most of a six-year sweep
+    comes back empty on the oldest years.
+    """
+    try:
+        r = requests.get(
+            f"{BASE_URL}/aggs/{ticker}",
+            headers={"Authorization": f"Bearer {api_key}"},
+            params={"resolution": "1session", "limit": 50000},
+            timeout=timeout,
+        )
+    except requests.RequestException as e:
+        raise FuturesError(f"{ticker}: {e}") from e
+    if r.status_code == 404:
+        return {}
+    if not r.ok:
+        raise FuturesError(f"{ticker}: HTTP {r.status_code}")
+    try:
+        payload = r.json() or {}
+    except ValueError as e:
+        raise FuturesError(f"{ticker}: unreadable response") from e
+    if payload.get("status") not in ("OK", None):
+        raise FuturesError(f"{ticker}: {payload}")
+
+    out = {}
+    for bar in payload.get("results") or []:
+        day = bar.get("session_end_date")
+        if not day:
+            continue
+        # SETTLEMENT FIRST, CLOSE ONLY AS A FALLBACK, and the `or` is load-bearing
+        # rather than defensive: the CURRENT session's bar carries
+        # settlement_price 0 until it settles, so reading settlement_price alone
+        # drops today and reading close alone silently substitutes a last trade
+        # for a settlement on every historical row.
+        price = bar.get("settlement_price") or bar.get("close")
+        if not price:
+            continue
+        try:
+            when = datetime.fromisoformat(str(day)[:10]).date()
+        except ValueError:
+            continue
+        out[when] = float(price)
+    return out
+
+
+def nearby(api_key: str, as_of: date, years_back: int = YEARS_BACK,
+           max_workers: int = 8) -> list:
+    """The unadjusted nearby series: one row per session, newest last.
+
+    Each row is {"date", "settle", "contract"}. On every date the settle is that
+    of whichever contract expires soonest and has not yet expired. Segments are
+    cut at the previous contract's last settle, so no date appears twice and
+    nothing is back-adjusted -- see this module's docstring for why that last
+    point is the whole basis of the basis.
+    """
+    if not api_key:
+        raise FuturesError("no Massive API key")
+
+    pairs = contract_tickers(as_of, years_back)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fetched = list(pool.map(lambda p: settlement_history(p[0], api_key), pairs))
+
+    rows, previous_end = {}, None
+    for (ticker, _key), history in zip(pairs, fetched):
+        if not history:
+            continue
+        end = max(history)
+        for when, settle in history.items():
+            if when > end:
+                continue
+            if previous_end is not None and when <= previous_end:
+                continue
+            rows[when] = {"date": when, "settle": settle, "contract": ticker}
+        previous_end = end if previous_end is None else max(previous_end, end)
+    return [rows[d] for d in sorted(rows)]
+
+
+def with_basis(rows: list, index_by_date: dict) -> list:
+    """Keep the sessions where both sides exist, and add basis and the calendar.
+
+    Adds "fci_value", "basis" and "sessions_to_expiry". An INNER join, because a
+    date with only one of the two cannot have a basis and carrying it forward
+    would invent one -- CME publishes on business days only, and the futures feed
+    has its own holidays.
+    """
+    kept = [dict(r, fci_value=index_by_date[r["date"]],
+                 basis=r["settle"] - index_by_date[r["date"]])
+            for r in rows if r["date"] in index_by_date]
+
+    remaining = {}
+    for row in reversed(kept):
+        remaining[row["contract"]] = remaining.get(row["contract"], -1) + 1
+        row["sessions_to_expiry"] = remaining[row["contract"]]
+    return kept
+
+
+def convergence(rows: list) -> float:
+    """Mean |basis| in each contract's final sessions, or None if none qualify.
+
+    THE CHECK THAT BOTH SERIES ARE ON THE SAME FOOTING. A cash-settled contract
+    must converge, so this sits near zero when the units, the roll and the index
+    series are all right, and blows up when any one of them is wrong. It is the
+    one number here that is an assertion about the pipeline rather than about
+    the market -- and it is cheap, so show it.
+    """
+    at_expiry = [abs(r["basis"]) for r in rows if r["sessions_to_expiry"] <= EXPIRY_SESSIONS]
+    return sum(at_expiry) / len(at_expiry) if at_expiry else None
+
+
+#: Trailing windows for the basis table, in CALENDAR days. 365 rather than
+#: year-to-date so the four read as one ladder: mixing three trailing windows
+#: with a calendar-year figure would make the last column answer a different
+#: question from the other three, and on 2 January it would answer almost none.
+BASIS_WINDOWS = (30, 90, 180, 365)
+
+
+def trailing(rows: list, days: int, anchor: date = None) -> list:
+    """The rows within `days` calendar days of the anchor, inclusive.
+
+    THE ANCHOR IS THE LAST SESSION, NOT TODAY, unless one is passed. This
+    series ends at the last date carrying BOTH a settle and a published index,
+    and that is routinely a day or three behind today -- CME prints on a lag,
+    and neither side trades at a weekend. Anchoring on today would quietly
+    shorten every window by that gap, and shorten it further after a holiday,
+    so "the 30-day average" would mean something slightly different each time
+    anyone read it.
+    """
+    if not rows:
+        return []
+    end = anchor or rows[-1]["date"]
+    start = end - timedelta(days=days - 1)
+    return [r for r in rows if start <= r["date"] <= end]
+
+
+def excursions(rows: list) -> tuple:
+    """The widest basis each way, as (most positive row, most negative row).
+
+    Returns the ROWS, not bare numbers. A deviation without its date and
+    contract is not checkable, and the entire use of an extreme is that
+    somebody can go and look at the day it happened.
+    """
+    if not rows:
+        return None, None
+    return (max(rows, key=lambda r: r["basis"]),
+            min(rows, key=lambda r: r["basis"]))
+
+
+def window_table(rows: list, spans: tuple = BASIS_WINDOWS,
+                 anchor: date = None) -> list:
+    """Mean basis and both extremes per trailing window, plus the full series.
+
+    A window with no sessions in it reports mean None and no extremes rather
+    than 0.0 -- "measured, and flat" and "nothing to measure" are different
+    answers and a zero would merge them.
+    """
+    out = []
+    for days in spans:
+        segment = trailing(rows, days, anchor)
+        high, low = excursions(segment)
+        out.append({
+            "label": f"Last {days} days",
+            "days": days,
+            "sessions": len(segment),
+            "mean": (sum(r["basis"] for r in segment) / len(segment)
+                     if segment else None),
+            "high": high,
+            "low": low,
+        })
+    high, low = excursions(rows)
+    out.append({
+        "label": "Full history",
+        "days": None,
+        "sessions": len(rows),
+        "mean": sum(r["basis"] for r in rows) / len(rows) if rows else None,
+        "high": high,
+        "low": low,
+    })
+    return out
+
+
+# ── What follows a wide basis ────────────────────────────────────────────────
+#
+# Four things will each produce a confident wrong number here, and every one of
+# them is handled below rather than assumed away. They are the whole reason
+# this is in a tested module instead of a dataframe expression on a page.
+#
+# 1. OVERLAPPING OBSERVATIONS. Consecutive days over a threshold are ONE event,
+#    not thirty. Counting days would report a sample of fifteen as three
+#    hundred, and a probability computed off it as though it had that much
+#    behind it. Every figure below is per EPISODE -- the first day of each run
+#    -- with the raw day count carried alongside so the inflation is visible.
+#
+# 2. ROLL CONTAMINATION. A forward return spanning a roll includes the contract
+#    gap, median 4.36 on this series, which is not a move anybody could have
+#    captured. Forward moves here are SAME-CONTRACT ONLY. That necessarily
+#    drops entries too close to expiry to have the horizon left, which is a
+#    selection effect of its own, so `usable` and `attempted` are both returned
+#    and the page prints the ratio.
+#
+# 3. MECHANICAL CONVERGENCE. A cash-settled contract MUST converge on the index
+#    by expiry; that is what settlement means. So "a wide basis narrows" is
+#    partly the contract spec rather than a market fact, and a study that
+#    ignores sessions-to-expiry merely rediscovers it. `median_dte` is returned
+#    for every cell so a reader can see how much room the trade had.
+#
+# 4. NO BASELINE, NO MEANING. "68% rose" is not a finding if futures rose 64%
+#    of the time unconditionally. `baseline` is the same horizons measured over
+#    every session, and it is returned first because every other number is only
+#    readable against it.
+CONDITIONAL_THRESHOLDS = (5, 7, 8, 10, 12)
+CONDITIONAL_HORIZONS = (5, 10, 20)
+
+
+def _median(xs):
+    """Written out rather than imported from statistics, so the module's
+    import set stays {concurrent, datetime, requests} and its test can pin it.
+    Same reasoning as six_state._median."""
+    s = sorted(xs)
+    n = len(s)
+    if not n:
+        return None
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def forward_move(rows: list, i: int, horizon: int):
+    """(futures, index, basis) change `horizon` sessions on, or None.
+
+    NONE WHEN THE WINDOW CROSSES A ROLL. A nearby series changes contract at
+    every expiry, so differencing across one measures the contract switching,
+    not the price moving -- it would book the roll gap as a return.
+    """
+    j = i + horizon
+    if j >= len(rows) or rows[j]["contract"] != rows[i]["contract"]:
+        return None
+    return (rows[j]["settle"] - rows[i]["settle"],
+            rows[j]["fci_value"] - rows[i]["fci_value"],
+            rows[j]["basis"] - rows[i]["basis"])
+
+
+def episode_starts(flags: list) -> list:
+    """The first index of each run of True -- one entry per episode.
+
+    A thirty-day stretch over the threshold is one thing that happened, and
+    counting it thirty times is how a study reports certainty it has not got.
+    """
+    return [i for i, f in enumerate(flags) if f and (i == 0 or not flags[i - 1])]
+
+
+def _horizon_stats(rows, entries, horizon):
+    moves = [forward_move(rows, i, horizon) for i in entries]
+    usable = [m for m in moves if m]
+    if not usable:
+        return {"usable": 0, "attempted": len(moves), "up_pct": None,
+                "fut_median": None, "idx_median": None, "basis_median": None}
+    return {
+        "usable": len(usable),
+        "attempted": len(moves),
+        "up_pct": 100.0 * sum(1 for m in usable if m[0] > 0) / len(usable),
+        "fut_median": _median([m[0] for m in usable]),
+        "idx_median": _median([m[1] for m in usable]),
+        "basis_median": _median([m[2] for m in usable]),
+    }
+
+
+def conditional_study(rows: list, thresholds: tuple = CONDITIONAL_THRESHOLDS,
+                      horizons: tuple = CONDITIONAL_HORIZONS) -> dict:
+    """What futures did after basis ran past each threshold, by episode.
+
+    Returns {} on an empty series. `cells` carries one entry per
+    (sign, threshold); sign +1 is futures OVER the index (premium) and -1 is
+    UNDER (discount), and they are kept apart because they are not mirror
+    images -- a premium has historically closed by the INDEX rising rather
+    than futures falling, which the idx_median figures show.
+    """
+    if not rows:
+        return {}
+
+    out = {
+        "sessions": len(rows),
+        "start": rows[0]["date"],
+        "end": rows[-1]["date"],
+        "baseline": {h: _horizon_stats(rows, list(range(len(rows))), h)
+                     for h in horizons},
+        "cells": [],
+    }
+    for sign in (1, -1):
+        for t in thresholds:
+            flags = [(r["basis"] >= t) if sign > 0 else (r["basis"] <= -t)
+                     for r in rows]
+            entries = episode_starts(flags)
+            out["cells"].append({
+                "sign": sign,
+                "threshold": t,
+                "days": sum(flags),
+                "episodes": len(entries),
+                "median_dte": _median([rows[i]["sessions_to_expiry"]
+                                       for i in entries]),
+                "horizons": {h: _horizon_stats(rows, entries, h)
+                             for h in horizons},
+            })
+    return out
+
+
+#: WALK-FORWARD OUT-OF-SAMPLE TEST, run 2026-10-30 over the 1,251 sessions to
+#: that date. Recorded rather than recomputed: the run refits a regression on
+#: every session for three horizons and repeats the whole thing against 60
+#: shuffled predictors, which is minutes of work and has no business on a page
+#: load. Re-run scratchpad/walkforward.py and update these if the series grows.
+#:
+#: WHY IT EXISTS. conditional_study() reports what followed a wide basis, and
+#: its headline -- 76% of episodes higher a week after a discount past 12,
+#: against a 58% baseline -- is IN SAMPLE. The thresholds and horizons were
+#: chosen after looking at the data, the episodes overlap inside one rising
+#: regime, and searching a handful of cells turns up a gap like that sometimes
+#: even in noise. This is the test that separates a hypothesis from skill, and
+#: it answers three different questions with three different answers.
+#:
+#:   mae_gain      percent reduction in mean absolute error against naive
+#:                 persistence, scored on NON-OVERLAPPING windows, from a
+#:                 regression refit each session on completed prior examples.
+#:   null_max      the best any of 60 SHUFFLED predictors managed. A shuffled
+#:                 basis carries no information by construction, so this is
+#:                 what "improvement" looks like by chance on this data.
+#:   beat_draws    how many of the 60 the real predictor beat.
+#:   direction     share of windows whose SIGN the model called correctly.
+#:   trivial       share it would have got by always guessing the majority
+#:                 direction. Where direction < trivial the model is worse than
+#:                 not thinking, and that is the case at every horizon.
+WALK_FORWARD = {
+    "run": "2026-10-30",
+    "sessions": 1251,
+    "draws": 60,
+    "horizons": {
+        5: {"mae_gain": 3.1, "null_max": 2.8, "beat_draws": 60,
+            "direction": 56.9, "trivial": 61.9},
+        10: {"mae_gain": 6.6, "null_max": 1.7, "beat_draws": 60,
+             "direction": 60.0, "trivial": 69.2},
+        20: {"mae_gain": -0.2, "null_max": 4.6, "beat_draws": 0,
+             "direction": 52.9, "trivial": 64.7},
+    },
+    #: The THRESHOLD rule -- the one these tables display -- tested separately
+    #: and did not hold: out of sample it ran from +12.7% to -57.0% across
+    #: thresholds and horizons, on 1 to 8 independent observations once
+    #: overlapping windows are removed at T >= 10. The 18 in-sample episodes
+    #: behind the -12 row become 2 to 5 once only what was knowable at the
+    #: time is counted.
+    "threshold_rule_holds": False,
+    "threshold_rule_obs": "1 to 8 independent observations at T >= 10",
+}
+
+
+def live_basis(rows: list, published: dict, estimate: dict = None) -> dict:
+    """Where basis sits on the NEWEST session, and which index that used.
+
+    Returns {} when nothing can be measured.
+
+    PREFERS CME'S PUBLISHED INDEX AND SAYS SO WHEN IT FALLS BACK. The study is
+    built on the published series, so a live reading taken against something
+    else is not strictly the same measurement -- but CME prints on a lag, and
+    on the two or three days before a print the published series has nothing to
+    offer. Refusing to read at all for those days would blank the panel exactly
+    when the market has moved, so the local estimate is used and the row says
+    `source`. The caller shows it.
+
+    The substitution is small on this data -- the estimate has matched CME to
+    the cent on the days both exist -- but "small" is not "none", and a panel
+    that silently swapped series would be the drift this repo keeps a rule
+    about.
+    """
+    if not rows:
+        return {}
+    estimate = estimate or {}
+    for row in reversed(rows):
+        for source, table in (("CME published", published), ("JSA estimate", estimate)):
+            value = table.get(row["date"])
+            if value is None:
+                continue
+            return {
+                "date": row["date"],
+                "contract": row["contract"],
+                "settle": row["settle"],
+                "index": value,
+                "basis": row["settle"] - value,
+                "source": source,
+            }
+    return {}
+
+
+def bucket_for(study: dict, basis: float):
+    """The WIDEST threshold this basis clears, or None if it clears none.
+
+    None is the common answer and the panel must say so plainly: only 3.5% of
+    sessions measured to 2026-10-30 sat at 12 or wider in either direction. A
+    reading that always lands in some bucket is one nobody should trust, so
+    this returns nothing rather than reaching for the nearest row.
+
+    Widest, not nearest: a basis of -13 clears -5, -7, -8, -10 and -12, and the
+    -12 row is the one whose episodes actually resemble it.
+    """
+    if not study or basis is None:
+        return None
+    sign = 1 if basis > 0 else -1
+    clears = [c for c in study.get("cells", [])
+              if c["sign"] == sign and abs(basis) >= c["threshold"]]
+    return max(clears, key=lambda c: c["threshold"]) if clears else None
+
+
+def summary(rows: list) -> dict:
+    """Headline figures for the panel. Returns {} on an empty series."""
+    if not rows:
+        return {}
+    values = [r["basis"] for r in rows]
+    by_year = {}
+    for r in rows:
+        by_year.setdefault(r["date"].year, []).append(r["basis"])
+    return {
+        "sessions": len(rows),
+        "start": rows[0]["date"],
+        "end": rows[-1]["date"],
+        "latest": values[-1],
+        "mean": sum(values) / len(values),
+        "low": min(values),
+        "high": max(values),
+        "over_index_pct": 100.0 * sum(1 for v in values if v > 0) / len(values),
+        "convergence": convergence(rows),
+        "by_year": {y: sum(v) / len(v) for y, v in sorted(by_year.items())},
+        "rolls": sum(1 for a, b in zip(rows, rows[1:]) if a["contract"] != b["contract"]),
+    }

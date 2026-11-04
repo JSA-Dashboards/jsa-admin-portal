@@ -18,7 +18,7 @@ IMPORT_TARGETS: List[ImportTarget] = [
     ImportTarget("label", "Contract symbol (required)", re.compile(r"symbol|ticker|contract|product|commod|instrument", re.I),
                  re.compile(r"^instrument$", re.I)),
     ImportTarget("type", "Type (call/put/future)", re.compile(r"type|call.*put|c/p|right", re.I)),
-    ImportTarget("strike", "Strike (cents/bu; blank = futures position)", re.compile(r"strike", re.I)),
+    ImportTarget("strike", "Strike (blank = futures position)", re.compile(r"strike", re.I)),
     ImportTarget("expiryDate", "Expiration date (options only)", re.compile(r"expir|maturity|exp\.?\s*date|dte|days", re.I)),
     ImportTarget("qty", "Quantity — unsigned contract count", re.compile(r"qty|quantity|lots|contracts|size", re.I),
                  re.compile(r"^qty$", re.I)),

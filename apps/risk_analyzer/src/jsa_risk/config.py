@@ -38,6 +38,19 @@ class MassiveConfig:
     base_url: str
 
 
+def get_app_password() -> Optional[str]:
+    """The shared password the app sits behind, from `[app] password` (or a root-level
+    APP_PASSWORD). None when it isn't set -- the gate then refuses everyone rather than
+    falling back to a default that would live in the repo."""
+    try:
+        s = st.secrets
+        value = (s["app"].get("password") if "app" in s else None) or (
+            s["APP_PASSWORD"] if "APP_PASSWORD" in s else None)
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
 def _section(name: str, friendly_name: str) -> dict:
     if name not in st.secrets:
         raise ConfigError(

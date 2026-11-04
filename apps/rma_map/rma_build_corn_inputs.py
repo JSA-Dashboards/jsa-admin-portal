@@ -19,8 +19,8 @@ import zipfile
 import numpy as np
 import pandas as pd
 
-import assemble_draw_inputs as A
-import build_draw_lanes as B
+import rma_assemble_draw_inputs as A
+import rma_build_draw_lanes as B
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 D = os.path.join(HERE, "data")

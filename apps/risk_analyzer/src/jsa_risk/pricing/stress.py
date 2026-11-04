@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Optional
 
-from .black76 import black76
+from .black76 import american
 from .commodities import CORN, CommoditySpec
 
 
@@ -102,6 +102,7 @@ def stressed_T(expiry_date: Optional[date], stress: StressState, today: Optional
 class PositionEval:
     price: float           # Mark actually used for pnl/import_gain (tick or model)
     model_price: float      # theoretical price, always model-based, for reference/hints
+    delta: float            # the option's OWN delta, per unit -- 1.0 for a future/cash
     delta_d: float
     gamma_d: float
     vega_d: float
@@ -119,6 +120,7 @@ def eval_position(
     T_override: Optional[float] = None,
     today: Optional[date] = None,
     commodity: CommoditySpec = CORN,
+    greeks: bool = True,
 ) -> PositionEval:
     no_stress = stress.is_neutral
     has_tick = position.last_tick is not None
@@ -134,6 +136,7 @@ def eval_position(
         return PositionEval(
             price=fut_mark,
             model_price=F,
+            delta=1.0,       # a future IS the underlying: one unit moves one-for-one
             delta_d=pos_mult,
             gamma_d=0.0,
             vega_d=0.0,
@@ -144,12 +147,15 @@ def eval_position(
 
     sigma = sigma_override if sigma_override is not None else stressed_sigma(position.iv, stress)
     T = T_override if T_override is not None else stressed_T(position.expiry_date, stress, today)
-    result = black76(F, position.strike, T, sigma, position.type == "call")
+    result = american(F, position.strike, T, sigma, position.type == "call", greeks=greeks)
     mark = position.last_tick if use_last_tick else result.price
 
     return PositionEval(
         price=mark,
         model_price=result.price,
+        # Carried rather than back-derived from delta_d: a row edited to qty 0 has a
+        # perfectly good delta and no pos_mult to divide by.
+        delta=result.delta,
         delta_d=result.delta * pos_mult,
         gamma_d=result.gamma * pos_mult,
         vega_d=(result.vega / 100) * pos_mult,

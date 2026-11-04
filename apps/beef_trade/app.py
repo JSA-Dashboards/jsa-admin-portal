@@ -43,6 +43,8 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 import trade_flows as tf          # noqa: E402
 import wasde                      # noqa: E402
 
@@ -265,7 +267,19 @@ def fmt(v, digits=0, suffix=""):
 
 # -- data --------------------------------------------------------------------
 
-@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+# persist="disk" DROPPED 2026-11-02. Streamlit ignores `ttl` when persist is
+# set -- verified against streamlit 1.63's source, see cash_trade's
+# publication_stamps() -- so these three had NO expiry and were keyed on a
+# SCHEMA constant that only moves when a developer edits the module. A new
+# ERS file or a new WASDE was picked up only by "Refresh data" or a restart,
+# on the staff deployment as much as the client one.
+#
+# Dropped rather than stamp-keyed, which is what beef_cutout got: ERS is one
+# CSV behind a _discover() fallback and WASDE is a file, so there is no cheap
+# published_date probe to key on. Both are MONTHLY, so the stated ttls are
+# generous and now actually apply. The cost is a cold refetch after the app
+# sleeps -- 4 MB, once.
+@st.cache_data(ttl=21600, show_spinner=False)
 def load_trade(schema: int = tf.SCHEMA) -> pd.DataFrame:
     """
     The ERS monthly file. Six hours, because it is republished monthly and is
@@ -277,7 +291,7 @@ def load_trade(schema: int = tf.SCHEMA) -> pd.DataFrame:
     return tf.fetch()
 
 
-@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False)
 def load_wasde(schema: int = wasde.SCHEMA) -> dict:
     """
     The newest WASDE meats table, flattened to a plain dict.
@@ -300,7 +314,7 @@ def load_wasde(schema: int = wasde.SCHEMA) -> dict:
     }
 
 
-@st.cache_data(ttl=86400, persist="disk", show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def load_revisions(attribute: str, year: int, n: int,
                    schema: int = wasde.SCHEMA) -> list:
     """n releases, n requests -- only ever called from a button."""
@@ -1076,7 +1090,7 @@ with tab_net:
 
 st.markdown("<hr style='margin:22px 0 14px;'>", unsafe_allow_html=True)
 
-with st.expander("Sources, basis, and the check that licenses this page"):
+for _ in portal_view.staff_expander("Sources, basis, and the check that licenses this page"):
     chk = None
     if wd:
         last_full = YEAR - 1
@@ -1136,6 +1150,9 @@ question. Neither is more correct; they are different measurements.
         file_name=f"us_beef_trade_ers_through_{YEAR}_{THROUGH:02d}.csv",
         mime="text/csv", key="dl_trade")
 
-if st.button("Refresh data", key="refresh"):
+# A cache control is a working tool, not a market reading -- standing rule 1,
+# and the call cattle_on_feed:986 already made. `pick` for consistency with the
+# other four refresh controls, though nothing downstream reads this one.
+if portal_view.pick(False, lambda: st.button("Refresh data", key="refresh")):
     st.cache_data.clear()
     st.rerun()

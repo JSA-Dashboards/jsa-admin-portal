@@ -830,7 +830,7 @@ def page_brazil(frames_us=None):
             "No Brazil lineup data loaded yet. "
             "Upload an APS Brazil consolidated line-up PDF to populate the dashboard.",
         )
-        pdf_up = st.file_uploader("Upload APS Brazil PDF", type=["pdf"])
+        pdf_up = None if __import__("portal_view").is_client() else st.file_uploader("Upload APS Brazil PDF", type=["pdf"])
         if pdf_up:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 tmp.write(pdf_up.read())
@@ -1221,7 +1221,7 @@ def main():
             unsafe_allow_html=True,
         )
     with head_r:
-        if st.button("Reload data", icon=":material/refresh:", key="reload_data", width="stretch"):
+        if not __import__("portal_view").is_client() and st.button("Reload data", icon=":material/refresh:", key="reload_data", width="stretch"):
             st.cache_data.clear()
             st.rerun()
         st.caption(f"{data_sync.describe(_data_info)} · loaded {datetime.now().strftime('%b %d %I:%M %p')}")
@@ -1262,7 +1262,7 @@ def main():
         if tabs[5].open:
             # The original per-region pages, read from the Southport workbook and the Brazil database.
             if file_source is None:
-                uploaded = st.file_uploader(DATA_FILENAME, type=["xlsx"], help="Upload the Vessel Lineup Excel file to load these views")
+                uploaded = None if __import__("portal_view").is_client() else st.file_uploader(DATA_FILENAME, type=["xlsx"], help="Upload the Vessel Lineup Excel file to load these views")
                 if uploaded is None:
                     st.info("Upload the Vessel Lineup Excel file to see the legacy views.")
                     st.stop()

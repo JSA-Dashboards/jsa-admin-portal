@@ -178,7 +178,7 @@ def render() -> None:
         st.caption("US Gulf first, then the PNW: the vessel line-up now, and what has sailed, from the daily port reports. "
                    "Texas Gulf, Brazil and Argentina are on the full Vessel Line-up dashboard.")
     with head_r:
-        if st.button("Reload data", icon=":material/refresh:", key=f"{K}_reload", width="stretch"):
+        if not __import__("portal_view").is_client() and st.button("Reload data", icon=":material/refresh:", key=f"{K}_reload", width="stretch"):
             vessel_tab._clear_caches()                               # before the data is read below, so one click is enough
     info = vessel_tab._data()
     facts = info["facts.db"]

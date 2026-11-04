@@ -861,54 +861,197 @@ def _cash_rows(slug: int, on: date) -> list:
 # the same day runs to 224.00 because it includes trade confirmed later. Same
 # day, two honest answers to two different questions -- "what is out now" and
 # "what did the day finally do".
-CASH_STATES = [(2668, "NE"), (2672, "IA/MN"), (2664, "TX/OK/NM"), (2666, "KS")]
+# (label, FINAL slug, 1:30 PM CUT slug) -- the same eight reports the Cash
+# Cattle Trade dashboard reads, and for the same reason.
+#
+# USDA PUBLISHES EACH REGION TWICE A DAY AND THE TWO FILES DESCRIBE DIFFERENT
+# TRADING DAYS. The afternoon file (~15:08 CT) is dated its trading day and
+# carries that day's trade as of the 1:30 pm cut, still moving. The morning
+# file (~11:17 CT) is dated the day it is PUBLISHED and carries the PREVIOUS
+# business day's COMPLETE trade.
+#
+# This list held the morning slugs alone until 2026-10-16, and both halves of
+# that were wrong:
+#
+#   The Monday-dated morning file is FRIDAY's trade, so every week-to-date
+#   opened with last week's number counted as this week's. On Friday
+#   2026-10-16 the letter printed "NE: 218.00-223.00 live" -- Nebraska's
+#   trade of Friday 2026-10-09 -- while the dashboard showed 225. Ross put
+#   the two side by side; nothing else would have.
+#
+#   And the current trading day exists ONLY in the afternoon file, because
+#   its own final file is not published until the next morning. So the day
+#   the letter is actually about was the one day it could never see.
+#
+# Reading the morning file alone was itself a fix, for a real symptom: on
+# Monday 2026-09-21 Nebraska's afternoon file carried zero priced rows and
+# the morning one carried nine, so an afternoon-only week-to-date dropped a
+# state that had traded. Both observations are correct and neither rule is --
+# the file is not the unit, the TRADING DAY is.
+CASH_STATES = [
+    ("NE", 2668, 2667),           # LM_CT124 / LM_CT123
+    ("IA/MN", 2672, 2671),        # LM_CT137 / LM_CT136
+    ("TX/OK/NM", 2664, 2663),     # LM_CT118 / LM_CT117
+    ("KS", 2666, 2665),           # LM_CT121 / LM_CT120
+]
+
+# USDA prints each class once per grade AND once as a roll-up. Summing both
+# double-counts: Nebraska steers on the 10/12 file are 5,458 + 178 graded
+# against a 5,636 total, and the old code added all three to 11,094. Only the
+# roll-up is kept, which is the filter the dashboard already applies.
+CASH_GRADE_TOTAL = "Total all grades"
+
+
+def _prev_business_day(d: date) -> date:
+    """
+    The session before `d`, skipping weekends.
+
+    HOLIDAYS ARE NOT SKIPPED, the same limitation the dashboard's BDay shift
+    carries: a morning file published the day after a holiday resolves to the
+    holiday rather than the last session that traded. It is off by one session
+    on a few dates a year and the tell is a holiday carrying a full day of
+    trade. Worth knowing before trusting a Tuesday-after-Monday-holiday range.
+    """
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _cash_rows_between(slug: int, start: date, end: date) -> list:
+    """
+    Detail rows for one report over a RANGE of file dates.
+
+    One request per slug rather than one per day -- the datamart takes
+    `report_date=MM/DD/YYYY:MM/DD/YYYY`, so a week costs 8 requests instead
+    of 40. The grade filter is passed to the server as an optimisation and
+    re-checked below, because only one extra filter can be chained before AMS
+    returns its bare-string no-results sentinel instead of an intersection.
+    """
+    q = (f"report_date={start.strftime('%m/%d/%Y')}:{end.strftime('%m/%d/%Y')}"
+         f";grade_desc={CASH_GRADE_TOTAL}")
+    r = _session().get(f"{LMR_BASE}/{slug}/Detail", params={"q": q}, timeout=60)
+    if r.status_code in (204, 404):
+        return []
+    r.raise_for_status()
+    try:
+        payload = r.json()
+    except ValueError:
+        return []
+    if isinstance(payload, dict):
+        results = payload.get("results")
+        return results if isinstance(results, list) else []
+    if isinstance(payload, list):
+        out = []
+        for sec in payload:
+            if isinstance(sec, dict) and isinstance(sec.get("results"), list):
+                out.extend(sec["results"])
+        return out
+    return []
+
+
+def _cash_by_trading_day(label_slugs, monday: date, as_of: date) -> dict:
+    """
+    {trading_day: {cut: {basis: [(low, high, head), ...]}}} for one region.
+
+    The file window is Monday..as_of for BOTH reports, which lands exactly the
+    trading days wanted and no others:
+
+        final file Tue..Fri  -> trading Mon..Thu      (kept)
+        final file Mon       -> trading LAST Friday   (dropped, out of week)
+        cut file   Mon..Fri  -> trading Mon..Fri      (kept)
+
+    So today appears through its 1:30 pm cut, and every earlier day through
+    its completed final file. Today has no final file; it is published
+    tomorrow morning.
+    """
+    _label, final_slug, cut_slug = label_slugs
+    by_day = {}
+    for cut, slug in (("final", final_slug), ("cut", cut_slug)):
+        for row in _cash_rows_between(slug, monday, as_of):
+            if str(row.get("purchase_type_code", "")).strip() != "NEGOTIATED CASH":
+                continue
+            if str(row.get("class_desc", "")).strip() not in CASH_CLASSES:
+                continue
+            if str(row.get("grade_desc", "")).strip() != CASH_GRADE_TOTAL:
+                continue
+            lo = _num(row.get("price_range_low"))
+            hi = _num(row.get("price_range_high"))
+            if lo is None or hi is None:
+                continue
+            basis = str(row.get("selling_basis_desc", "")).strip()
+            if basis == "LIVE FOB":
+                key = "live"
+            elif basis.startswith("DRESSED"):
+                key = "dressed"
+            else:
+                continue
+            try:
+                filed = datetime.strptime(
+                    str(row.get("report_date", "")).strip(), "%m/%d/%Y").date()
+            except ValueError:
+                continue
+            traded = _prev_business_day(filed) if cut == "final" else filed
+            if not (monday <= traded <= as_of):
+                continue
+            slot = by_day.setdefault(traded, {}).setdefault(cut, {})
+            slot.setdefault(key, []).append((lo, hi, _num(row.get("head_count")) or 0))
+    return by_day
 
 
 def fetch_regional_cash_wtd(as_of: date) -> dict:
     """
-    Week-to-date negotiated cash by state, Monday through as_of.
+    Week-to-date negotiated cash by state, Monday through as_of, keyed on the
+    TRADING day rather than the file date.
 
     A single day is the wrong window for a morning brief: Monday is routinely
     untested, so a Tuesday brief built from Monday alone says "no established
     test" while the week has in fact traded. Ranges span every priced day of the
     week so far, and `days` records how many actually carried a price.
 
+    **WHICH FILE A PRICE CAME FROM IS THE WHOLE CORRECTNESS OF THIS** -- see
+    CASH_STATES for what reading one of the two did to the 2026-10-16 letter.
+    Each row is moved to the day it describes, and then:
+
+      ONE CUT PER TRADING DAY, FINAL PREFERRED. The final file is the same
+      day's trade completed -- more head, usually a wider range -- so taking
+      both would count the day twice and let the partial drag the range. This
+      is the rule the dashboard's daily_price_state already states: "final cut
+      preferred over the 1:30 pm cut".
+
     Same class filter as the evening letter -- STEER and HEIFER only. Adding
     MIXED or the ALL BEEF TYPE rollup widens the range, and DAIRYBRED drags
-    dressed down.
+    dressed down. Only the "Total all grades" roll-up is read; see
+    CASH_GRADE_TOTAL for the double count that caused.
     """
     monday = as_of - timedelta(days=as_of.weekday())
-    span = [monday + timedelta(days=i) for i in range((as_of - monday).days + 1)
-            if (monday + timedelta(days=i)).weekday() < 5]
 
     out = {"from": monday.isoformat(), "to": as_of.isoformat(), "regions": {}}
-    for slug, label in CASH_STATES:
-        live_lo, live_hi, dr_lo, dr_hi, head, days = [], [], [], [], 0.0, set()
-        for day in span:
-            for row in _cash_rows(slug, day):
-                if str(row.get("purchase_type_code", "")).strip() != "NEGOTIATED CASH":
-                    continue
-                if str(row.get("class_desc", "")).strip() not in CASH_CLASSES:
-                    continue
-                lo, hi = _num(row.get("price_range_low")), _num(row.get("price_range_high"))
-                if lo is None or hi is None:
-                    continue
-                basis = str(row.get("selling_basis_desc", "")).strip()
-                if basis == "LIVE FOB":
-                    live_lo.append(lo); live_hi.append(hi)
-                    head += _num(row.get("head_count")) or 0
-                    days.add(day)
-                elif basis.startswith("DRESSED"):
-                    dr_lo.append(lo); dr_hi.append(hi)
-                    days.add(day)
+    for entry in CASH_STATES:
+        label = entry[0]
+        by_day = _cash_by_trading_day(entry, monday, as_of)
+        lows = {"live": [], "dressed": []}
+        highs = {"live": [], "dressed": []}
+        head, days = 0.0, set()
+        for traded in sorted(by_day):
+            cuts = by_day[traded]
+            chosen = cuts.get("final") or cuts.get("cut") or {}
+            for key, rows in chosen.items():
+                for lo, hi, hd in rows:
+                    lows[key].append(lo)
+                    highs[key].append(hi)
+                    if key == "live":
+                        head += hd
+                if rows:
+                    days.add(traded)
         out["regions"][label] = {
-            "live_low": min(live_lo) if live_lo else None,
-            "live_high": max(live_hi) if live_hi else None,
-            "dressed_low": min(dr_lo) if dr_lo else None,
-            "dressed_high": max(dr_hi) if dr_hi else None,
+            "live_low": min(lows["live"]) if lows["live"] else None,
+            "live_high": max(highs["live"]) if highs["live"] else None,
+            "dressed_low": min(lows["dressed"]) if lows["dressed"] else None,
+            "dressed_high": max(highs["dressed"]) if highs["dressed"] else None,
             "head": int(head) or None,
             "days": len(days),
-            "undefined": not live_lo and not dr_lo,
+            "undefined": not lows["live"] and not lows["dressed"],
         }
     return out
 
@@ -1589,7 +1732,7 @@ def _load_index_dates():
     return mod
 
 
-def fetch_feeder_index() -> dict:
+def fetch_feeder_index(today: date = None) -> dict:
     """
     JSA's OWN feeder cattle index estimate, as the dashboard headlines it.
 
@@ -1685,7 +1828,16 @@ def fetch_feeder_index() -> dict:
     value = merged[headline]
 
     # Prior available date, for the day-on-day move.
-    earlier = sorted(d for d in available if d < headline)
+    #
+    # WEEKENDS ARE FILLER, NOT SESSIONS. fci_daily carries Friday forward over
+    # Saturday and Sunday -- 2026-10-17 and 10-18 both hold Friday's
+    # 343.45715 to the digit, with no same-day price on either. Differencing
+    # against one of those on a Monday or Tuesday gives a move against Friday
+    # that is a cent out from CME's own, because merged holds CME's rounded
+    # 343.45 for Friday and our unrounded 343.457 for the filler: on
+    # 2026-10-20 that printed -1.30 where CME's REPORTED_CHANGE said -1.29.
+    # One cent, on the figure the letter and the dashboard must agree about.
+    earlier = sorted(d for d in available if d < headline and d.weekday() < 5)
     prev_val = merged.get(earlier[-1]) if earlier else None
 
     # ROUND BOTH VALUES TO DISPLAY PRECISION BEFORE DIFFERENCING, not after,
@@ -1740,14 +1892,88 @@ def fetch_feeder_index() -> dict:
     # estimate for that same day when we do not. Those agree closely by
     # construction: for 2026-10-06 ours was 337.869294 against CME's 337.87.
     # Either way it can never be the unfinished forward day.
-    settled = sorted(d for d in merged if d < headline)
+    # IT IS KEYED ON THE DATES CME HAS PRINTED, not on "the last date before
+    # the headline", which is what it was until 2026-10-20. That rule failed
+    # in two ways at once, and both were live that morning while Ross was
+    # writing: *"the feeder cattle index isn't updating to either today's FCI
+    # -- which the CME just released -- or using our JSA Daily FCI Estimate.
+    # It's stale with yesterday's CME fci."*
+    #
+    # FIRST, fci_daily CARRIES FRIDAY FORWARD OVER THE WEEKEND. 2026-10-17 and
+    # 10-18 both hold Friday's 343.45715, to the digit. They are filler, not
+    # sessions -- no auction trades on a Sunday -- and "the last date before
+    # the headline" landed on one.
+    #
+    # SECOND, THE HEADLINE DEGRADES ONTO A REAL SESSION. headline_index_date()
+    # returns the first business day after CME's last file ONLY while we hold
+    # an estimate for it; when CME has caught up with everything in fci_daily
+    # it falls back to max(available), which is deliberate and documented
+    # there. So on a morning where the MARS ingest has not yet produced
+    # today's estimate, the headline sits on the newest REAL session -- and
+    # `d < headline` then excludes precisely the index CME just published.
+    #
+    # Together, on 2026-10-20:
+    #
+    #     headline   342.16  10-19   (CME had printed this that morning)
+    #     published  343.46  10-18   a Sunday, Friday's number, change 0.00
+    #
+    # A date CME has printed is a finished session by construction, so keying
+    # on cme_dates keeps the property the old rule was written for -- it can
+    # never be the unfinished forward day -- without depending on the headline
+    # at all. The two are answering different questions and should not be
+    # chained.
+    #
+    # THE PRIOR IS THE PREVIOUS PRINTED DATE, NOT THE PREVIOUS CALENDAR ROW,
+    # and that is the same bug in the change. Against Sunday's filler the move
+    # read -1.30; against Friday, which is what CME differenced, it is -1.29 --
+    # exactly CME's own REPORTED_CHANGE for 10-19. That column is a free audit
+    # of this arithmetic and `tests/test_feeder_index.py` uses it.
+    # THE MOST RECENT COMPLETED SESSION, WHOEVER HOLDS IT -- CME's print for
+    # a date they have archived, ours for one they have not. Ross's call,
+    # 2026-10-21, after this line sat on Monday's index for two days.
+    #
+    # IT WAS KEYED ON cme_dates FOR A DAY AND THAT WAS TOO NARROW. CME
+    # disseminates the index on their market-data feed the moment they
+    # compute it -- which is where Ross sees it, on QST -- but the only
+    # channel this pipeline reads is the FTP settlement-calculation archive,
+    # `ftp.cmegroup.com/cash_settled_commodity_index_prices/...`, and that
+    # lands the NEXT DAY between about 13:00 and 14:35 CT. On 2026-10-21 it
+    # had not landed at all by 16:14, so the letter was still printing 10/19
+    # while his screen showed 10/20. Nothing was broken; we were reading a
+    # slower channel.
+    #
+    # WHAT MAKES OUR OWN NUMBER ACCEPTABLE HERE is that it is the same
+    # number. Over the 21 days both series cover, the reconstruction differs
+    # from CME's print by at most **0.022** and a median of 0.004 -- 10/19
+    # was ours 342.17 against their 342.16. So "most recent completed
+    # session" costs a rounding cent and buys a day of currency.
+    #
+    # COMPLETED MEANS STRICTLY BEFORE TODAY, in Central, and that is the
+    # safety property the old `d < headline` rule was really protecting: it
+    # can never be the unfinished forward day. Today's row exists from the
+    # moment the first barn reports -- 2026-10-21 stood at 248 locations and
+    # 868 same-day head against Tuesday's 303 and 19,504 -- and quoting that
+    # as the index is the 2026-10-07 defect over again.
+    #
+    # Weekdays only: fci_daily carries Friday forward across Saturday and
+    # Sunday (10/17 and 10/18 both hold 343.45715 to the digit), and those
+    # rows are filler, not sessions.
+    # INJECTABLE, so a test is not a function of the day it runs on.
+    # What counts as a completed session depends on today's date, and a
+    # test that reads the real clock passes in October and fails in
+    # November for no reason anyone will remember.
+    today_ct = today or config.now_central().date()
+    completed = sorted(d for d in merged
+                       if d < today_ct and d.weekday() < 5)
+    s_date = completed[-1] if completed else None
+    s_prev_date = completed[-2] if len(completed) > 1 else None
+
     pub_block = None
-    if settled:
-        s_date = settled[-1]
+    if s_date is not None:
         s_val = round(merged[s_date], 2)
         # Same round-then-subtract convention as below: a reader holding two
         # letters subtracts the printed figures and must get this.
-        s_prev = round(merged[settled[-2]], 2) if len(settled) > 1 else None
+        s_prev = round(merged[s_prev_date], 2) if s_prev_date is not None else None
         from_cme = s_date in cme_dates
         pub_block = {
             "value": s_val,

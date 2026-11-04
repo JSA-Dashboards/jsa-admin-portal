@@ -283,7 +283,7 @@ def attention_banner(data):
 
 
 data = store.public_data()
-view_only = st.query_params.get("view") == "1"  # client link: no Admin tab, no banner
+view_only = __import__("portal_view").is_client() or st.query_params.get("view") == "1"  # client link: no Admin tab, no banner
 n_wait = t.attention_count(data)
 names = ["Snapshot", "What\u2019s included", "Change log"] + ([] if view_only else [f"Admin ({n_wait})" if n_wait else "Admin"])
 tabs = st.tabs(names)

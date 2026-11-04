@@ -1,0 +1,249 @@
+{
+ "_note": "`years` is complete years only, ending before the live weekly window; it is what the page reads. `check_years` covers the LIVE window and is for tests alone -- the page must never read it, or a year would have two sources.",
+ "_source": "USDA NASS QuickStats bulk dump qs.animals_products_20261103.txt.gz",
+ "check_years": {
+  "2019": {
+   "fed_carcass_lb": 853.56,
+   "fed_head": 26116700,
+   "heifer_carcass_lb": 813.0,
+   "heifer_head": 9818900,
+   "steer_carcass_lb": 878.0,
+   "steer_head": 16297800
+  },
+  "2020": {
+   "fed_carcass_lb": 880.75,
+   "fed_head": 25301700,
+   "heifer_carcass_lb": 835.0,
+   "heifer_head": 9445400,
+   "steer_carcass_lb": 908.0,
+   "steer_head": 15856300
+  },
+  "2021": {
+   "fed_carcass_lb": 878.39,
+   "fed_head": 25972300,
+   "heifer_carcass_lb": 833.0,
+   "heifer_head": 9825000,
+   "steer_carcass_lb": 906.0,
+   "steer_head": 16147300
+  },
+  "2022": {
+   "fed_carcass_lb": 880.22,
+   "fed_head": 26103000,
+   "heifer_carcass_lb": 836.0,
+   "heifer_head": 10292000,
+   "steer_carcass_lb": 909.0,
+   "steer_head": 15811000
+  },
+  "2023": {
+   "fed_carcass_lb": 876.43,
+   "fed_head": 25109100,
+   "heifer_carcass_lb": 829.0,
+   "heifer_head": 10033600,
+   "steer_carcass_lb": 908.0,
+   "steer_head": 15075500
+  },
+  "2024": {
+   "fed_carcass_lb": 898.04,
+   "fed_head": 25187600,
+   "heifer_carcass_lb": 848.0,
+   "heifer_head": 10003500,
+   "steer_carcass_lb": 931.0,
+   "steer_head": 15184100
+  },
+  "2025": {
+   "fed_carcass_lb": 922.27,
+   "fed_head": 23813000,
+   "heifer_carcass_lb": 871.0,
+   "heifer_head": 9277200,
+   "steer_carcass_lb": 955.0,
+   "steer_head": 14535800
+  }
+ },
+ "live_from": 2019,
+ "years": {
+  "1996": {
+   "fed_carcass_lb": 743.04,
+   "fed_head": 27901700,
+   "heifer_carcass_lb": 705.0,
+   "heifer_head": 10501700,
+   "steer_carcass_lb": 766.0,
+   "steer_head": 17400000
+  },
+  "1997": {
+   "fed_carcass_lb": 739.81,
+   "fed_head": 28459500,
+   "heifer_carcass_lb": 703.0,
+   "heifer_head": 11287400,
+   "steer_carcass_lb": 764.0,
+   "steer_head": 17172100
+  },
+  "1998": {
+   "fed_carcass_lb": 763.24,
+   "fed_head": 28328800,
+   "heifer_carcass_lb": 724.0,
+   "heifer_head": 11227700,
+   "steer_carcass_lb": 789.0,
+   "steer_head": 17101100
+  },
+  "1999": {
+   "fed_carcass_lb": 766.72,
+   "fed_head": 29256400,
+   "heifer_carcass_lb": 727.0,
+   "heifer_head": 11648400,
+   "steer_carcass_lb": 793.0,
+   "steer_head": 17608000
+  },
+  "2000": {
+   "fed_carcass_lb": 772.01,
+   "fed_head": 29592300,
+   "heifer_carcass_lb": 733.0,
+   "heifer_head": 11834500,
+   "steer_carcass_lb": 798.0,
+   "steer_head": 17757800
+  },
+  "2001": {
+   "fed_carcass_lb": 772.43,
+   "fed_head": 28476000,
+   "heifer_carcass_lb": 734.0,
+   "heifer_head": 11378900,
+   "steer_carcass_lb": 798.0,
+   "steer_head": 17097100
+  },
+  "2002": {
+   "fed_carcass_lb": 795.49,
+   "fed_head": 28864500,
+   "heifer_carcass_lb": 753.0,
+   "heifer_head": 11342000,
+   "steer_carcass_lb": 823.0,
+   "steer_head": 17522500
+  },
+  "2003": {
+   "fed_carcass_lb": 775.16,
+   "fed_head": 28255100,
+   "heifer_carcass_lb": 732.0,
+   "heifer_head": 11078200,
+   "steer_carcass_lb": 803.0,
+   "steer_head": 17176900
+  },
+  "2004": {
+   "fed_carcass_lb": 780.27,
+   "fed_head": 26536700,
+   "heifer_carcass_lb": 740.0,
+   "heifer_head": 10344600,
+   "steer_carcass_lb": 806.0,
+   "steer_head": 16192100
+  },
+  "2005": {
+   "fed_carcass_lb": 792.37,
+   "fed_head": 26558100,
+   "heifer_carcass_lb": 750.0,
+   "heifer_head": 9761300,
+   "steer_carcass_lb": 817.0,
+   "steer_head": 16796800
+  },
+  "2006": {
+   "fed_carcass_lb": 809.26,
+   "fed_head": 27297800,
+   "heifer_carcass_lb": 767.0,
+   "heifer_head": 9819500,
+   "steer_carcass_lb": 833.0,
+   "steer_head": 17478300
+  },
+  "2007": {
+   "fed_carcass_lb": 805.5,
+   "fed_head": 27492000,
+   "heifer_carcass_lb": 764.0,
+   "heifer_head": 10206800,
+   "steer_carcass_lb": 830.0,
+   "steer_head": 17285200
+  },
+  "2008": {
+   "fed_carcass_lb": 813.37,
+   "fed_head": 27040000,
+   "heifer_carcass_lb": 772.0,
+   "heifer_head": 10090900,
+   "steer_carcass_lb": 838.0,
+   "steer_head": 16949100
+  },
+  "2009": {
+   "fed_carcass_lb": 822.69,
+   "fed_head": 26054700,
+   "heifer_carcass_lb": 782.0,
+   "heifer_head": 9743000,
+   "steer_carcass_lb": 847.0,
+   "steer_head": 16311700
+  },
+  "2010": {
+   "fed_carcass_lb": 809.74,
+   "fed_head": 26643300,
+   "heifer_carcass_lb": 768.0,
+   "heifer_head": 10046900,
+   "steer_carcass_lb": 835.0,
+   "steer_head": 16596400
+  },
+  "2011": {
+   "fed_carcass_lb": 815.82,
+   "fed_head": 26264400,
+   "heifer_carcass_lb": 773.0,
+   "heifer_head": 9725800,
+   "steer_carcass_lb": 841.0,
+   "steer_head": 16538600
+  },
+  "2012": {
+   "fed_carcass_lb": 834.58,
+   "fed_head": 25428500,
+   "heifer_carcass_lb": 792.0,
+   "heifer_head": 9269000,
+   "steer_carcass_lb": 859.0,
+   "steer_head": 16159500
+  },
+  "2013": {
+   "fed_carcass_lb": 837.93,
+   "fed_head": 25134900,
+   "heifer_carcass_lb": 794.0,
+   "heifer_head": 9131500,
+   "steer_carcass_lb": 863.0,
+   "steer_head": 16003400
+  },
+  "2014": {
+   "fed_carcass_lb": 846.61,
+   "fed_head": 23754100,
+   "heifer_carcass_lb": 800.0,
+   "heifer_head": 8376600,
+   "steer_carcass_lb": 872.0,
+   "steer_head": 15377500
+  },
+  "2015": {
+   "fed_carcass_lb": 868.02,
+   "fed_head": 22682700,
+   "heifer_carcass_lb": 818.0,
+   "heifer_head": 7351300,
+   "steer_carcass_lb": 892.0,
+   "steer_head": 15331400
+  },
+  "2016": {
+   "fed_carcass_lb": 869.04,
+   "fed_head": 24192500,
+   "heifer_carcass_lb": 822.0,
+   "heifer_head": 7698000,
+   "steer_carcass_lb": 891.0,
+   "steer_head": 16494500
+  },
+  "2017": {
+   "fed_carcass_lb": 854.95,
+   "fed_head": 25381700,
+   "heifer_carcass_lb": 812.0,
+   "heifer_head": 8611100,
+   "steer_carcass_lb": 877.0,
+   "steer_head": 16770600
+  },
+  "2018": {
+   "fed_carcass_lb": 857.62,
+   "fed_head": 25803500,
+   "heifer_carcass_lb": 817.0,
+   "heifer_head": 9166800,
+   "steer_carcass_lb": 880.0,
+   "steer_head": 16636700
+  }
+ }
+}

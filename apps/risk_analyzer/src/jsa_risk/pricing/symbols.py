@@ -268,7 +268,7 @@ def option_expiry_date(raw_label: Optional[str], commodity: CommoditySpec = CORN
     month/year, not the underlying it prices off -- an Oct option expires in September).
     None when the symbol can't be read or the commodity's rule isn't modelled.
 
-    Corn/soybeans: the CBOT rule above. Live cattle: first Friday of the contract month
+    Corn/soybeans/soybean meal: the CBOT rule above. Live cattle: first Friday of the contract month
     (checked against CME DataMine's Last Trade Dates). Feeder cattle: last Thursday of the
     contract month. Weekly/short-dated options aren't covered. A holiday on the expiry day moves it to the
     prior business day (Christmas, New Year's Day and Good Friday did, in 2026-27)."""
@@ -276,7 +276,7 @@ def option_expiry_date(raw_label: Optional[str], commodity: CommoditySpec = CORN
     if len(s) < 5 or s[2] not in MONTH_NUMBERS or not s[3:5].isdigit():
         return None
     month, year = MONTH_NUMBERS[s[2]], 2000 + int(s[3:5])
-    if commodity.code in ("ZC", "ZS"):
+    if commodity.code in ("ZC", "ZS", "ZM"):
         return _cbot_grain_option_expiry(year, month)
     if commodity.code == "LE":
         return _prior_business_day(_nth_weekday(year, month, 4, 1))

@@ -1,6 +1,6 @@
 # JSA Admin Portal
 
-A single Streamlit process (`Home.py`) that merges ~20 previously standalone
+A single Streamlit process (`Home.py`; `Client.py` is the same shell for clients, see "Client portal") that merges ~20 previously standalone
 dashboards under `apps/`. Most of what bites here comes from that merge.
 
 ## `apps/<name>/` is a generated mirror. Never edit it here.
@@ -72,6 +72,56 @@ Cloud lacks too.
 
 History: the tab briefly embedded that portal in an iframe (2026-10-15) and six of these mirrors were deleted
 and then restored the same day when the tiles were wanted back; the iframe version is in git history.
+
+## Client portal (`Client.py`, added 2026-11-04)
+
+The same codebase serves clients: a SECOND Streamlit Cloud app (jsa-dashboards workspace, this repo, branch
+`master`, **main file `Client.py`**) next to the staff app on `Home.py`. Modelled on the Livestock Portal's
+`Client.py`. `Client.py` sets `JSA_PORTAL_VIEW=client` and `portal_view.set_client()`, then `runpy`s `Home.py`; which
+portal a deployment is comes from the main file it points at, never a secret, so a client deployment cannot come up
+as the staff portal (and a lost secret cannot turn the staff one into the client one).
+
+What `CLIENT` (in `Home.py`) changes:
+- **Login:** `require_client_login()` (`shared/auth.py`) with one shared `CLIENT_PASSWORD`. It FAILS CLOSED: with no
+  password configured the page says it is closed. Different from `ADMIN_PASSWORD`, so handing it out never opens staff.
+- **Tiles:** DEFAULT-DENY. `CLIENT_PAGES` lists the url_paths clients get; anything not listed is neither shown nor
+  registered with `st.navigation` (so its URL does not route). `test_client_portal.py` fails if a new tile is in neither
+  CLIENT_PAGES nor the staff-only set. Left off: CSO & Spread Risk Analyzer (a Coming soon tile instead), RMA Production
+  Map, Teams Broadcast, Morning Financial Wire, Grain Marketing Desk, and the Livestock staff tools (Daily Cattle
+  Reports, Cattle Market Board). Farmer Selling Survey is shown under **Cash Grain** (`CLIENT_CATEGORY`).
+- **Price strip** (`quotes.py`, rendered above the tabs): nearby Corn, Chi Platts ethanol, SRW, HRW, Soybeans, Meal,
+  Soy oil and the Soy crush, each with its last settle and change from the prior settle. Nearby rolls after first notice
+  day (the COT dashboard's own `futures_move.py`, loaded from `apps/cftc_cot`), both ends of a change on the same
+  contract. Grains come from `JSA.COST_OF_CARRY.FUTURES_SETTLEMENTS` (filled 4:30pm CT, so the strip reads the prior
+  session until then); Chi Platts is the CME Chicago Ethanol futures settle in `JSA.BASIS_TRACKER.ETHANOL_FUTURES` (a
+  futures proxy, not the Platts print); the crush is the board crush on the soybean nearby's month. End-of-day, not live.
+  **Check CME's terms for showing settlements to clients before this goes out.**
+- **Read-only mode of each app**, structural and set by the client flag: Basis Tracker reads `VIEW_ONLY` (Home sets it);
+  River FOB, China Soybeans, Farmer Selling Survey (Admin tab, sidebar upload) and Grain Seasonal (Ask AI tab) are patched
+  by `replace` pairs in `sync/apps.json` that call `portal_view.is_client()` / `portal_view.tabs(hide=...)`, which are
+  no-ops for staff; the yield tile (`sync/templates/yield_portal.py`) shows only Explore and Report text, exactly what
+  the yield portal's own `?view=1` link shows (variety trials await Ohio State's permission, strip trials are ISA's).
+  The 13 livestock pages that import `portal_view` hide their working tabs, raw Data tabs, analyst-estimate inputs
+  (COF Recap), Spread Builder / Chat and Refresh buttons on their own (63 tests in the livestock repo pin it).
+- **Standing rule for the grain apps, same as the livestock view's:** a client gets no data-entry, upload, admin, AI-chat
+  or cache-refresh control. Session-only what-if inputs (the calculators: Cost of Carry, the two crush pages, Risk
+  Analyzer's positions, Mexican feeder scenario boxes) stay; they write nothing anyone else sees. Done by `replace`
+  pairs in `sync/apps.json` (`is_client()` / `staff_expander` / `portal_view.tabs(hide=...)`), all no-ops for staff:
+  Refresh/Reload buttons (Cost of Carry, Grain Seasonal, CFTC COT, EIA, Major Exporters, Vessel Lineup, River FOB,
+  Domestic Production), Rail FOB's "Data source" expander (USDA token + live refresh), Vessel Lineup's file uploads,
+  and Grain Seasonal's **Ask AI and H/L Forecast tabs** (High/Low Model is a Coming-soon tile for now; take
+  `"📊 H/L Forecast"` out of the hide set to show it).
+- **Risk Analyzer writes to shared tables** (contract marks, import presets) when a user types a price or saves a preset.
+  In the client view the wrapper sets `st.session_state["_session_only"]`, which the app's `state.session_only()` honors:
+  a client's price stays in their session and the preset boxes disappear. That code lives in the jsa-risk-analyzer repo
+  (`state.py`, `pages/import_excel.py`, `tests/test_session_only.py`); until it is pushed there and synced, the flag does nothing.
+- **Secrets for the client app:** the Snowflake block (no `SNOWFLAKE_SCHEMA`), `USE_SNOWFLAKE`, `MASSIVE_API_KEY`,
+  `NASS_API_KEY`, `CLIENT_PASSWORD`. NOT `ADMIN_PASSWORD`, `GRAPH_*`, `MARS_API_KEY` or `ANTHROPIC_API_KEY`.
+- **Known gaps to revisit:** (1) the client app runs as the same Snowflake service user, which can WRITE some schemas;
+  a read-only role would make "read-only" a property of the database too (check that apps that run `CREATE TABLE IF NOT
+  EXISTS` on start still load first). (2) Risk Analyzer was built client-facing (session-only book) but writes shared
+  reference marks/IV; the standalone app has the same behaviour. (3) Grain Seasonal's "H/L Forecast" tab is still shown.
+- Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.
 
 ## Lazy tabs: only the open tab runs (2026-10-12)
 

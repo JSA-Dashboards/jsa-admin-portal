@@ -606,7 +606,7 @@ st.markdown(
 
 
 # Read-only / share mode: append ?view=1 to the URL. Exempt from the password.
-VIEW_ONLY = str(st.query_params.get("view", "")).lower() in (
+VIEW_ONLY = __import__("portal_view").is_client() or str(st.query_params.get("view", "")).lower() in (
     "1", "true", "yes", "read", "readonly", "view")
 
 

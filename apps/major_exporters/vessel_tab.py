@@ -77,7 +77,7 @@ def render() -> None:
     with head_l:
         st.caption("United States · Brazil · Argentina: the vessel line-up now, and what has sailed, from the daily port reports.")
     with head_r:
-        if st.button("Reload data", icon=":material/refresh:", key="vessel_reload", width="stretch"):
+        if not __import__("portal_view").is_client() and st.button("Reload data", icon=":material/refresh:", key="vessel_reload", width="stretch"):
             _clear_caches()                                              # before the data is read below, so one click is enough
     info = _data()
     facts = info["facts.db"]

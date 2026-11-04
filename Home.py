@@ -1,6 +1,10 @@
 """
 JSA Admin Portal — shared shell for JPSI's internal dashboards.
 
+THE SAME FILE SERVES THE CLIENT PORTAL. `Client.py` (a second Streamlit main file) sets JSA_PORTAL_VIEW=client
+before running this one, and `CLIENT` below then narrows the tiles to CLIENT_PAGES, swaps the login for the
+shared client password, adds the nearby-price strip and keeps every staff door shut. See CLAUDE.md "Client portal".
+
 Makes the one set_page_config call allowed per multi-page run, sets every
 merged dashboard's env vars ONCE at process startup (never again — safe for
 concurrent sessions once this is deployed multi-user), runs the single shared
@@ -12,10 +16,20 @@ from pathlib import Path
 
 import streamlit as st
 
-from shared.auth import require_admin_login
+import portal_view
+import quotes
+from shared.auth import require_admin_login, require_client_login
 from shared.fresh_modules import drop_changed_modules
 
 HERE = Path(__file__).parent
+
+# WHICH PORTAL THIS IS is decided by the main file the deployment points at, not by a secret: Client.py sets this
+# environment value (and nothing else ever does), so a client deployment cannot come up as the staff portal and
+# the staff one cannot come up as the client portal. It also re-pins portal_view, whose module global is lost if
+# drop_changed_modules() reloads it.
+CLIENT = os.environ.get("JSA_PORTAL_VIEW") == "client"
+if CLIENT:
+    portal_view.set_client()
 
 # Runs first on every rerun: a redeploy re-reads each page's script but keeps
 # the modules it imported, so changed sibling modules would otherwise serve old code.
@@ -27,7 +41,7 @@ def _asset(name: str) -> str:
 
 
 st.set_page_config(
-    page_title="JSA Admin Portal",
+    page_title="JSA Client Portal" if CLIENT else "JSA Admin Portal",
     page_icon=_asset("jsa_favicon.png"),
     layout="wide",
 )
@@ -97,11 +111,18 @@ try:
 except Exception:
     pass  # st.secrets not available (no secrets.toml) — fine locally
 
-require_admin_login()
+if CLIENT:
+    require_client_login()
+    # Read-only builds of the apps that have one (Basis Tracker reads this), and NO staff flag: the staff tools are not
+    # registered below either, so there is nothing for _portal_is_admin to open.
+    os.environ["VIEW_ONLY"] = "1"
+    st.session_state.pop("_portal_is_admin", None)
+else:
+    require_admin_login()
 
-# The livestock portal's staff tools (weekly_reports, market_board) ask portal_auth.is_admin(), which is
-# a passphrase there. This portal's own login is the stronger gate and already passed, so it counts.
-st.session_state["_portal_is_admin"] = True
+    # The livestock portal's staff tools (weekly_reports, market_board) ask portal_auth.is_admin(), which is
+    # a passphrase there. This portal's own login is the stronger gate and already passed, so it counts.
+    st.session_state["_portal_is_admin"] = True
 
 # ── Landing page ──────────────────────────────────────────────────────────────
 # Order here is display order — dashboards are grouped by "category" on the
@@ -249,6 +270,34 @@ COMING_SOON = [
     "High/Low Model",
 ]
 
+# ── Client portal ────────────────────────────────────────────────────────────
+# DEFAULT-DENY: a client sees only what is listed here, so a dashboard added to LIVE_DASHBOARDS later is staff-only
+# until someone adds its url_path to this set. Left off on purpose: CSO & Spread Risk Analyzer (a coming-soon tile
+# instead), RMA Production Map, Teams Broadcast, Morning Financial Wire, Grain Marketing Desk, and the livestock
+# portal's two staff tools (Daily Cattle Reports, Cattle Market Board).
+CLIENT_PAGES = {
+    # Cash Grain
+    "basis-tracker", "river-fob", "rail-fob", "farmer-selling-survey",
+    # Futures, Options & Spreads
+    "cost-of-carry", "grain-seasonal-spreads", "cftc-cot", "risk-analyzer",
+    # Supply & Demand
+    "domestic-production", "crop-progress", "yield-observations", "eia-energy", "wasde",
+    # Grain Flows
+    "major-exporters", "rail-shipments", "vessel-lineup", "china-soybeans",
+    # Livestock
+    "cme-feeder-cattle-index", "livestock-seasonal-spreads", "livestock-cot", "cash-trade", "beef-cutout",
+    "mexican-feeder-imports", "canadian-feeder-cattle", "beef-trimmings", "beef-trade", "beef-weight",
+    "us-cow-herd", "cattle-on-feed", "livestock-inventory", "fed-cattle-crush", "backgrounding-crush",
+}
+# Where a tile sits for clients when that differs from where staff see it.
+CLIENT_CATEGORY = {"farmer-selling-survey": "Cash Grain"}
+CLIENT_COMING_SOON = ["CSO & Spread Risk Analyzer", "High/Low Model"]
+
+if CLIENT:
+    LIVE_DASHBOARDS = [dict(d, category=CLIENT_CATEGORY.get(d["url_path"], d["category"]))
+                       for d in LIVE_DASHBOARDS if d["url_path"] in CLIENT_PAGES]
+    COMING_SOON = CLIENT_COMING_SOON
+
 _TILE_CSS = """
 <style>
 #MainMenu {visibility: hidden;}
@@ -364,12 +413,15 @@ def render_home():
         st.markdown(
             "<div style='padding-top:14px'>"
             "<h2 style='margin:0;color:#32373c;font-family:\"EB Garamond\",Georgia,serif'>"
-            "JSA Admin Portal</h2>"
+            + ("JSA Client Portal" if CLIENT else "JSA Admin Portal") +
+            "</h2>"
             "<div style='color:#64748b'>John Stewart &amp; Associates · pick a dashboard</div>"
             "</div>",
             unsafe_allow_html=True,
         )
 
+    if CLIENT:
+        quotes.render()   # nearby prices with the daily change, above the tiles
     st.write("")
 
     # Two overall tabs. Only the open one runs (on_change="rerun" + .open), so the
@@ -413,7 +465,8 @@ def _render_tiles(include):
 
 def _render_grain_tiles():
     _render_tiles(lambda cat: cat != "Livestock")
-    st.caption("Pilot migrated the first three dashboards into this shell — the rest follow the same pattern.")
+    if not CLIENT:
+        st.caption("Pilot migrated the first three dashboards into this shell — the rest follow the same pattern.")
     TILES_PER_ROW = 4
     soon_cols = st.columns(TILES_PER_ROW)
     for i, title in enumerate(COMING_SOON):
@@ -427,7 +480,8 @@ def _render_grain_tiles():
 
 def _render_livestock():
     _render_tiles(lambda cat: cat == "Livestock")
-    st.caption(f"These also run as the standalone [Livestock Portal]({LIVESTOCK_PORTAL_URL}).")
+    if not CLIENT:
+        st.caption(f"These also run as the standalone [Livestock Portal]({LIVESTOCK_PORTAL_URL}).")
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)

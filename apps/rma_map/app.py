@@ -20,8 +20,8 @@ from pathlib import Path
 from PIL import Image
 import geopandas as gpd
 from shapely.geometry import shape
-from demand_module import load_asd_demand, load_canola_asd, livestock_carried
-import heat_map
+from rma_demand_module import load_asd_demand, load_canola_asd, livestock_carried
+import rma_heat_map as heat_map
 
 _HERE = Path(__file__).parent
 pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
@@ -1027,8 +1027,8 @@ def _wc_class_param(params: dict, crop: str, cache_ver, county: bool) -> None:
 def _wc_state_pct_raw(year: int, series: str, cache_ver: str) -> dict:
     """{state: percent} of one wheat sub-class from NASS 'PCT BY TYPE' (best reference period per state).
     Raises on a failed call so the failure is not cached; NASS answers 400 when the series does not exist."""
-    if not NASS_API_KEY:
-        raise RuntimeError("NASS_API_KEY is not set")
+    if not NASS_API_KEY and not _cache_ready():
+        raise RuntimeError("NASS_API_KEY is not set and no NASS cache is configured")
     params = {
         "key": NASS_API_KEY, "source_desc": "SURVEY", "sector_desc": "CROPS", "agg_level_desc": "STATE",
         "year": str(year), "format": "JSON", "commodity_desc": "WHEAT", "class_desc": series,
@@ -1243,9 +1243,26 @@ def _ts_adjust(df, crop: str, year: int, stat_type: str, cols):
     return out
 
 
+def _cache_ready() -> bool:
+    """True when this app has a NASS cache backend configured (Snowflake or DATABASE_URL)."""
+    try:
+        from rma_nass_cache_client import _use_sf, _database_url
+        return bool(_use_sf() or _database_url())
+    except Exception:
+        return False
+
+
 def _nass_json(url: str, timeout: int = 45) -> dict:
-    """One NASS call that rides out a short throttle (403/429/5xx) with a few waits before giving up.
-    A 400 (NASS's answer when a series has no rows) and every other failure is raised for the caller."""
+    """One NASS query, read from the shared cache that usda-nass-etl fills (nass_cache_client.fetch_cached, keyed by the
+    query's parameters, so the params here must match jobs/rma_map.py + jobs/asd_tab.py exactly).
+    The cache answers {"data": []} both for a query it does not hold and for one NASS has no rows for. While a NASS_API_KEY
+    secret is still set, an empty cache answer falls through to a live call (a safety net); with no key the empty answer
+    stands. Live calls ride out a short throttle (403/429/5xx) with a few waits. A 400 and every other failure is raised."""
+    if _cache_ready():
+        from rma_nass_cache_client import fetch_cached
+        cached = fetch_cached(dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query)))
+        if cached.get("data") or not NASS_API_KEY:
+            return cached
     for i in range(4):
         try:
             with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -1531,8 +1548,8 @@ def _load_nass_county_cached(crop: str, year: int = 2025,
     issues that can cause stale or incorrect return values.
     Returns [State, County, fips, Production]. Raises on NASS failure (never cached).
     """
-    if not NASS_API_KEY:
-        raise RuntimeError("NASS_API_KEY is not set")
+    if not NASS_API_KEY and not _cache_ready():
+        raise RuntimeError("NASS_API_KEY is not set and no NASS cache is configured")
     params = {
         "key":               NASS_API_KEY,
         "source_desc":       "SURVEY",
@@ -1600,24 +1617,32 @@ def _load_nass_county_cached(crop: str, year: int = 2025,
 # Missing counties are estimated via district-multiplier applied to olympic-avg
 # historical shares, then scaled to reconcile with NASS OTHER COUNTIES totals.
 
-@st.cache_data(show_spinner=False)
 def _load_county_raw_for_est_raw(crop: str, state: str, year: int,
                                   stat_type: str, cache_ver: str) -> pd.DataFrame:
-    """County rows INCLUDING the OTHER COUNTIES catch-all for any stat type.
-    Used only for the estimation pipeline."""
+    """One state's county rows INCLUDING the OTHER COUNTIES catch-all, filtered from the all-states pull below."""
+    try:
+        df = _county_raw_all_states(crop, year, stat_type, cache_ver)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return df
+    return df[df["State"] == state].reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False)
+def _county_raw_all_states(crop: str, year: int, stat_type: str, cache_ver: str) -> pd.DataFrame:
+    """County rows INCLUDING the OTHER COUNTIES catch-all for any stat type, every state in one response (that is the
+    shape the ETL caches; it is also one call instead of one per state). Used only for the estimation pipeline.
+    A failed pull raises, so it is not cached as 'no data'."""
     params = {
         "key": NASS_API_KEY, "source_desc": "SURVEY", "sector_desc": "CROPS",
         "agg_level_desc": "COUNTY", "domain_desc": "TOTAL",
-        "state_alpha": state, "year": str(year), "format": "JSON",
+        "year": str(year), "format": "JSON",
     }
     params.update(NASS_STAT_BASE[stat_type])
     params.update(NASS_CROP_STAT_PARAMS[crop][stat_type])
     _wc_class_param(params, crop, cache_ver, county=True)
-    try:
-        url = NASS_BASE_URL + "?" + urllib.parse.urlencode(params)
-        raw = _nass_json(url)
-    except Exception:
-        return pd.DataFrame()
+    raw = _nass_json(NASS_BASE_URL + "?" + urllib.parse.urlencode(params))
     records = raw.get("data", [])
     if not records:
         return pd.DataFrame()
@@ -4351,7 +4376,7 @@ def main():
 
     # The whole dashboard sits behind one shared password (draw_auth: APP_PASSWORD or DRAW_PASSWORD, Streamlit secrets or the environment). With none set it stays
     # locked, never open. The JSA admin portal pre-authenticates its own users (preauth in its sync/apps.json), so its login is the only gate there.
-    import draw_auth
+    import rma_draw_auth as draw_auth
     if not draw_auth.require_password("JSA Agricultural Intelligence Dashboard"):
         return
 
@@ -8396,7 +8421,7 @@ def main():
     # ═══════════════════════════════
     with tab_rail:
         if tab_rail.open:
-            import rail_map
+            import rma_rail_map as rail_map
             rail_map.render()
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -8404,7 +8429,7 @@ def main():
     # ══════════════════════════════════════════════════════════════════════════
     with tab_draw:
         if tab_draw.open:
-            import draw_tab
+            import rma_draw_tab as draw_tab
             draw_tab.render()
 
     # ═══════════════════════════════

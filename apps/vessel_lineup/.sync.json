@@ -2,7 +2,7 @@
  "branch": "master",
  "commit": "ddae0a97af3a04d31e98c68ef9c65f8ffddfbad9",
  "files": {
-  "app.py": "ef561fb8708fbfdea6436db1ba1874ccf11840037b5a46008c11c287fc645ba4",
+  "app.py": "203263cd877efe05048a0ed3a7a5f5ac5439fa78ad47f89e1629967548d8f0c2",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "fact_model/__init__.py": "3b2fbce07dc79273614dd1834cc2018ab65b7fbd9dadafb6eca2171a5df508ff",
   "fact_model/adjustments.py": "30bb907684f144fb56afd957f127ee984d5c6c9534e377b4ca5a61114b7f1863",

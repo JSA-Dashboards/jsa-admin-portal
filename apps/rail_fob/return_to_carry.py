@@ -240,6 +240,27 @@ def week_index(d: date, crop_year: int) -> int:
     return round((d - first_wednesday(crop_year)).days / 7)
 
 
+def first_september_wednesday(crop_year: int) -> date:
+    """The first Wednesday on or after Sep 1: WEEK 0 of a harvest window of the user's (Kolten 2026-10-19: "start with week zero as Sep 1")."""
+    d = date(crop_year, 9, 1)
+    while d.weekday() != 2:
+        d += timedelta(days=1)
+    return d
+
+
+def report_start_week(crop_year: int) -> int:
+    """The week, counted from week 0 = the first Wednesday of September, of the first Wednesday of October, where the report's window starts:
+    5 when September has five Wednesdays (2026: Sep 2 ... Sep 30, Oct 7), else 4 (2025: Sep 3 ... Sep 24, Oct 1)."""
+    return (first_wednesday(crop_year) - first_september_wednesday(crop_year)).days // 7
+
+
+def window_index(harvest_window: tuple, crop_year: int) -> int:
+    """The weekly-row index (0 = the first Wednesday of October, negative = September) of a harvest window's first week, which is counted
+    from week 0 = the first Wednesday of September: the same weeks from September in every crop year, so a different row in a year whose
+    September has five Wednesdays than in one with four."""
+    return int(harvest_window[0]) - report_start_week(crop_year)
+
+
 def basis_cost(b0: float, f_base: float, rate_pct: float, purchase: date, ship: date, spread_cum: float) -> float:
     """The break-even basis for a shipment on `ship` — the "Basis Cost" row of the report's table: what the harvest
     purchase has to be bid back to for the storage to wash.
@@ -340,7 +361,9 @@ class CropYear:
     spec: Spec = CORN
     window_end: date | None = None           # limit_crop_year(): the day the study was told to stop (None = the whole season)
     carry_tag: str | None = None             # limit_crop_year(): the contract the last week is quoted off, where `season_carry` was banked to
-    b0_window: tuple | None = None           # build_crop_year(harvest_window=...): the user's (first week index, number of weeks) of the average; None = the report's
+    b0_window: tuple | None = None           # build_crop_year(harvest_window=...): the user's (first week, number of weeks) of the average, week 0 = the first Wednesday of September; None = the report's
+    purchase: date | None = None             # set only when a window of the user's opened before the report's and moved the purchase with it: the
+                                             # Wednesday of the first week that earns interest and has a return (else the report's, ~Oct 20)
 
     @property
     def dec_jul_carry(self) -> float | None:
@@ -364,16 +387,20 @@ def build_crop_year(obs: list[dict], futs: dict, crop_year: int, rate_on, spec: 
              return is measured from it (`cy.b0`, `cy.b0_own`); the calculated average is kept in `cy.b0_calc`. None = the calculated one.
              The interest does not depend on it (it runs on the week's cash price), so an override shifts every gross and net return, and
              the best return, by the same amount (calculated - own) and leaves the best WEEK where it was.
-    harvest_window  the user's OWN window for the calculated harvest basis: (first week index, number of weeks), index 0 = the first Wednesday of
-             October (negative = the September Wednesdays before it). It replaces the report's window AND any year-specific one, so the average
-             is taken over the same weeks in every crop year. None = the report's (the first 7 weeks, with the analyst's per-year exceptions).
-             Only which bids are averaged changes: the weekly returns, the interest clock (from the spec's accrual start) and the carry are the
-             same, so the window moves every gross and net return by the same amount, as an own harvest basis does. A September bid quoted
-             off September (CU) futures is rolled to Dec at the spread on the last day before first notice (`sept_to_dec_spread`).
+    harvest_window  the user's OWN window for the calculated harvest basis: (first week, number of weeks), week 0 = the first Wednesday of
+             SEPTEMBER (first_september_wednesday; the first Wednesday of October is week 4 or 5, report_start_week). It replaces the report's
+             window AND any year-specific one, so the average is taken over the same weeks, counted from September, in every crop year. None = the
+             report's (the first 7 weeks from the first Wednesday of October, with the analyst's per-year exceptions).
+             A window that opens no earlier than the report's changes only which bids are averaged: the weekly returns, the interest clock (from
+             the spec's accrual start) and the carry are the same, so it moves every gross and net return by the same amount, as an own harvest
+             basis does. A window that opens EARLIER (in September) moves the PURCHASE with it (Kolten 2026-10-19, "purchase moves with
+             window"): the interest and the returns start at the window's own 3rd weekly bid for corn, 5th for soybeans — where the report's
+             start inside its own window — so the weekly rows begin in September (`cy.purchase`). A September bid quoted off September (CU)
+             futures is rolled to Dec at the spread on the last day before first notice (`sept_to_dec_spread`).
 
-    Like the sheets, time runs on a WEEKLY GRID from the first Wednesday of October: interest accrues for
-    every week from the spec's accrual start on, whether or not a bid was posted that week (a week with no bid just
-    has no return)."""
+    Like the sheets, time runs on a WEEKLY GRID from the first Wednesday of October (row 0; a moved purchase adds the September rows
+    before it as negative rows): interest accrues for every week from the accrual start on, whether or not a bid was posted that week
+    (a week with no bid just has no return)."""
     cy = CropYear(crop_year, crop_label(crop_year), spec=spec)
     lo, hi = date(crop_year, 9, 1), date(crop_year + 1, *spec.horizon)       # (Sep only feeds a harvest window)
     start = first_wednesday(crop_year)
@@ -381,12 +408,16 @@ def build_crop_year(obs: list[dict], futs: dict, crop_year: int, rate_on, spec: 
     if window_start:
         window = tuple(range(window_start, window_start + len(window)))
     lowest = window[0]
-    if harvest_window is not None:                         # the user's window: the same weeks in every year, and no week before October is lost
-        w0, wn = int(harvest_window[0]), max(1, int(harvest_window[1]))
+    accr = spec.accrual_overrides.get(crop_year, spec.accrual_start)
+    if harvest_window is not None:                         # the user's window: the same weeks from September in every year, and no week before October is lost
+        w0, wn = window_index(harvest_window, crop_year), max(1, int(harvest_window[1]))
         window = tuple(range(w0, w0 + wn))
         lowest = min(w0, 0)
-        cy.b0_window = (w0, wn)
-    accr = spec.accrual_overrides.get(crop_year, spec.accrual_start)
+        cy.b0_window = (int(harvest_window[0]), wn)
+        moved = w0 + spec.accrual_start - spec.window[0]   # the purchase at the same place in this window as the report's is in its own
+        if moved < accr:                                   # a window that opens before the report's takes the purchase with it
+            accr = moved
+            cy.purchase = start + timedelta(days=7 * accr)
     n_idx = {lab: i for i, lab in enumerate(spec.chain)}
     byweek: dict = {}
     for o in sorted((o for o in obs if lo <= o["date"] <= hi and o.get("basis") is not None), key=lambda o: o["date"]):
@@ -475,7 +506,7 @@ def build_crop_year(obs: list[dict], futs: dict, crop_year: int, rate_on, spec: 
         cy.b0, cy.b0_own = float(b0_override), True
 
     run = 0.0                                           # running sum of the weekly rate, percent
-    for k in range(0, last_k + 1):
+    for k in range(min(0, accr), last_k + 1):           # a purchase moved into September starts the rows there
         wd = start + timedelta(days=7 * k)
         o = byweek.get(k)
         prime = rate_on(wd) if rate_on else None
@@ -659,14 +690,26 @@ def tag_symbol(tag: str | None, crop_year: int, spec: Spec = CORN, d: date | Non
     return None
 
 
-def rebase(basis: float, tag: str | None, col_letter: str, crop_year: int, futs: dict, t: date, spec: Spec = CORN):
+def rebase(basis: float, tag: str | None, col_letter: str, crop_year: int, futs: dict, t: date, spec: Spec = CORN,
+           levels: dict | None = None):
     """A bid in the terms of the table's column: (value, converted) — the bid is moved from the contract it was quoted off
     to the column's by that day's spread, `basis + F(quoted) - F(column)` (nothing to move when they are the same, or
-    the quote names no contract). None when the move needs a price that is missing."""
+    the quote names no contract). None when the move needs a price that is missing.
+
+    `levels` = the table's chain levels that day (chain_levels(...).levels). When both contracts are in the chain, the move uses
+    THEM, the same levels the column's break-even uses: a rolled contract hangs from the next by its frozen roll spread. The raw
+    settlements disagree once a contract has rolled — on Jul 15 2026 Greenville's July bid, quoted off Sep, was moved by the EXPIRED
+    July's last price (Sep - Jul 9.75) while the break-even used the frozen 1.75, and the July sale showed ~8c of return that was not
+    there (found 2026-10-19). For live contracts the two are the same number."""
     col_sym = contract_symbol(col_letter, crop_year, spec.root)
     sym = tag_symbol(tag, crop_year, spec, t)
     if sym is None or sym == col_sym:
         return float(basis), False
+    if levels:
+        by_sym = {contract_symbol(lab, crop_year, spec.root): lab for lab in spec.chain}
+        a, b = by_sym.get(sym), by_sym.get(col_sym)
+        if a is not None and b is not None and levels.get(a) is not None and levels.get(b) is not None:
+            return float(basis) + levels[a] - levels[b], True
     pq, _ = price_on(futs, t, sym)
     pc, _ = price_on(futs, t, col_sym)
     if pq is None or pc is None:
@@ -721,7 +764,7 @@ class ShipTable:
     b0_own: bool = False                # `b0` is the user's own harvest basis, not the calculated average / estimate
     b0_calc: float | None = None        # what the calculated method gives (the average so far, or the estimate before the weekly bids)
     ship_by: date | None = None         # limit_shipment_table(): the day the study was told to stop (None = every month)
-    b0_window: tuple | None = None      # the user's (first week index, number of weeks) of the harvest-basis average (None = the report's)
+    b0_window: tuple | None = None      # the user's (first week, number of weeks) of the harvest-basis average, week 0 = the first Wednesday of September (None = the report's)
 
     @property
     def f_dec(self) -> float | None:
@@ -731,8 +774,18 @@ class ShipTable:
 
 def build_shipment_table(crop_year: int, asof: date, b0, quotes: list[dict], futs: dict, rate_on, measure: str = "net",
                          b0_weeks: int = 0, b0_est: bool = False, spec: Spec = CORN, max_age_days: int = 10,
-                         b0_own: bool = False, b0_calc: float | None = None) -> ShipTable:
+                         b0_own: bool = False, b0_calc: float | None = None, purchase: date | None = None,
+                         best_from: date | None = None, deferred_only: bool = False) -> ShipTable:
     """The page-1 table on `asof`.
+
+    purchase  the purchase date, where the interest and the best-so-far start: the report's Oct 20 by default; a harvest window of the
+              user's that opens in September moves it (`CropYear.purchase`).
+    best_from where the best-so-far starts instead of the purchase (return_to_carry_data.forward_best counts every forward sale from the
+              first bid of the harvest window, so a sale locked before Oct 20 counts in every year alike). The interest still runs from
+              the purchase.
+    deferred_only  the best-so-far counts only sales made BEFORE the column's shipment month begins — a true forward sale (forward_best:
+              a July bid sold in July is the nearby sale, which the weekly history already prices; comparing the two would only compare the
+              report's two interest conventions). Any bid counts toward a month's best only on or before its shipment date (the 20th).
 
     b0       the harvest basis (cents vs the base contract): the average of the first weekly bids so far, or an estimate before they post —
              or the user's own (then `b0_own` is True and `b0_calc` is what the calculated method gives, to show beside it).
@@ -740,7 +793,8 @@ def build_shipment_table(crop_year: int, asof: date, b0, quotes: list[dict], fut
              (return_to_carry_data.shipment_quotes) picks them from a corridor's forward periods.
     rate_on  date -> annual percent (the bank prime in the report; the app's default is the tab's fed funds + 2.25%).
     A bid counts as current when it is at most `max_age_days` old. Best-YTD starts at the purchase date (Oct 20)."""
-    purchase = purchase_date(crop_year)
+    purchase = purchase or purchase_date(crop_year)
+    since = best_from or purchase                           # where the best-so-far starts
     lv = chain_levels(futs, crop_year, asof, spec)
     rate_now = rate_on(asof) if rate_on else None
     tbl = ShipTable(crop_year, crop_label(crop_year), asof, measure, purchase, b0, b0_weeks, b0_est,
@@ -766,15 +820,16 @@ def build_shipment_table(crop_year: int, asof: date, b0, quotes: list[dict], fut
         rate_t = rate_now if t == asof else (rate_on(t) if rate_on else None)
         for q in by_date[t]:
             col = cols[q["month"]]
-            moved = rebase(q["basis"], q.get("tag"), col.letter, crop_year, futs, t, spec)
+            moved = rebase(q["basis"], q.get("tag"), col.letter, crop_year, futs, t, spec, levels=lvl_t.levels)
             if moved is None:
                 continue
             bid, converted = moved
             if (asof - t).days <= max_age_days and (col.bid_date is None or t >= col.bid_date):
                 col.bid, col.bid_date, col.bid_label = bid, t, q.get("label")
                 col.bid_posted = float(q["basis"]) if converted else None
-            if t < purchase:
-                continue                                    # the position starts at the purchase
+            if t < since or t > (col.ship.replace(day=1) - timedelta(days=1) if deferred_only else col.ship):
+                continue                                    # the position starts at the purchase (or `best_from`), and a bid posted after
+                                                            # the month's shipment date (a 'Jul' bid on Jul 22 for Jul 20) is no sale for it
             if col.best_bid is None or bid > col.best_bid + 1e-9:
                 col.best_bid, col.best_bid_date = bid, t
             c = cost_on(lvl_t, rate_t, col)
@@ -785,7 +840,9 @@ def build_shipment_table(crop_year: int, asof: date, b0, quotes: list[dict], fut
     for col in tbl.cols:
         if col.bid is not None and col.cost is not None:
             col.ret = col.bid - col.cost
-            if col.bid_date is not None and col.bid_date >= purchase and (col.best_ret is None or col.ret > col.best_ret + 1e-9):
+            last_day = col.ship.replace(day=1) - timedelta(days=1) if deferred_only else col.ship
+            if (col.bid_date is not None and since <= col.bid_date <= last_day
+                    and (col.best_ret is None or col.ret > col.best_ret + 1e-9)):
                 col.best_ret, col.best_ret_date = col.ret, col.bid_date     # today's break-even can differ from the quote day's
     return tbl
 

@@ -210,7 +210,16 @@ def contract_month(ticker: str, code: str):
 
 
 
-@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+# No persist="disk". Streamlit ignores a ttl on a disk-persisted cache --
+# its own local_disk_cache_storage.py warns "has a TTL that will be
+# ignored" -- so this carried ttl AND persist until 2026-11-02 and
+# therefore had no expiry at all, keyed on a SCHEMA constant that only
+# moves when a developer edits the module. Same shape as the
+# fetch_leverage freeze that cash_trade records. Dropped rather than
+# stamp-keyed because ESMIS's release list IS half this fetch, so a probe
+# would cost more than the ttl it replaces; see apps/beef_trimmings
+# /app.py:488 for the same call on a far bigger payload.
+@st.cache_data(ttl=21600, show_spinner=False)
 def _fetch_wasde_steer(schema: int = wasde.SCHEMA) -> dict:
     """
     USDA's quarterly cash steer forecast. Shared arithmetic -- see

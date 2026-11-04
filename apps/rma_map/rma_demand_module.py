@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from nass_cache_client import _cache_key, _sf_connect, _use_sf
+from rma_nass_cache_client import _cache_key, _sf_connect, _use_sf
 
 DATA_DIR = Path(__file__).parent / "data"
 

@@ -115,30 +115,75 @@
    "exclude": [
     "ams_crush.py",
     "canola_cash.py"
-   ]
+   ],
+   "replace": {
+    "app.py": [
+     [
+      "if st.button(\"Refresh prices\", icon=\":material/refresh:\", width=\"stretch\",",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Refresh prices\", icon=\":material/refresh:\", width=\"stretch\","
+     ]
+    ]
+   }
   },
   "crop_progress": {
    "repo": "JSA-Dashboards/crop-progress-dashboard",
    "branch": "main"
   },
   "domestic_production": {
-   "repo": "JSA-Dashboards/domestic-production-dashboard"
+   "repo": "JSA-Dashboards/domestic-production-dashboard",
+   "replace": {
+    "asd_county_tab.py": [
+     [
+      "if st.button(\"Refresh\", use_container_width=True, key=\"nass_refresh\"):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Refresh\", use_container_width=True, key=\"nass_refresh\"):"
+     ]
+    ]
+   }
   },
   "eia_energy": {
-   "repo": "JSA-Dashboards/eia-energy-dashboard"
+   "repo": "JSA-Dashboards/eia-energy-dashboard",
+   "replace": {
+    "app.py": [
+     [
+      "if st.button(\"🔄 Refresh Data Now\", width='stretch'):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"🔄 Refresh Data Now\", width='stretch'):"
+     ]
+    ]
+   }
   },
   "grain_seasonal": {
-   "repo": "JSA-Dashboards/grain-seasonal-dashboard"
+   "repo": "JSA-Dashboards/grain-seasonal-dashboard",
+   "replace": {
+    "app.py": [
+     [
+      "tabs = st.tabs(tab_labels, on_change=\"rerun\")",
+      "tabs = __import__(\"portal_view\").tabs(tab_labels, hide={\"Ask AI\", \"📊 H/L Forecast\"}, on_change=\"rerun\")"
+     ],
+     [
+      "if st.button(\"Refresh prices\", icon=\":material/refresh:\", width=\"stretch\",",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Refresh prices\", icon=\":material/refresh:\", width=\"stretch\","
+     ]
+    ]
+   }
   },
   "rail_fob": {
-   "repo": "JSA-Dashboards/rail-fob-portal"
+   "repo": "JSA-Dashboards/rail-fob-portal",
+   "replace": {
+    "app.py": [
+     [
+      "with st.expander(\"Data source\"):",
+      "for _ in __import__(\"portal_view\").staff_expander(\"Data source\"):"
+     ]
+    ]
+   }
   },
   "rail_shipments": {
    "repo": "JSA-Dashboards/usda-rail-dashboard"
   },
   "rma_map": {
    "repo": "JSA-Dashboards/rma-production-map",
-   "preauth": true
+   "preauth": true,
+   "prefix_modules": "rma_"
   },
   "vessel_lineup": {
    "repo": "JSA-Dashboards/jsa-vessel-lineup-dashboard",
@@ -154,7 +199,23 @@
     "fetch_southport_email.py",
     "convert_southport.py",
     "update_data.*"
-   ]
+   ],
+   "replace": {
+    "app.py": [
+     [
+      "if st.button(\"Reload data\", icon=\":material/refresh:\", key=\"reload_data\", width=\"stretch\"):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Reload data\", icon=\":material/refresh:\", key=\"reload_data\", width=\"stretch\"):"
+     ],
+     [
+      "pdf_up = st.file_uploader(",
+      "pdf_up = None if __import__(\"portal_view\").is_client() else st.file_uploader("
+     ],
+     [
+      "uploaded = st.file_uploader(DATA_FILENAME",
+      "uploaded = None if __import__(\"portal_view\").is_client() else st.file_uploader(DATA_FILENAME"
+     ]
+    ]
+   }
   },
   "teams_broadcast": {
    "repo": "JSA-Dashboards/teams-broadcast",
@@ -169,7 +230,15 @@
    "private": true,
    "exclude": [
     "*.sql"
-   ]
+   ],
+   "replace": {
+    "app.py": [
+     [
+      "if st.button(\"Refresh data\", icon=\":material/refresh:\", width=\"stretch\",",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Refresh data\", icon=\":material/refresh:\", width=\"stretch\","
+     ]
+    ]
+   }
   },
   "basis_tracker": {
    "repo": "JSA-Dashboards/basis-tracker",
@@ -187,6 +256,26 @@
    "pin_env": {
     "SNOWFLAKE_DATABASE": "RIVER_FOB",
     "SNOWFLAKE_SCHEMA": "PUBLIC"
+   },
+   "replace": {
+    "app.py": [
+     [
+      "VIEW_ONLY = str(st.query_params.get(\"view\", \"\")).lower() in (",
+      "VIEW_ONLY = __import__(\"portal_view\").is_client() or str(st.query_params.get(\"view\", \"\")).lower() in ("
+     ]
+    ],
+    "vessel_focus.py": [
+     [
+      "if st.button(\"Reload data\", icon=\":material/refresh:\", key=f\"{K}_reload\", width=\"stretch\"):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Reload data\", icon=\":material/refresh:\", key=f\"{K}_reload\", width=\"stretch\"):"
+     ]
+    ],
+    "vessel_tab.py": [
+     [
+      "if st.button(\"Reload data\", icon=\":material/refresh:\", key=\"vessel_reload\", width=\"stretch\"):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Reload data\", icon=\":material/refresh:\", key=\"vessel_reload\", width=\"stretch\"):"
+     ]
+    ]
    }
   },
   "major_exporters": {
@@ -194,7 +283,21 @@
    "branch": "main",
    "exclude": [
     "etl.py"
-   ]
+   ],
+   "replace": {
+    "app.py": [
+     [
+      "if st.button(\"🔄 Refresh Data\", use_container_width=True):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"🔄 Refresh Data\", use_container_width=True):"
+     ]
+    ],
+    "vessel_tab.py": [
+     [
+      "if st.button(\"Reload data\", icon=\":material/refresh:\", key=\"vessel_reload\", width=\"stretch\"):",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"Reload data\", icon=\":material/refresh:\", key=\"vessel_reload\", width=\"stretch\"):"
+     ]
+    ]
+   }
   },
   "yield_portal": {
    "repo": "JSA-Dashboards/yield-portal",
@@ -237,7 +340,23 @@
     "*.sql",
     "seed_snowflake.py",
     "build_data.py"
-   ]
+   ],
+   "replace": {
+    "app.py": [
+     [
+      "tab_sum, tab_month, tab_data, tab_admin = st.tabs([\"Summary\", \"Monthly view\", \"Data\", \"Admin\"])",
+      "tab_sum, tab_month, tab_data, tab_admin = __import__(\"portal_view\").tabs([\"Summary\", \"Monthly view\", \"Data\", \"Admin\"], hide={\"Admin\"})"
+     ],
+     [
+      "with tab_admin:\n",
+      "with tab_admin:\n    if not __import__(\"portal_view\").shown(tab_admin):\n        st.stop()   # client portal: the Admin tab is hidden and its body must not run (it is the last block)\n"
+     ],
+     [
+      "up = st.sidebar.file_uploader(",
+      "up = None if __import__(\"portal_view\").is_client() else st.sidebar.file_uploader("
+     ]
+    ]
+   }
   },
   "china_soybeans": {
    "repo": "JSA-Dashboards/china-soybean-tracker",
@@ -251,7 +370,15 @@
     "flash_archive.py",
     "update_tracker.py",
     "tracker_data.json"
-   ]
+   ],
+   "replace": {
+    "app.py": [
+     [
+      "view_only = st.query_params.get(\"view\") == \"1\"",
+      "view_only = __import__(\"portal_view\").is_client() or st.query_params.get(\"view\") == \"1\""
+     ]
+    ]
+   }
   },
   "weekly_reports": {
    "repo": "JSA-Dashboards/livestock-portal",

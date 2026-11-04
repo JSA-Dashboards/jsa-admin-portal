@@ -3,7 +3,8 @@ Static rail freight reference data — CSX + NS + BN origin spread tables.
 
 Seeded from Kolten's "Rail Spreads.xlsx"
 (`…\\Research Analyst\\Misc\\Rail Origins & Destinations\\`), CSX/NS/BN tabs,
-via one-off extractions (CSX+NS: 2026-08-21; BN: 2026-08-25).
+via one-off extractions (CSX+NS: 2026-08-21; BN: 2026-08-25, re-seeded from
+"Fob BN Corn Plus.xlsx" 2026-10-28).
 `csx_freight_seed.json` / `ns_freight_seed.json` / `bn_freight_seed.json` are
 committed snapshots — re-run the extraction and overwrite them if Kolten
 sends an updated workbook; this module doesn't touch the source file at
@@ -11,9 +12,11 @@ runtime.
 
 CSX/NS rows' `highlighted` flag comes straight from an "X"/"x" marker column
 Kolten added to the workbook itself — not a hardcoded shortlist. BN's sheet
-has no such marker (only 11 origins total, no separate curated subset).
+has no such marker (13 origins, no separate curated subset). BN's seed holds
+the freight INPUTS (face rate, miles, FSC $/mile and BN Cars $/car per
+period), not pasted totals — `load_bn()` rebuilds the totals.
 
-CSX rates are $/car at the workbook's stated 3500 bu/car. NS rates are
+CSX rates are $/car, converted at 3800 bu/car (Kolten, 2026-11-02; the workbook itself states 3500). NS rates are
 already $/bu. BN rates are $/car at 4000 bu/car (confirmed by cross-checking
 its own $/bu sub-table: $/car ÷ 4000 reproduces it exactly). All convert to
 ¢/bu for display, matching the bid side's units.
@@ -24,7 +27,7 @@ import re
 
 _DIR = os.path.dirname(__file__)
 
-CSX_BU_PER_CAR = 3500
+CSX_BU_PER_CAR = 3800      # Kolten, 2026-11-02: CSX and NS 3800 (the CSX workbook itself says 3500), BN 4000, CN its own car weights
 
 # CSX bid-market -> freight column(s) that net against it. Evansville has two
 # published variants (by downstream market); AL/TN/KY/LA is the primary one,
@@ -44,6 +47,12 @@ NS_REGIONS = {
     "East":      "east",
 }
 NS_BID_MARKET = "NS Ft Wayne"
+NS_BU_PER_CAR = 3800        # for the fuel surcharge's $/car -> ¢/bu (Kolten, 2026-11-02: CSX and NS 3800, UP and BN 4000, CN unchanged)
+
+
+def fsc_cpb(fsc_per_mile, miles, bu_per_car):
+    """A $/car-mile fuel surcharge x extra rail miles, in ¢/bu."""
+    return fsc_per_mile * miles / bu_per_car * 100
 
 # BN publishes rates by delivery month rather than one flat number — a
 # genuinely different shape from CSX/NS. The "Tarif + FSC + Cars" table is
@@ -66,14 +75,20 @@ BN_BU_PER_CAR = 4000
 BN_DESTINATIONS = {
     "PNW":      {"field": "pnw", "market": "BN PNW"},
     "Hereford": {"field": "hereford", "market": "BN Hereford"},
+    "COBO":     {"field": "cobo", "market": "BN COBO"},
 }
+# BN COBO (Kolten, 2026-11-02): the COBO buyer leaves the car cost and fuel surcharge to itself, so FOB = the COBO bid less the TARIFF only,
+# and COBO has its own lane — California. USDA AMS's tariff series (AgTransport 3az4-jkr6, BNSF corn) has California at exactly $960/car over
+# Hereford for both Edison NE -> Hanford CA ($5,660 vs $4,700) and Brunswick NE -> Hanford CA ($6,320 vs $5,360), every month Mar-Oct 2026
+# (both lanes stepped +$200 in Oct together), so the COBO tariff is the origin's Hereford face rate + this.
+BN_COBO_OVER_HEREFORD = 960
 
 _BN_MONTH3 = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
               "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
 _BN_MONTH3_REV = {v: k for k, v in _BN_MONTH3.items()}
 _BN_PACKAGES = {"jfm": 1, "fma": 2, "mam": 3, "amj": 4, "mjj": 5, "jja": 6,
                  "jas": 7, "aso": 8, "son": 9, "ond": 10, "ndj": 11, "djf": 12,
-                 "amjj": 4, "am": 4, "jj": 6, "as": 8}
+                 "amjj": 4, "am": 4, "jj": 6, "as": 8, "fm": 2}
 
 
 def bn_period_first_month(period):
@@ -87,6 +102,33 @@ def bn_period_first_month(period):
         return None
     found.sort()
     return found[0][1]
+
+
+_PKG_MONTHS = {"jfm": (1, 2, 3), "fma": (2, 3, 4), "mam": (3, 4, 5), "amj": (4, 5, 6), "mjj": (5, 6, 7), "jja": (6, 7, 8),
+               "jas": (7, 8, 9), "aso": (8, 9, 10), "son": (9, 10, 11), "ond": (10, 11, 12), "ndj": (11, 12, 1), "djf": (12, 1, 2),
+               "amjj": (4, 5, 6, 7), "am": (4, 5), "jj": (6, 7), "as": (8, 9), "fm": (2, 3)}
+
+
+def period_months(period):
+    """The whole calendar months (1-12) a bid period covers, or () if it names none: a month ("Nov" -> 11), a package
+    ("JFM" -> 1, 2, 3; "AMJJ" -> 4-7; "FM" -> 2, 3) or a range ("Jan July" / "OCT-MAR"). A half month (FH / LH Nov) or a Split
+    month covers its month only in part, so it returns () — callers handle those by name."""
+    p = period.strip().lower()
+    if re.match(r"^(fh|lh|mp|split)\b", p):
+        return ()
+    if p in _PKG_MONTHS:
+        return _PKG_MONTHS[p]
+    found = sorted((p.find(tok), m) for tok, m in _BN_MONTH3.items() if tok in p)
+    months = []
+    for _pos, m in found:
+        if m not in months:
+            months.append(m)
+    if len(months) == 1:
+        return (months[0],)
+    if len(months) >= 2:
+        a, b = months[0], months[1]
+        return tuple(((a - 1 + k) % 12) + 1 for k in range(((b - a) % 12) + 1))
+    return ()
 
 
 def bn_month_sort_key(month_key):
@@ -140,19 +182,57 @@ def load_ns():
     return rows
 
 
-def load_bn():
-    """[{origin, state,
-         pnw: {<current ~4 months>: $/car},
-         hereford: {<current ~4 months>: $/car},
-         pnw_cpb: {...same keys...: ¢/bu},
-         hereford_cpb: {...same keys...: ¢/bu}}]
-    The month keys are whatever's currently published — re-run the
-    extraction against a freshly saved workbook to roll them forward."""
-    rows = _load("bn_freight_seed.json")
+def load_bn_seed():
+    """The raw BN seed: {source, index_periods, defaults, origins}. `defaults` are the
+    shuttle quotes and monthly FSC used until inputs are saved (see bn_inputs.py)."""
+    return _load("bn_freight_seed.json")
+
+
+def load_bn_index_periods():
+    """The bid periods the BN tab's FOB Index by State shows, and the ones that get
+    FH/LH/Split/OND bid inference: Oct / Nov / Dec / JFM as of 2026-10-28."""
+    return load_bn_seed()["index_periods"]
+
+
+def load_bn(window):
+    """[{origin, state, pnw_rate, pnw_miles, herf_rate, herf_miles,
+         pnw: {<month key>: $/car}, hereford: {<month key>: $/car},
+         pnw_cpb: {...: ¢/bu}, hereford_cpb: {...: ¢/bu}}]
+    window = [{key, fsc_per_mile, cars}] — one entry per month with an FSC
+    (bn_inputs.effective_window). Freight is built the way the workbook builds
+    it (Kolten's "PNW Facing Corn Rates" tab, 2026-10-28): face rate + lane
+    miles x that month's fuel surcharge $/mile + the month's BN Cars
+    (secondary-market) premium in $/car — PNW takes all of it, Hereford half."""
+    rows = load_bn_seed()["origins"]
     for r in rows:
-        for f in ("pnw", "hereford"):
-            r[f"{f}_cpb"] = {m: v / BN_BU_PER_CAR * 100 for m, v in r[f].items()}
+        bn_build_row(r, window)
     return rows
+
+
+def bn_car_cost(lane, cars):
+    """The secondary-market BN car value, in $/car, that a lane carries (Kolten, 2026-11-02). Zero and over: full to PNW, half to Hereford
+    (quicker transit, value in the cars), for every origin. Under zero: the opposite — half to PNW, full to Hereford."""
+    if cars >= 0:
+        return cars if lane == "pnw" else cars / 2
+    return cars / 2 if lane == "pnw" else cars
+
+
+def bn_build_row(r, window):
+    """Adds pnw / hereford ($/car by month key) and pnw_cpb / hereford_cpb (¢/bu) to one origin dict that carries
+    pnw_rate, pnw_miles, herf_rate, herf_miles. A lane whose rate or miles is None (no list rate, or miles not known yet)
+    gets empty dicts, so its FOB shows "—". Shared by the freight sheet's 13 origins and bn_locator's lookup."""
+    for lane, rate, miles in (("pnw", "pnw_rate", "pnw_miles"), ("hereford", "herf_rate", "herf_miles")):
+        ok = r.get(rate) is not None and r.get(miles) is not None
+        r[lane] = ({w["key"]: r[rate] + r[miles] * w["fsc_per_mile"] + bn_car_cost(lane, w["cars"]) for w in window}
+                   if ok else {})
+        r[f"{lane}_cpb"] = {m: v / BN_BU_PER_CAR * 100 for m, v in r[lane].items()}
+    # COBO: tariff only (no car cost, no fuel surcharge), California = Hereford face + $960; the same every month
+    if r.get("herf_rate") is not None:
+        r["cobo_rate"] = r["herf_rate"] + BN_COBO_OVER_HEREFORD
+        r["cobo_cpb"] = {w["key"]: r["cobo_rate"] / BN_BU_PER_CAR * 100 for w in window}
+    else:
+        r["cobo_rate"], r["cobo_cpb"] = None, {}
+    return r
 
 
 # CN's sheet is a straight copy of its published Gulf Export tariff (CN
@@ -260,6 +340,42 @@ CN_COMMODITIES = ["Corn", "Soybeans"]
 CN_LB_PER_BU = {"Corn": 56, "Soybeans": 60}
 
 
-def cn_freight_cpb(rate, size, commodity="Corn"):
-    """$/car -> ¢/bu for CN's freight, given a car size and commodity."""
-    return rate / CN_BU_PER_CAR[commodity][size] * 100
+# CN's tariff moves by MONTH. data/usda_cn_tariff.json is USDA AMS AgTransport's monthly series for CN Gibson City, IL -> Reserve, LA
+# (large car, 105+ car unit train; Private is always $380 under Railroad — the seed's gap too), Nov 2023 - Oct 2026. The seed
+# (Supplement 41, Gibson City 105+, large car: $2,516 railroad / $2,136 private) is exactly the Jun-Aug 2026 rate. Since then:
+# Sep $2,791, Oct $3,011 (+$495) — a seasonal Oct peak: Nov fell $220 in 2024 and $330 in 2025. USDA lists no other CN origin, so a
+# month's change is applied to every origin as a flat $/car (Kolten, 2026-10-28: "use USDA numbers").
+def cn_usda_series():
+    """{'YYYY-MM': {'Railroad': $/car, 'Private': $/car, 'fsc_per_mile': $, 'miles': 870}} from USDA's CN Gibson City rows."""
+    import usda_cn
+    return usda_cn.series()
+
+
+def cn_seed_level():
+    """The seed's Gibson City, 105+ car, large railroad-car rate (the one USDA's series is compared with)."""
+    r = next(r for r in load_cn() if (r["origin"], r["state"]) == ("GIBSON CITY", "IL") and r["tier"] == "105+ cars")
+    return r["rate_b"]
+
+
+def cn_tariff_level(month, today):
+    """(USDA's CN Gibson City railroad-car rate for the next occurrence of `month` (1-12), kind). kind 'actual' when USDA has that
+    month, else 'last year' (the same month a year, or more, earlier). (None, None) if the series has nothing for that month."""
+    rows = cn_usda_series()
+    year = today.year if month >= today.month else today.year + 1
+    for back in range(0, 4):
+        row = rows.get(f"{year - back}-{month:02d}")
+        if row:
+            return row["Railroad"], ("actual" if back == 0 else "last year")
+    return None, None
+
+
+def cn_tariff_uplift(month, today):
+    """$/car to add to every seed rate for `month` (0 when the series has none): that month's USDA level minus the seed's."""
+    level, _ = cn_tariff_level(month, today)
+    return 0 if level is None else level - cn_seed_level()
+
+
+def cn_freight_cpb(rate, size, commodity="Corn", extra=0.0):
+    """$/car -> ¢/bu for CN's freight, given a car size and commodity. `extra` is more $/car on top of the tariff rate
+    (the fuel surcharge: $/mile x miles, cn_miles.py)."""
+    return (rate + extra) / CN_BU_PER_CAR[commodity][size] * 100

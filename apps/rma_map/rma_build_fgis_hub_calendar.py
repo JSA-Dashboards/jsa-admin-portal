@@ -19,7 +19,7 @@ import urllib.request
 
 import pandas as pd
 
-import build_canada_exports as BC
+import rma_build_canada_exports as BC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FGIS = "https://agtransport.usda.gov/resource/sruw-w49i.json?"

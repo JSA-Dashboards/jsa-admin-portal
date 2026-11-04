@@ -146,21 +146,30 @@ def _rows(sql, params):
     return _sf_rows(sql, params) if _use_snowflake() else _pg_rows(sql, params)
 
 
-_DATES_SQL = "SELECT DISTINCT date FROM rail_fob WHERE source=%s ORDER BY date DESC"
+_DATES_SQL = "SELECT DISTINCT date FROM rail_fob WHERE source=%s{est} ORDER BY date DESC"
 
 _ALL_SQL = """SELECT date, market, rail, commodity, period, period_order,
                      futures, bid, offer, bid_raw, offer_raw
-              FROM rail_fob WHERE source=%s
+              FROM rail_fob WHERE source=%s{est}
               ORDER BY market, period_order, period, date"""
+
+# Pure-estimate archive weeks (bid_raw = 'est': UP Allen Station before its actual bids begin) are HIDDEN, as in the basis tracker (its database.rail_estimates_shown; Kolten
+# 2026-10-22: "hide data that is pure estimate at least for now") — they would otherwise sit in the board's history, the Net Carry tab and Return to Carry. The rows stay in rail_fob;
+# RAIL_SHOW_ESTIMATES=1 brings them back. `NULL <> 'est'` is NULL, so the IS NULL half is what keeps an ordinary bid (and the desk's '?').
+_EST_HIDE = " AND (bid_raw IS NULL OR bid_raw <> 'est')"
+
+
+def _est_clause() -> str:
+    return "" if os.environ.get("RAIL_SHOW_ESTIMATES", "").strip().lower() in ("1", "true", "yes", "on") else _EST_HIDE
 
 
 def get_dates(source: str) -> list:
     """Distinct posting dates for a source, most recent first."""
-    return [r["date"] for r in _rows(_DATES_SQL, (source,))]
+    return [r["date"] for r in _rows(_DATES_SQL.format(est=_est_clause()), (source,))]
 
 
 def get_all(source: str) -> list:
     """All rail FOB cells for a source across every date.
     -> [{date, market, rail, commodity, period, period_order, futures,
          bid, offer, bid_raw, offer_raw}]"""
-    return _rows(_ALL_SQL, (source,))
+    return _rows(_ALL_SQL.format(est=_est_clause()), (source,))

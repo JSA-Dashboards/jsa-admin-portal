@@ -30,7 +30,16 @@ import streamlit as st
 
 # Streamlit puts the MAIN script's directory on sys.path, never the page's, so a
 # multipage app's own sibling modules are not importable without this.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 import ca_prices as cap
 import ca_trade as ct
@@ -408,8 +417,12 @@ with tab_prices:
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    t_ladder, t_trend, t_method = st.tabs(
-        ["This week's ladder", "Over time", "How this is built"])
+    # "How this is built" is provenance -- which AMS report, which rows are
+    # excluded, how a week is defined. It keeps a reader of this code honest
+    # and it is not what a client opened the page for.
+    t_ladder, t_trend, t_method = portal_view.tabs(
+        ["This week's ladder", "Over time", "How this is built"],
+        hide={"How this is built"})
 
     with t_ladder:
         rows = []
@@ -471,8 +484,12 @@ with tab_prices:
                 + ("…" if len(_holes) > 8 else "")
             )
 
-    with t_method:
-        st.markdown(_CA_METHOD)
+    # `shown()`, not `if t_method.open:` -- these tabs pass no
+    # on_change="rerun", so a real tab's `.open` is None and the guard would
+    # skip the body on the staff view too. See portal_view.tabs.
+    if portal_view.shown(t_method):
+        with t_method:
+            st.markdown(_CA_METHOD)
 
 # ── Canadian slaughter ──────────────────────────────────────────────────────
 with tab_kill:
@@ -655,8 +672,9 @@ with tab_trade:
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-        t_class, t_both, t_tmethod = st.tabs(
-            ["Imports by class", "Both directions", "How this is built"])
+        t_class, t_both, t_tmethod = portal_view.tabs(
+            ["Imports by class", "Both directions", "How this is built"],
+            hide={"How this is built"})
 
         with t_class:
             fig = go.Figure()
@@ -719,8 +737,9 @@ with tab_trade:
                 f"{int(TD['year'].min())}."
             )
 
-        with t_tmethod:
-            st.markdown(_CA_TRADE_METHOD)
+        if portal_view.shown(t_tmethod):
+            with t_tmethod:
+                st.markdown(_CA_TRADE_METHOD)
 
 st.markdown(
     f'<div class="srcline">JSA · John Stewart &amp; Associates &nbsp;·&nbsp; '

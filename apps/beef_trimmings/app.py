@@ -15,7 +15,16 @@ import sys
 # so this folder is never added automatically -- without the insert the
 # trimmings_qc import below dies with ModuleNotFoundError under the portal
 # shell. It works standalone, which is how it would reach production unseen.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 import io
 import re
@@ -702,10 +711,20 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    # THE SIXTH CACHE CONTROL, missed on 2026-11-02 with the fifth. A cache
+    # control is a working tool, not a market reading -- standing rule 1, and
+    # the call cattle_on_feed:986 made first.
+    #
+    # `pick` rather than deletion because `auto_refresh` is read further down
+    # to decide whether to sleep and rerun; the default it returns is the
+    # toggle's own value=False, so a client's page behaves as before. Safe to
+    # hide here: this page's loaders carry real ttls, and the one persisted
+    # fetch has no ttl to void.
     st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown('<div class="sec-header">Data refresh</div>', unsafe_allow_html=True)
-    auto_refresh = st.toggle("Auto-refresh (30 min)", value=False)
-    if st.button("↺  Refresh now", width="stretch"):
+    if portal_view.is_staff():
+        st.markdown('<div class="sec-header">Data refresh</div>', unsafe_allow_html=True)
+    auto_refresh = portal_view.pick(False, lambda: st.toggle("Auto-refresh (30 min)", value=False))
+    if portal_view.pick(False, lambda: st.button("↺  Refresh now", width="stretch")):
         st.cache_data.clear()
         st.rerun()
 
@@ -726,7 +745,10 @@ with st.sidebar:
         f'Cache: the last ~18 months of US daily refresh every '
         f'{US_RECENT_TTL_SECONDS // 3600} hr; the deep archive behind it is stored once and '
         f'reused, since it never changes. Weekly and import pulls refresh every '
-        f'{QUOTA_TTL_SECONDS // 3600} hr. <b>Refresh now</b> forces all of them.</div>',
+        f'{QUOTA_TTL_SECONDS // 3600} hr.'
+        + (' <b>Refresh now</b> forces all of them.'
+           if portal_view.is_staff() else '')
+        + '</div>',
         unsafe_allow_html=True,
     )
 
@@ -932,7 +954,9 @@ def render_quota(quota_fills) -> None:
                 'clearing and appearing in the count; treat the figure as good to within a '
                 'few days, not to the hour. CBP keeps only the current report and four '
                 f'previous online. This page refetches every {QUOTA_TTL_SECONDS // 3600} hr, '
-                'and <b>Refresh now</b> in the sidebar forces it.<br><br>'
+                + ('and <b>Refresh now</b> in the sidebar forces it.'
+                   if portal_view.is_staff() else '')
+                + '<br><br>'
 
                 '<b>What it does not cover.</b> Argentine volume enters under its own quotas '
                 'and is never counted on this line. The ordinary other-countries beef TRQ '
@@ -1053,7 +1077,9 @@ if not load_ok:
     if load_was_network:
         st.warning(
             "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
-            "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
+            "This usually resolves in a few minutes."
+            + (" Use **Refresh now** in the sidebar to retry."
+               if portal_view.is_staff() else "")
         )
     else:
         # Says the fetch WORKED, because that is the fact that redirects the
@@ -1065,7 +1091,7 @@ if not load_ok:
             f"in **Technical details** below (`{err_msg.split(':')[0]}`), and "
             "it needs a code fix rather than a refresh."
         )
-    with st.expander("Technical details"):
+    for _ in portal_view.staff_expander("Technical details"):
         st.code(err_msg)
     st.stop()
 
@@ -1138,8 +1164,10 @@ if _hist_gap:
         '<div class="ctx-flag">'
         f'<b>{_hist_gap:,} days missing from the price history.</b> The stored archive '
         'no longer reaches back as far as the live window, so the chart draws straight '
-        'across the gap rather than showing it. Use <b>Refresh now</b>, or widen '
-        'US_RECENT_REPORTS.</div>',
+        'across the gap rather than showing it.'
+        + (' Use <b>Refresh now</b>, or widen US_RECENT_REPORTS.'
+           if portal_view.is_staff() else '')
+        + '</div>',
         unsafe_allow_html=True,
     )
 
@@ -1417,7 +1445,7 @@ else:
 
 # ── Data Tables ────────────────────────────────────────────────────────────────
 
-with st.expander("📋  US Fresh 90s — data table"):
+for _ in portal_view.staff_expander("📋  US Fresh 90s — data table"):
     # Project explicitly rather than copying the frame. The previous version
     # renamed whatever columns it happened to find, so central_low/central_high/
     # central_pounds shipped to clients as raw snake_case at six decimals the
@@ -1458,7 +1486,7 @@ with st.expander("📋  US Fresh 90s — data table"):
         unsafe_allow_html=True,
     )
 
-with st.expander("📋  US Fresh 90s — weekly average (LM_XB460)"):
+for _ in portal_view.staff_expander("📋  US Fresh 90s — weekly average (LM_XB460)"):
     if us_weekly.empty:
         st.info("Weekly LM_XB460 data is unavailable.")
     else:
@@ -1473,7 +1501,7 @@ with st.expander("📋  US Fresh 90s — weekly average (LM_XB460)"):
             wdisp[_c] = wdisp[_c].map(_f)
         st.dataframe(wdisp, width="stretch", height=320)
 
-with st.expander("📋  Import Cow Meat (90%) — weekly data table"):
+for _ in portal_view.staff_expander("📋  Import Cow Meat (90%) — weekly data table"):
     disp = imp_hist.copy()
     disp["report_date"] = qc.date_text(disp["report_date"])
     disp = disp.rename(columns={

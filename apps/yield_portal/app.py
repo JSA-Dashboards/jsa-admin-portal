@@ -13,12 +13,16 @@ from pathlib import Path
 
 import streamlit as st
 
+import portal_view
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-# The yield portal's pages ask this session flag whether they are on its read-only
-# share link. This portal is internal (password-gated), so they show everything.
-st.session_state["view_only"] = False
+# The yield portal's pages ask this session flag whether they are on its read-only share link.
+# The staff portal is internal (password-gated), so they show everything. The CLIENT portal is the
+# share link: view_only is on and only the two pages that link offers are listed (below).
+CLIENT = portal_view.is_client()
+st.session_state["view_only"] = CLIENT
 
 # Field check (beta) is the Crop Conditions page's Field Check tab, shown alone: the
 # conditions model lives in crop-conditions-dashboard, so this tile runs that page's
@@ -44,6 +48,12 @@ PAGES = {
 }
 PAGES = {title: f for title, f in PAGES.items()
          if (FIELD_CHECK_APP.exists() if f is None else (HERE / "app_pages" / f).exists())}
+# What the yield portal's own ?view=1 link shows, and no more: Reports vs normal, Field issues and the
+# variety trials stay internal (Ohio State has not given written permission for derived use of its corn
+# test), strip trials are ISA's copyright, and Add / Review / Import write to YIELD_REPORTS.
+CLIENT_PAGES = ("Explore", "Report text")
+if CLIENT:
+    PAGES = {title: f for title, f in PAGES.items() if title in CLIENT_PAGES}
 
 choice = st.segmented_control("Yield portal page", list(PAGES), default="Explore",
                               key="yp_page", label_visibility="collapsed") or "Explore"

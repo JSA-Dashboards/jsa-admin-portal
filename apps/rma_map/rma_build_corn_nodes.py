@@ -19,7 +19,7 @@ import urllib.request
 
 import pandas as pd
 
-import build_river_segments as R
+import rma_build_river_segments as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 D = os.path.join(HERE, "data", "draw")

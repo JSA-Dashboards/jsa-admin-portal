@@ -1,7 +1,7 @@
 import streamlit as st
 
 from jsa_risk.state import get_commodity_spec, get_contract_price, init_session_state, visible_positions
-from jsa_risk.ui.blotter import render_editable_blotter
+from jsa_risk.ui.blotter import editable_caption, render_blotter_totals, render_editable_blotter
 from jsa_risk.ui.cash_position import render_cash_position_entry
 from jsa_risk.ui.charts import (
     default_shock_window,
@@ -15,6 +15,7 @@ from jsa_risk.ui.charts import (
 from jsa_risk.ui.kpi import render_kpi_strip, render_var_panel
 from jsa_risk.ui.market_strip import (
     render_iv_provenance,
+    render_mark_provenance,
     render_iv_refresh,
     render_market_strip,
     render_massive_refresh,
@@ -65,6 +66,7 @@ with price_col:
 with greeks_col:
     render_iv_refresh(positions, commodity)
 render_market_strip(positions, commodity)
+render_mark_provenance(positions, commodity)
 render_iv_provenance(positions, commodity)
 
 st.markdown("---")
@@ -74,8 +76,9 @@ render_cash_position_entry(positions, commodity)
 st.markdown("---")
 
 st.markdown("###### Position blotter")
-st.caption("This book is private to your browser session — Qty and Entry are editable; check Delete to remove a row.")
+st.caption(editable_caption(stress))
 render_editable_blotter(positions, stress, get_contract_price, commodity)
+render_blotter_totals(positions, stress, get_contract_price, commodity)
 
 st.markdown("---")
 st.markdown("###### Greeks by contract")
@@ -97,13 +100,27 @@ shock_window = st.radio(
 shock_axis_text = (
     f"Price shock (x-axis, ¢ per {commodity.unit}, the same move on every contract, with the % of the "
     "book's average price beneath)" if shocks_in_cents(commodity) else
-    f"Price shock (x-axis, % of the book's average price, with the ≈¢ per {commodity.unit} move "
+    f"Price shock (x-axis, % of the book's average price, with the ≈{commodity.move_symbol} per {commodity.unit} move "
     "beneath, applied equally to every contract)"
 )
 
-st.markdown("###### P&L scenario heatmap")
-st.caption(f"{shock_axis_text} vs. vol shock (y-axis, %) layered on top of the current stress scenario.")
-render_pnl_heatmap(positions, stress, get_contract_price, commodity=commodity, shock_window=shock_window)
+st.markdown("###### P&L scenario heatmap — total since entry")
+st.caption(
+    f"{shock_axis_text} vs. vol shock (y-axis, %) layered on top of the current stress "
+    "scenario. Each cell is cumulative P&L against your entry prices, so the outlined cell "
+    "is where the book stands today."
+)
+render_pnl_heatmap(positions, stress, get_contract_price, commodity=commodity,
+                   shock_window=shock_window)
+
+st.markdown("###### P&L scenario heatmap — change from here")
+st.caption(
+    "The same grid, re-centred on today: each cell is what that move is worth to you from "
+    "where the book stands now, rather than cumulative P&L since entry. Costs no extra "
+    "fetch — it is the grid above less its own centre."
+)
+render_pnl_heatmap(positions, stress, get_contract_price, commodity=commodity,
+                   shock_window=shock_window, centre_on_today=True)
 
 st.markdown("###### Delta scenario")
 render_delta_scenario(positions, stress, get_contract_price, commodity=commodity, shock_window=shock_window)
@@ -112,7 +129,7 @@ st.markdown("---")
 st.markdown("###### Portfolio payoff")
 payoff_shock_text = (
     f"¢ per {commodity.unit}, same move on every contract" if shocks_in_cents(commodity) else
-    f"% of the book's average price, with the ≈¢ per {commodity.unit} move, applied equally to every contract"
+    f"% of the book's average price, with the ≈{commodity.move_symbol} per {commodity.unit} move, applied equally to every contract"
 )
 st.caption(f"P&L vs. a {commodity.name.lower()} futures price shock ({payoff_shock_text}), current vol & time.")
 render_payoff_chart(positions, stress, get_contract_price, commodity=commodity, shock_window=shock_window)

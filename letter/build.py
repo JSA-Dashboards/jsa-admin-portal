@@ -294,6 +294,50 @@ def technical_months(ctx: dict, key: str) -> list:
     return ordered + [m for m in built if m not in ordered]
 
 
+def select_change_basis(ctx: dict, kind: str = None) -> str:
+    """
+    Resolve ctx['change_basis'] -- the format's, unless this issue overrides it.
+
+    ONE PLACE, CALLED FROM THREE, for the reason select_technicals below
+    carries the same note: `hints()` writes the figure block Ross writes
+    against and labels each line "(session)" or "(week to date)", while
+    `render.futures_block` prints the matching number into the letter off the
+    same key. Two callers resolving it separately is how the draft comes to
+    quote a different move from the letter it is the draft for.
+
+    WHY AN OVERRIDE EXISTS AT ALL. Ross, 2026-11-03, writing Monday's full
+    format on a Tuesday having not sent Monday's: "it shows the prices through
+    the close on 11/3 as just today's move - not the weekly closes so far."
+    config.CHANGE_BASIS_BY_KIND is right for a letter covering one session and
+    wrong for one letter covering two, and the gap is not cosmetic -- that
+    evening live cattle were -1.55 on the session and -2.80 on the week, while
+    feeders were -3.90 and -3.25. Feeders had rallied Monday and broken
+    Tuesday, so the session figure overstated their week and the live cattle
+    one understated theirs. Opposite directions, same letter.
+
+    `change_basis_choice` IS A SEPARATE KEY FROM `change_basis`, and that is
+    load-bearing rather than tidy. Every data_<slug>_<date>.json ever written
+    stores a `change_basis`, and the ones from before 2026-09-24 store "week"
+    for every format -- which is exactly why main() used to discard the cached
+    value and re-derive from the format. Honouring the old key as an override
+    would resurrect that bug on every historical letter. The new key is absent
+    from all of them, so absent means "follow the format" and nothing changes
+    for anything already on disk.
+
+    `kind` is passed EXPLICITLY, never read off ctx, because the authoring
+    page's format radio moves without the cached ctx following it: ctx["kind"]
+    is whatever was fetched, and a letter re-based on the stale one would
+    switch basis a rerun late.
+    """
+    choice = str(ctx.get("change_basis_choice") or "").strip().lower()
+    if choice not in ("day", "week"):
+        choice = ""
+    ctx["change_basis_choice"] = choice
+    ctx["change_basis"] = choice or config.change_basis_for(
+        kind if kind is not None else ctx.get("kind") or "tuesday")
+    return ctx["change_basis"]
+
+
 def select_technicals(ctx: dict) -> None:
     """
     Resolve ctx['tech_lc'] and ['tech_fc'] from the chosen month.
@@ -332,7 +376,10 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
     ctx: dict = {
         "issue_date": issue,
         "kind": kind,
-        "change_basis": config.change_basis_for(kind),
+        # Both resolved by select_change_basis() below the literal, so the
+        # format's basis and a per-issue override are decided in ONE place.
+        "change_basis_choice": "",
+        "change_basis": "",
         "live_cattle": [],
         "feeder_cattle": [],
         "tech_lc": None,
@@ -352,6 +399,7 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         "calendar": [],
         "regional_cash": {},
     }
+    select_change_basis(ctx, kind)
 
     # SYNC BEFORE ANYTHING READS THE LOG, which is the whole reason this line
     # is here and not left to backfill_week_base().
@@ -1080,14 +1128,28 @@ def main(argv=None) -> int:
     if restored:
         print(f"  {restored}")
     existed = cpath.exists()
+
+    # BEFORE hints(), AND IT USED TO BE AFTER IT. This assignment sat nine
+    # lines below the write_template() call, and hints() reads
+    # ctx["change_basis"] to pick BOTH the number it quotes and the
+    # "(session)" / "(week to date)" it labels it with. On the --no-fetch
+    # path -- the run that makes the emailed PDF -- ctx comes off disk, so a
+    # file carrying the pre-2026-09-24 "week" gave Ross a draft quoting the
+    # weekly move while the letter beside it rendered the session's. Both
+    # honestly computed, neither raising. Latent rather than reported,
+    # because the files that trigger it are old ones; the override below
+    # would have made it an everyday occurrence.
+    #
+    # FROM THE CACHE, unlike the old line, and the distinction is the same
+    # one select_technicals draws: the FORMAT's basis is not a choice and is
+    # re-derived every time, but an override IS a choice Ross made, so a
+    # --no-fetch re-render must reproduce the letter he previewed. The two
+    # live in different keys precisely so the old files cannot be read as
+    # choices -- see select_change_basis.
+    select_change_basis(ctx, kind)
+
     commentary.write_template(cpath, hints(ctx, kind), kind)
     ctx["commentary"] = commentary.read(cpath, kind)
-
-    # FROM THE FORMAT, NOT THE CACHE. data_<slug>_<date>.json stores whatever
-    # basis was in force when it was fetched, so a file written before
-    # 2026-09-24 says "week" for every letter. A --no-fetch re-render would
-    # quote week-over-week on a Monday and print [[?]] for it.
-    ctx["change_basis"] = config.change_basis_for(kind)
 
     # FROM THE CACHE, unlike the basis above, because this one IS a choice --
     # which month Ross decided to write about. A --no-fetch re-render must

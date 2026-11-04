@@ -2609,7 +2609,7 @@ def render():
                 nass_year = st.selectbox("Year", NASS_YEARS, index=0, key="nass_year")
             with nc4:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("Refresh", use_container_width=True, key="nass_refresh"):
+                if not __import__("portal_view").is_client() and st.button("Refresh", use_container_width=True, key="nass_refresh"):
                     st.cache_data.clear()
                     st.rerun()
 

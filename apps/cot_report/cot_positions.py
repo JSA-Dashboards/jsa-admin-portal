@@ -142,6 +142,10 @@ APPS = Path(__file__).resolve().parent.parent
 # BUMP THIS whenever load(), context(), why() or decompose() change the SHAPE
 # of what they return.
 #
+# 4 -- the market BASKET. `load()` defaults to eight markets rather than two,
+#      every entry gained `short_label` and `in_basket`, the legacy and
+#      futures-and-options blocks moved behind `reconcile`, and `load()`
+#      gained a whole `basket` key.
 # 3 -- `load()` gained `legacy`, `cross_audit` and a per-market
 #      `reconciliation` block.
 # 2 -- `why()` gained an `agree` key. THE TRAP FIRED DURING DEVELOPMENT, which
@@ -150,7 +154,7 @@ APPS = Path(__file__).resolve().parent.parent
 # key, `.get` returned None, and the hero tile silently took the wrong branch
 # and printed the wrong sentence. The page did not raise, the server had been
 # restarted, and `persist="disk"` meant the stale dict outlived the process.
-SCHEMA = 3
+SCHEMA = 4
 
 VIEW = "JSA.CFTC_COT.COT_DISAGG"
 
@@ -168,22 +172,109 @@ COMBINED = "COMBINED"
 
 # The two markets the page exists for, in the order they are shown. Live Cattle
 # first: it is much the larger market and the one the fed cattle trade watches.
+# Still the DEFAULT selection and still the pair the Friday letter prints, so
+# the page a reader opens is unchanged by everything below.
 CATTLE = ("LIVE_CATTLE", "FEEDER_CATTLE")
+
+# =============================================================================
+# THE BASKET -- the eight markets a reader can select, and the eight the
+# combined figure sums. ROSS CHOSE THESE, 2026-11-03: live cattle, feeder
+# cattle, hogs, corn, soybeans and the wheat classes.
+# =============================================================================
+#
+# IT IS A FIXED BASKET AND IT IS THE SAME EIGHT IN BOTH PLACES, which is the
+# only reason the combined number can be read at all. Two things fall out and
+# both are deliberate:
+#
+#   * THE COMBINED DOES NOT FOLLOW THE TOGGLE. Select two markets or eight and
+#     the combined figure is identical, because a "total ag position" that
+#     changed meaning with the view would be uninterpretable the moment anyone
+#     screenshotted it -- the headline-reads-on-its-own rule, applied to a
+#     figure whose own definition would otherwise be off-screen.
+#   * THE BASKET IS NOT "ALL AG". CFTC's disaggregated report carries eighteen
+#     ag markets and this is eight of them. Sugar, cocoa, coffee, cotton,
+#     canola, rice, milk, oats, soybean meal and soybean oil are all absent.
+#     Nothing on the page may call this "all ag" or "every ag market"; it is
+#     named by its members or as the US grain and livestock complex.
+#
+# WHY THESE EIGHT ARE A CLEAN BASKET AND THE OTHER TEN ARE NOT, which was
+# measured before it was agreed rather than after:
+#
+#   * All eight report in ALL 1,064 weeks from 2006-06-13 with zero gaps, so
+#     the combined series never changes composition under its own chart. CANOLA
+#     starts only in 2018-07-31 and would truncate twelve years off any history
+#     that included it; OATS has 148 missing weeks and is routinely a week late
+#     (on 2026-11-03 its newest row was 10-20 against everything else's 10-27).
+#   * They share two unit families rather than ten. Corn, soybeans and all
+#     three wheats are 5,000-bushel contracts; the three livestock markets are
+#     40,000 lb (live cattle, lean hogs) and 50,000 lb (feeder cattle). Sugar
+#     at 112,000 lb and cocoa at 10 tonnes would have made the sum wilder still
+#     -- see CONTRACTS_ARE_NOT_A_COMMON_UNIT below, which is the caveat this
+#     narrower basket makes smaller but does not remove.
+#
+# Order is livestock then grain, which is the order the tiles render in.
+BASKET = (
+    "LIVE_CATTLE", "FEEDER_CATTLE", "LEAN_HOGS",
+    "CORN", "SOYBEANS", "WHEAT_SRW", "WHEAT_HRW", "WHEAT_HRS",
+)
 
 LABELS = {
     "LIVE_CATTLE":   "Live Cattle",
     "FEEDER_CATTLE": "Feeder Cattle",
     "LEAN_HOGS":     "Lean Hogs",
     "CORN":          "Corn",
+    "SOYBEANS":      "Soybeans",
+    "WHEAT_SRW":     "Wheat — Chicago SRW",
+    "WHEAT_HRW":     "Wheat — KC HRW",
+    "WHEAT_HRS":     "Wheat — Minneapolis HRS",
     "SOYBEAN_MEAL":  "Soybean Meal",
+    "SOYBEAN_OIL":   "Soybean Oil",
 }
 
-# Shown underneath the cattle as context rather than as subject. Lean hogs is
-# the third livestock market; corn and meal are the feeder's input cost, and a
-# fund position in them moves a cattle feeding margin as surely as one in the
-# cattle themselves. They cost nothing extra -- same query, three more
+# Short forms for a table column or a contribution row, where the full
+# "Wheat — Minneapolis HRS" will not fit.
+SHORT_LABELS = {
+    "LIVE_CATTLE":   "Live Cattle",
+    "FEEDER_CATTLE": "Feeder Cattle",
+    "LEAN_HOGS":     "Lean Hogs",
+    "CORN":          "Corn",
+    "SOYBEANS":      "Soybeans",
+    "WHEAT_SRW":     "Wheat SRW",
+    "WHEAT_HRW":     "Wheat HRW",
+    "WHEAT_HRS":     "Wheat HRS",
+    "SOYBEAN_MEAL":  "Soybean Meal",
+    "SOYBEAN_OIL":   "Soybean Oil",
+}
+
+# Fetched and shown as context, and DELIBERATELY NOT IN THE BASKET. The soy
+# products are the obvious thing a reader expects to find inside "soybeans",
+# so they are on the page with their own figures and a line saying they are
+# not in the total -- which is cheaper than letting somebody add the three
+# themselves and get a number the page does not print. Same query, two more
 # SERIES values.
-NEIGHBOURS = ("LEAN_HOGS", "CORN", "SOYBEAN_MEAL")
+NEIGHBOURS = ("SOYBEAN_MEAL", "SOYBEAN_OIL")
+
+# The basket pseudo-market's key. It is NOT a CFTC SERIES value and must
+# never be passed to a query -- it exists so the basket frame can carry a
+# `series` column like every other frame and reuse the same helpers.
+BASKET_KEY = "_BASKET"
+BASKET_LABEL = "US grain and livestock, eight markets combined"
+
+# Exchange contract sizes, for the caveat the combined panel prints. Corn,
+# soybeans and the three wheats are all 5,000 bushels; the livestock markets
+# are pounds. A contract is therefore NOT a common unit even across these
+# eight, which is why the combined figure is quoted in contracts and never as
+# exposure, money or head.
+CONTRACT_SIZE = {
+    "LIVE_CATTLE":   "40,000 lb",
+    "FEEDER_CATTLE": "50,000 lb",
+    "LEAN_HOGS":     "40,000 lb",
+    "CORN":          "5,000 bu",
+    "SOYBEANS":      "5,000 bu",
+    "WHEAT_SRW":     "5,000 bu",
+    "WHEAT_HRW":     "5,000 bu",
+    "WHEAT_HRS":     "5,000 bu",
+}
 
 # The disaggregated report's five trader categories. Their nets sum to zero by
 # construction -- every long is somebody's short -- which `reconciles()` uses
@@ -859,14 +950,22 @@ def series_frame(df: pd.DataFrame, years: int | None = None) -> pd.DataFrame:
 
 # -- the one entry point the page calls --------------------------------------
 
-def load(series=CATTLE, neighbours=NEIGHBOURS) -> dict:
+def load(series=BASKET, neighbours=NEIGHBOURS, reconcile=CATTLE) -> dict:
     """
-    Everything the page needs, in two round trips total.
+    Everything the page needs, in three round trips total.
 
-    TWO QUERIES, NOT ONE PER MARKET. Each is a single SELECT over the view with
-    an IN list, so adding lean hogs, corn and meal to the cattle costs three
-    more SERIES values rather than three more round trips -- which is what
-    makes it reasonable to show them at all.
+    THREE QUERIES, NOT ONE PER MARKET. Each is a single SELECT over the view
+    with an IN list, so the eight basket markets plus the two soy products cost
+    ten SERIES values rather than ten round trips -- which is what makes it
+    reasonable to offer a market toggle at all. The whole ten-market history is
+    8,512 rows and the toggle then costs rendering and no network: a reader
+    switching from cattle to corn is not a fetch.
+
+    `series` IS THE BASKET AND THE DEFAULT CHANGED FROM CATTLE ON 2026-11-03.
+    `reconcile` is the narrower set that gets the legacy cross-view panel and
+    the futures-and-options comparison -- still the two cattle markets, because
+    that panel exists to stop a client ringing about a cattle figure he read on
+    a broker's screen and nothing on this page quotes a legacy grain number.
 
     The COMBINED basis is fetched because the page offers it as a comparison,
     never because anything leads with it. Every headline figure in the returned
@@ -878,11 +977,12 @@ def load(series=CATTLE, neighbours=NEIGHBOURS) -> dict:
     """
     wanted = tuple(series) + tuple(n for n in neighbours if n not in series)
     out = {"schema": SCHEMA, "series": tuple(series),
-           "neighbours": tuple(neighbours), "error": None}
+           "neighbours": tuple(neighbours), "reconcile": tuple(reconcile),
+           "error": None}
     try:
         fut = fetch(wanted, FUT)
-        comb = fetch(series, COMBINED)
-        leg = fetch_legacy(series, FUT)
+        comb = fetch(reconcile, COMBINED)
+        leg = fetch_legacy(reconcile, FUT)
     except Exception as exc:  # noqa: BLE001
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
@@ -897,9 +997,13 @@ def load(series=CATTLE, neighbours=NEIGHBOURS) -> dict:
     out["as_of"] = fut["report_date"].max().date()
     out["freshness"] = is_current(out["as_of"])
     out["position_age_days"] = position_age_days(out["as_of"])
-    cattle_fut = fut[fut["series"].isin(series)]
-    out["audit"] = reconciles(cattle_fut)
-    out["cross_audit"] = reconciles_across_views(cattle_fut, leg)
+    # The identity audits run over the WHOLE basket, not just the markets that
+    # get the legacy panel: a shifted column in corn is exactly as invisible as
+    # one in live cattle, and the audit is free on rows already fetched.
+    basket_fut = fut[fut["series"].isin(series)]
+    out["audit"] = reconciles(basket_fut)
+    out["cross_audit"] = reconciles_across_views(
+        fut[fut["series"].isin(reconcile)], leg)
 
     markets = {}
     for s in wanted:
@@ -909,12 +1013,15 @@ def load(series=CATTLE, neighbours=NEIGHBOURS) -> dict:
         head = latest(one)
         entry = {"series": s,
                  "label": LABELS.get(s, s.replace("_", " ").title()),
-                 "latest": head, "frame": one}
+                 "short_label": SHORT_LABELS.get(s, s.replace("_", " ").title()),
+                 "latest": head, "frame": one,
+                 "in_basket": s in series}
         if s in series:
             entry["context"] = context(one)
             entry["why"] = why(head)
             entry["categories"] = decompose(one)
             entry["balance"] = categories_balance(entry["categories"])
+        if s in reconcile:
             cm = market(comb, s)
             entry["combined"] = latest(cm) if not cm.empty else {}
             other = one.iloc[-1].get("other_net")
@@ -923,6 +1030,35 @@ def load(series=CATTLE, neighbours=NEIGHBOURS) -> dict:
                 other_net=float(other) if pd.notna(other) else None)
         markets[s] = entry
     out["markets"] = markets
+
+    # -- the basket, built from the rows already in hand ----------------------
+    bf = basket_frame(fut, series)
+    if bf.empty:
+        out["basket"] = {"error": "no week has all of the basket"}
+    else:
+        bhead = latest(bf)
+        rows = contributions(fut, series)
+        out["basket"] = {
+            "key": BASKET_KEY,
+            "categories": decompose(bf),
+            "balance": categories_balance(decompose(bf)),
+            "label": BASKET_LABEL,
+            "members": tuple(series),
+            "frame": bf,
+            "latest": bhead,
+            "context": context(bf),
+            "why": why(bhead),
+            "contributions": rows,
+            "cattle_vs": cattle_vs_basket(rows, bhead.get("wow")),
+            "cattle_share": cattle_share(rows),
+            # The basket can date EARLIER than the page when a member is late,
+            # because an incomplete week is skipped. The page compares the two
+            # and says so; silently showing a tile one Tuesday behind the tiles
+            # beside it is the staleness failure this file keeps recording.
+            "as_of": bhead.get("as_of"),
+            "skipped": skipped_weeks(fut, series),
+            "weeks": int(len(bf)),
+        }
     return out
 
 
@@ -1052,4 +1188,269 @@ def reconciliation(disagg_row: dict, combined_row: dict, legacy: pd.DataFrame,
         out["sign_split"] = (f > 0) != (l > 0) and f != 0 and l != 0
         if other_net is not None:
             out["identity_ok"] = (l == f + other_net)
+    return out
+
+
+# -- the combined basket -----------------------------------------------------
+#
+# =============================================================================
+# CONTRACTS_ARE_NOT_A_COMMON_UNIT
+# =============================================================================
+#
+# The combined figure is a SUM OF NET CONTRACTS and is quoted in contracts,
+# never as exposure, money, bushels, pounds or head. One contract is not one
+# unit of anything shared:
+#
+#     corn / soybeans / all three wheats        5,000 bushels
+#     live cattle, lean hogs                   40,000 lb
+#     feeder cattle                            50,000 lb
+#
+# At late-2026 prices a feeder cattle contract is worth something like eight
+# times a corn contract, so adding the two counts them equally and weights the
+# total by how many contracts a market HAS rather than by how much money is in
+# them. What the sum measures is therefore the BREADTH of fund positioning
+# across these eight markets -- how many bets, which way -- and not the size of
+# the exposure. The page says so where the figure is printed, not in a footnote.
+#
+# A notional-dollar version would be the dimensionally sound one and is not
+# built, because it needs a price series per market and the portal has none
+# that covers both the grains and the cattle: CLAUDE.md records that Snowflake
+# holds no CME cattle futures at all, and the Massive feed has gone dark on
+# cattle for a fortnight at a time. A figure that silently loses its cattle leg
+# would be worse than one honestly labelled in contracts.
+#
+# `net_pct_oi` IS the dimensionless companion and needs no new data: the
+# combined net over the combined open interest, 4.9% on 2026-10-27. It carries
+# its own weighting (by open interest rather than by money) and is not a
+# substitute for the contract count, which is why both are shown.
+#
+# =============================================================================
+# THE CATTLE ARE NEARLY UNCORRELATED WITH IT, AND THAT IS THE WHOLE WARNING
+# =============================================================================
+#
+# This matters more than any of the above, because it is the misreading a
+# cattle trader is actually going to make. Weekly change in each market's net
+# against the weekly change in the combined, over all 1,063 adjacent weeks:
+#
+#     CORN           r = +0.897      opposite direction in 16% of weeks
+#     SOYBEANS       r = +0.711                           25%
+#     WHEAT_SRW      r = +0.645                           27%
+#     WHEAT_HRW      r = +0.588                           32%
+#     WHEAT_HRS      r = +0.433                           34%
+#     LEAN_HOGS      r = +0.171                           44%
+#     LIVE_CATTLE    r = +0.118                           46%
+#     FEEDER_CATTLE  r = -0.028                           50%
+#
+# The combined number is a GRAIN number. Feeder cattle moves the other way in
+# half of all weeks, which is a coin flip -- so "managed money cut its ag
+# length" carries no information whatsoever about feeder cattle.
+#
+# Live on the week this was built, 2026-10-27: the combined fell 145,446
+# contracts while BOTH cattle markets rose, live cattle +5,471 and feeders
+# +3,284. Corn alone was -83,310, and the grains were 102.7% of the fall. A
+# reader given the headline and nothing else would have concluded funds were
+# liquidating cattle in a week they bought them.
+#
+# `contributions()` exists so the panel can never print the total without the
+# breakdown, and `cattle_vs_combined()` so it can state the disagreement in
+# words when there is one.
+
+# Trader counts are NOT summed and the columns are dropped rather than zeroed.
+# The same fund trades corn and cattle, so adding MM_LONG_TRADERS across eight
+# markets counts it eight times and reports a trader population several times
+# the real one. There is no way to de-duplicate from published data -- CFTC
+# gives counts per market and never an identity -- so the combined panel has
+# no trader tile at all, which is the honest answer rather than a wrong one.
+_BASKET_SUM = (
+    "mm_net", "mm_long", "mm_short", "mm_spread",
+    "open_interest", "open_interest_chg",
+    "mm_long_chg", "mm_short_chg",
+    # THE FIVE CATEGORIES SUM ACROSS MARKETS TOO, and their nets still come to
+    # zero: each market's five net to zero by construction, so eight markets'
+    # forty do as well. That makes the "who is on the other side" panel work
+    # unchanged on the basket, and keeps `categories_balance()` as a free audit
+    # over the whole complex rather than one market at a time.
+    "prod_merc_long", "prod_merc_short", "prod_merc_net",
+    "swap_long", "swap_short", "swap_spread", "swap_net",
+    "other_long", "other_short", "other_spread", "other_net",
+    "nonrept_long", "nonrept_short", "nonrept_net",
+)
+
+
+def basket_frame(df: pd.DataFrame, basket=BASKET) -> pd.DataFrame:
+    """
+    One row per week: every column in `_BASKET_SUM` summed across the basket.
+
+    THE COLUMN NAMES ARE A MARKET'S OWN, ON PURPOSE. `latest()`, `context()`,
+    `why()` and `series_frame()` all take a frame shaped like one market's
+    history, so building the combined with the same names means the combined
+    panel gets the identical treatment -- same tiles, same percentiles, same
+    records, same long/short decomposition -- with no second implementation to
+    drift. That is what "keep the format the same" costs here: nothing.
+
+    ALL EIGHT OR THE WEEK IS SKIPPED. A week where any basket member has no row
+    is dropped entirely rather than summed over whoever reported, because a
+    total over seven markets is a different measurement wearing the same label
+    and a chart cannot show which weeks were which. It is the rule `herd.py`
+    already applies to the receipts channels.
+
+    It costs nothing today and is pure insurance: all eight report in all 1,064
+    weeks since 2006-06-13, zero incomplete. `skipped_weeks()` reports any that
+    ever appear so the page can say so rather than quietly shortening.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    want = set(basket)
+    g = df[df["series"].isin(want)]
+    if g.empty:
+        return pd.DataFrame()
+
+    full = g.groupby("report_date")["series"].nunique()
+    keep = full[full == len(want)].index
+    g = g[g["report_date"].isin(keep)]
+    if g.empty:
+        return pd.DataFrame()
+
+    cols = [c for c in _BASKET_SUM if c in g.columns]
+    out = (g.groupby("report_date", as_index=False)[cols].sum()
+             .sort_values("report_date").reset_index(drop=True))
+    # Trader counts deliberately absent -- see the note above _BASKET_SUM.
+    out["series"] = BASKET_KEY
+    return out
+
+
+def skipped_weeks(df: pd.DataFrame, basket=BASKET) -> list:
+    """
+    Weeks where at least one basket member did not report, newest first.
+
+    Empty today and expected to stay empty. If it is ever not, the page names
+    the weeks rather than drawing a series that is quietly missing them.
+    """
+    if df is None or df.empty:
+        return []
+    g = df[df["series"].isin(set(basket))]
+    if g.empty:
+        return []
+    full = g.groupby("report_date")["series"].nunique()
+    return [d.date() for d in sorted(full[full < len(basket)].index, reverse=True)]
+
+
+def contributions(df: pd.DataFrame, basket=BASKET) -> list:
+    """
+    Each basket member's newest net, its week-over-week change and its share of
+    the gross positioning, sorted biggest net first.
+
+    THE SHARE IS OF GROSS ABSOLUTE NET, not of the total. A total of +215,179
+    made of +193,781 soybeans and -74,606 Chicago wheat would give soybeans a
+    "90% share" and wheat a negative one, which is arithmetic nobody can read.
+    Dividing by the sum of absolute nets answers the question actually being
+    asked -- how much of the positioning on the page is this market -- and the
+    shares are positive and sum to 100 whichever way the individual bets point.
+    """
+    if df is None or df.empty:
+        return []
+    g = df[df["series"].isin(set(basket))]
+    if g.empty:
+        return []
+    newest = g["report_date"].max()
+    cur = g[g["report_date"] == newest]
+    gross = float(cur["mm_net"].abs().sum())
+
+    rows = []
+    for _, r in cur.iterrows():
+        wow = None
+        if pd.notna(r.get("mm_long_chg")) and pd.notna(r.get("mm_short_chg")):
+            wow = float(r["mm_long_chg"] - r["mm_short_chg"])
+        net = float(r["mm_net"])
+        rows.append({
+            "series": r["series"],
+            "label": LABELS.get(r["series"], r["series"]),
+            "short_label": SHORT_LABELS.get(r["series"], r["series"]),
+            "net": net,
+            "side": side(net),
+            "wow": wow,
+            "share": (100.0 * abs(net) / gross) if gross else None,
+            "open_interest": (float(r["open_interest"])
+                              if pd.notna(r.get("open_interest")) else None),
+            "contract": CONTRACT_SIZE.get(r["series"], ""),
+        })
+    return sorted(rows, key=lambda x: x["net"], reverse=True)
+
+
+def cattle_share(rows: list) -> dict:
+    """
+    How much of the basket the two cattle markets are, by contract count.
+
+    THE CONTRACT COUNT UNDERSTATES THE CATTLE AND THE PANEL HAS TO SAY WHICH
+    WAY IT RUNS. "A contract is not a common unit" is true and useless on its
+    own -- a reader cannot tell from it whether their market is being flattered
+    or buried. It is buried: a feeder cattle contract is 50,000 lb and a corn
+    contract 5,000 bushels, which at late-2026 prices is roughly eight times
+    the money, so a sum that counts them equally shrinks the cattle against the
+    grain. On 2026-10-27 the two cattle markets are 32.9% of the basket's net
+    total and 14.9% of its gross positioning, and both of those are smaller
+    than their share of the dollars at risk.
+
+    Returns the two shares from the data. The page states the DIRECTION of the
+    bias in words and does not put a notional percentage on it, because that
+    would need a settlement price for all eight markets and the portal has no
+    source that covers both the grains and the cattle -- CLAUDE.md records that
+    Snowflake holds no CME cattle futures at all.
+    """
+    out = {"net_share": None, "gross_share": None, "net": None}
+    if not rows:
+        return out
+    cattle = [r for r in rows if r["series"] in CATTLE]
+    if not cattle:
+        return out
+    c_net = float(sum(r["net"] for r in cattle))
+    total = float(sum(r["net"] for r in rows))
+    gross = float(sum(abs(r["net"]) for r in rows))
+    out["net"] = c_net
+    if total:
+        out["net_share"] = 100.0 * abs(c_net) / abs(total)
+    if gross:
+        out["gross_share"] = 100.0 * sum(abs(r["net"]) for r in cattle) / gross
+    return out
+
+
+def cattle_vs_basket(rows: list, basket_wow) -> dict:
+    """
+    Whether this week's move in the basket was the two cattle markets or the
+    other six, and whether the cattle went the OPPOSITE way to the total.
+
+    THE SPLIT IS CATTLE AGAINST EVERYTHING ELSE, not cattle against grain.
+    Lean hogs is livestock and sits in the "rest" with the grains, so calling
+    that side "grain" would be wrong by one market -- it reported 106% of this
+    week's move under a grain label when the grains were 103%. The page says
+    "the other six markets", which is what the number is.
+
+    The panel prints this whenever the two disagree, which is the case the
+    whole caveat exists for and which is live on the week it was written. It is
+    computed rather than asserted so the sentence keeps describing the market
+    rather than the market of the day it was written.
+    """
+    out = {"cattle_wow": None, "rest_wow": None, "rest_share": None,
+           "disagrees": False, "cattle": [], "basket_wow": basket_wow}
+    if not rows or basket_wow is None:
+        return out
+
+    cattle = [r for r in rows if r["series"] in CATTLE and r["wow"] is not None]
+    rest = [r for r in rows if r["series"] not in CATTLE and r["wow"] is not None]
+    if not cattle:
+        return out
+
+    c_wow = float(sum(r["wow"] for r in cattle))
+    rest_wow = float(sum(r["wow"] for r in rest))
+    out["cattle_wow"] = c_wow
+    out["rest_wow"] = rest_wow
+    out["cattle"] = cattle
+    out["rest"] = rest
+    out["n_rest"] = len(rest)
+    if basket_wow:
+        out["rest_share"] = 100.0 * abs(rest_wow) / abs(basket_wow)
+    # Disagreement means the cattle leg moved the opposite way to the total --
+    # the reading that would have a trader act on the wrong market.
+    out["disagrees"] = (c_wow != 0 and basket_wow != 0
+                        and (c_wow > 0) != (basket_wow > 0))
     return out

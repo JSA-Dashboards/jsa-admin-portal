@@ -370,7 +370,7 @@ def explain_measure() -> str:
 # re-reads Snowflake. The cache otherwise holds an hour, and the ETL lands Friday 3pm CT.
 asof_col, refresh_col = st.columns([5, 1.3], vertical_alignment="center")
 with refresh_col:
-    if st.button("Refresh data", icon=":material/refresh:", width="stretch",
+    if not __import__("portal_view").is_client() and st.button("Refresh data", icon=":material/refresh:", width="stretch",
                  help="Re-read the latest positions from Snowflake now. Data is otherwise cached for an hour."):
         cc.clear_cache()
         st.toast("Reloaded from Snowflake.")

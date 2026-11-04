@@ -28,7 +28,16 @@ import streamlit as st
 # Streamlit puts the MAIN script's directory on sys.path, never the page's, so
 # a multipage app's own sibling modules are not importable without this. Same
 # line the cme_feeder_cattle page carries, for the same reason.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 import snowflake_db as db
 from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
@@ -1006,7 +1015,7 @@ if HS:
         # everything after it, out of view. The chart answers 'what is
         # happening' and the table answers 'by how much, in which year', so
         # the chart goes first and the numbers are one click away.
-        with st.expander("📋  Receipts volume by year, with year-over-year"):
+        for _ in portal_view.staff_expander("📋  Receipts volume by year, with year-over-year"):
             # st.dataframe rather than hand-rolled HTML, for two affordances it
             # brings and a markup table cannot: a FULLSCREEN toggle, which is how
             # you snip this, and a download, which is how you print it or take it

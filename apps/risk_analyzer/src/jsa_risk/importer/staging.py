@@ -95,7 +95,11 @@ class StagingRow:
     last_tick: Optional[float]
 
 
-def build_staging_row(raw_row: List[str], headers: List[str], mapping: dict) -> StagingRow:
+def build_staging_row(
+    raw_row: List[str], headers: List[str], mapping: dict, price_divisor: float = 100.0
+) -> StagingRow:
+    """`price_divisor` turns the sheet's quoted prices into app units: 100 for cents-quoted
+    products (440 = $4.40), 1 for soybean meal, which the sheet already quotes in $/ton."""
     def col(key: str) -> str:
         idx = mapping.get(key, -1)
         if idx is None or idx < 0 or idx >= len(raw_row):
@@ -109,8 +113,9 @@ def build_staging_row(raw_row: List[str], headers: List[str], mapping: dict) -> 
     type_raw = parse_type(col("type"))
     is_future = strike_raw is None
     position_type = "future" if is_future else (type_raw or "call")
-    # Strike is quoted in cents/bu (e.g. 440 = $4.40), same convention as futures prices.
-    strike = None if strike_raw is None else strike_raw / 100
+    # Strike is quoted in the commodity's quoting unit (cents/bu: 440 = $4.40), same convention
+    # as futures prices.
+    strike = None if strike_raw is None else strike_raw / price_divisor
 
     expiry = normalize_date_str(col("expiryDate"))
 
@@ -137,11 +142,11 @@ def build_staging_row(raw_row: List[str], headers: List[str], mapping: dict) -> 
         iv = iv_raw * 100 if abs(iv_raw) <= 1.5 else iv_raw
 
     entry_raw = parse_num(col("entry"))
-    # Entry/premium is quoted in cents/bu for both futures and options.
-    entry = None if entry_raw is None else entry_raw / 100
+    # Entry/premium is quoted in that unit for both futures and options.
+    entry = None if entry_raw is None else entry_raw / price_divisor
 
     last_tick_raw = parse_num(col("lastTick"))
-    last_tick = None if last_tick_raw is None else last_tick_raw / 100
+    last_tick = None if last_tick_raw is None else last_tick_raw / price_divisor
 
     return StagingRow(
         label=label, type=position_type, strike=strike, expiry=expiry,

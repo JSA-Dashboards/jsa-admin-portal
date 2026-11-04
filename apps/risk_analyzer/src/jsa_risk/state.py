@@ -167,9 +167,21 @@ def replace_book(positions: List[Position]) -> int:
     return len(positions)
 
 
+def session_only() -> bool:
+    """True when this session must not write shared reference data. The JSA admin portal's CLIENT view sets
+    it: a client's typed or fetched contract price then lives in that browser session only, instead of
+    overwriting the shared CONTRACT_MARKS row every other session (staff included) reads."""
+    return bool(st.session_state.get("_session_only"))
+
+
 def get_contract_price(canonical_key: str) -> float:
     spec = get_commodity_spec()
-    return reference_repo.get_contract_price(reference_key(spec, canonical_key), default=spec.default_price)
+    key = reference_key(spec, canonical_key)
+    if session_only():
+        mine = st.session_state.get("_session_marks", {})
+        if key in mine:
+            return mine[key]
+    return reference_repo.get_contract_price(key, default=spec.default_price)
 
 
 def positions_without_ticks_for(positions: List[Position], canonical_key: str, commodity: CommoditySpec) -> List[Position]:
@@ -186,7 +198,10 @@ def positions_without_ticks_for(positions: List[Position], canonical_key: str, c
 
 def set_contract_price(canonical_key: str, price: float, source: str = "manual") -> None:
     spec = get_commodity_spec()
-    reference_repo.set_contract_price(reference_key(spec, canonical_key), price, source)
+    if session_only():
+        st.session_state.setdefault("_session_marks", {})[reference_key(spec, canonical_key)] = price
+    else:
+        reference_repo.set_contract_price(reference_key(spec, canonical_key), price, source)
     # The live mark now wins for everything priced off this contract.
     st.session_state.positions = positions_without_ticks_for(st.session_state.positions, canonical_key, spec)
 
@@ -202,11 +217,25 @@ def get_contract_marks() -> Dict[str, float]:
     is called elsewhere. Relies on every commodity code being exactly 2 characters."""
     spec = get_commodity_spec()
     prefix = spec.code
+    marks = dict(reference_repo.get_contract_marks())
+    if session_only():
+        marks.update(st.session_state.get("_session_marks", {}))
     return {
         k[len(prefix):]: v
-        for k, v in reference_repo.get_contract_marks().items()
+        for k, v in marks.items()
         if k.startswith(prefix)
     }
+
+
+def get_contract_mark_provenance() -> List[dict]:
+    """Same de-prefixing as get_contract_marks, for the futures-mark provenance rows."""
+    spec = get_commodity_spec()
+    prefix = spec.code
+    return [
+        {**r, "key": r["key"][len(prefix):]}
+        for r in reference_repo.get_contract_mark_provenance()
+        if r["key"].startswith(prefix)
+    ]
 
 
 def get_iv_provenance() -> List[dict]:

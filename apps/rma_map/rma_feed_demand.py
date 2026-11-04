@@ -37,7 +37,127 @@ SBM_LB = {"CATTLE ON FEED": 0.0, "OTHER CATTLE": 0.0, "MILK COWS": 1450.0, "HOGS
 # Distillers grains. 15.5 lb DDGS-equivalent per 56-lb bushel x 0.55 lb corn displaced per lb = 0.152 bu of corn per bushel ground (range 0.12-0.20); soybean meal 0.07 lb per lb.
 CORN_CREDIT = 0.15
 SBM_CREDIT_LB = 0.07 * 15.5                                              # lb of soybean meal displaced per bushel ground (about 1.1)
-DRIED_EXPORT_SHARE = 0.33                                                # of the dried product, the part that leaves the country (US DDGS exports are roughly a quarter of all production)
+DRIED_EXPORT_SHARE = 0.33                                                # used only when no export tonnage is given: the part of the dried product that leaves the country
+
+
+@lru_cache(maxsize=1)
+def census_ddgs_exports() -> dict:
+    """{year: metric tons} of US exports of distillers grains (HS 2303.30, Census, calendar years; data/feed/ddgs_exports_census.csv)."""
+    return {int(r["year"]): float(r["tonnes"]) for r in _read("ddgs_exports_census.csv")}
+
+
+def default_export_tonnes() -> float:
+    """The latest three Census years averaged: what the dried product exports are taken at when nothing else is set."""
+    ex = census_ddgs_exports()
+    yrs = sorted(ex)[-3:]
+    return sum(ex[y] for y in yrs) / len(yrs)
+
+
+EXPORT_STATE_MAX_SHARE = 0.6        # most of a state's dried product that can leave from there: the rest is fed at home (a state's exports are also loaded from other states' product)
+
+
+@lru_cache(maxsize=1)
+def export_state_shares() -> dict:
+    """{state: share of the value of US distillers grains exports} by Census state of origin of the movement, the latest three years averaged
+    (data/feed/ddgs_exports_by_state.csv). A port or transload state (Louisiana above all) is where the product was loaded, not made; allocate_exports() hands those shares to the states that make it."""
+    by: dict = {}
+    for r in _read("ddgs_exports_by_state.csv"):
+        by.setdefault(int(r["year"]), {})[r["state"]] = float(r["value_usd"])
+    yrs = sorted(by)[-3:]
+    tot = {y: sum(by[y].values()) for y in yrs}
+    out: dict = {}
+    for y in yrs:
+        for s, v in by[y].items():
+            out[s] = out.get(s, 0.0) + v / tot[y] / len(yrs)
+    return out
+
+
+@lru_cache(maxsize=1)
+def export_routes() -> dict:
+    """The latest year of Census export weights by route: {year, total_t, container_t, bulk_vessel_t, land_t} (vessel and container weights are reported; land is the rest), and the top ports by value."""
+    rows = _read("ddgs_exports_by_route.csv")
+    last = max(rows, key=lambda r: int(r["year"]))
+    ports = [r for r in _read("ddgs_exports_by_port.csv") if r["year"] == last["year"]]
+    ports = sorted(ports, key=lambda r: -float(r["value_usd"]))[:8]
+    return {"year": int(last["year"]), **{k: float(last[k]) for k in ("total_t", "container_t", "bulk_vessel_t", "land_t")},
+            "ports": [(r["port"], float(r["value_usd"]) / 1e6) for r in ports]}
+
+
+def allocate_exports(total, shares, dried_by_state, max_frac=EXPORT_STATE_MAX_SHARE) -> dict:
+    """Spread `total` (bushels of corn-equivalent) over the states that make dried product: each state's want is its Census origin share, a state can export at most `max_frac` of
+    the dried product it makes, and what a state cannot take (a port state with no plants, or a state whose share is more than it makes) goes to the states with room, in
+    proportion to their own shares. Returns {state: bu}; what no state has room for is left out."""
+    cap = {s: max_frac * v for s, v in dried_by_state.items() if v > 0}
+    alloc = {s: 0.0 for s in cap}
+    for _ in range(60):
+        left = total - sum(alloc.values())
+        room = {s: cap[s] - alloc[s] for s in cap if cap[s] - alloc[s] > 1e-6}
+        if left <= 1e-6 or not room:
+            break
+        w = {s: shares.get(s, 0.0) for s in room}
+        wt = sum(w.values())
+        if wt <= 0:
+            w, wt = dict(room), sum(room.values())
+        for s in room:
+            alloc[s] += min(left * w[s] / wt, room[s])
+    return alloc
+
+
+# How a plant's dried distillers grains leave. A small plant with no rail or river nearby feeds it to local animals by truck; a big plant loads unit trains (or barges, on the river);
+# plants around Chicago ship containers; and the less livestock there is around a plant, the more of its product has to leave. Weights, not facts: they only decide which plants in a
+# state carry that state's Census export tonnage.
+SIZE_SMALL_MGY, SIZE_BIG_MGY = 40.0, 100.0         # below the first a plant ships almost nothing but local truck; at the second it has full unit-train or barge loading
+EXPORT_FLOOR = 0.08                                # the share of a small plant with no access that still leaves (trucks to the border)
+RAIL_SCALE_MI, RIVER_SCALE_MI, CHICAGO_SCALE_MI = 12.0, 12.0, 60.0     # access fades with distance on these scales (Chicago's pull falls off faster: a bell curve)
+CHICAGO = (41.88, -87.63)
+FEED_REACH_MI = 150.0
+EXPORT_PLANT_MAX = 0.9                             # no plant exports more than this share of its dried product
+
+
+# Plants whose first-mile mode is known and not left to the access weights: (rail, barge, container, local truck) shares of what the plant exports, matched on part of the plant's key.
+# Marquis at Hennepin loads barges on the Illinois River and has no rail export; a plant in Chicago (Ingredion, if it were in the list) is nearly all container or rail.
+MODE_OVERRIDES = {"Marquis Energy, LLC Hennepin": (0.0, 0.95, 0.0, 0.05), "Ingredion": (0.4, 0.0, 0.6, 0.0)}
+
+
+def plant_export_propensity(plants, grind_bu, counties, gross_feed, track_mi, river_mi, gal_per_bu=2.9):
+    """Per plant: how likely its dried product is to leave, and by which first-mile mode.
+
+    size     0 at 40 M gal a year, 1 at 100 (smooth), from the grind
+    rail     1 on track, fading with the miles to the nearest Class I railroad (`track_mi`); times size
+    barge    1 at a river terminal, fading with the miles to the nearest barge terminal (`river_mi`); times size
+    container  1 in Chicago, falling to a third at 60 miles and nothing past about 120; a small plant near Chicago still ships containers, so size counts at least half
+    local feed  counties' corn feed energy within 150 miles over the plant's grind: the more animals around, the less leaves (propensity x 0.3 to 1)
+    Returns {"propensity", "modes" (rail, barge, container, truck: shares of each plant's export that add to 1), "mgy", "feed_pull"}."""
+    g = np.asarray(grind_bu, float)
+    mgy = g * gal_per_bu / 1e6
+    size = np.clip((mgy - SIZE_SMALL_MGY) / (SIZE_BIG_MGY - SIZE_SMALL_MGY), 0.0, 1.0)
+    size = size * size * (3.0 - 2.0 * size)
+    rail = np.exp(-np.asarray(track_mi, float) / RAIL_SCALE_MI) * size
+    barge = np.exp(-np.asarray(river_mi, float) / RIVER_SCALE_MI) * size
+    lat_p = np.array([p["lat"] for p in plants], float)
+    lon_p = np.array([p["lon"] for p in plants], float)
+    chi = _miles(lat_p, lon_p, np.array([CHICAGO[0]]), np.array([CHICAGO[1]]))[:, 0]
+    cont = np.exp(-(chi / CHICAGO_SCALE_MI) ** 2) * np.maximum(size, 0.5)
+    lat_c = np.array([c["lat"] for c in counties], float)
+    lon_c = np.array([c["lon"] for c in counties], float)
+    pull = (np.asarray(gross_feed, float)[None, :] * np.exp(-_miles(lat_p, lon_p, lat_c, lon_c) / FEED_REACH_MI)).sum(axis=1) / np.maximum(g, 1.0)
+    med = float(np.median(pull[g > 0])) if (g > 0).any() else 1.0
+    feed_f = np.clip(2.0 / (1.0 + pull / max(med, 1e-9)), 0.3, 1.0)
+    access = np.maximum(np.maximum(rail, barge), cont)
+    prop = EXPORT_FLOOR + (1.0 - EXPORT_FLOOR) * access * feed_f
+    truck = np.full(len(g), EXPORT_FLOOR)
+    mode = np.column_stack([rail, barge, cont, truck])
+    modes = mode / np.maximum(mode.sum(axis=1, keepdims=True), 1e-12)
+    for i, p in enumerate(plants):
+        for part, shares in MODE_OVERRIDES.items():
+            if part in p.get("key", ""):
+                modes[i] = shares
+    return {"propensity": prop, "modes": modes, "mgy": mgy, "feed_pull": pull / max(med, 1e-9), "chicago_mi": chi}
+
+
+def export_credit_bu(tonnes: float, corn_credit_per_lb: float = 0.55) -> float:
+    """Bushels of corn-equivalent feed that `tonnes` of exported distillers grains stand for (0.55 lb of corn displaced per lb of DDGS, 56-lb bushels)."""
+    return tonnes * 2204.62 * corn_credit_per_lb / 56.0
 WET_RADIUS_MI = 90.0                                                     # wet and modified distillers grains are fed within about this many miles of the plant
 DRIED_SCALE_MI = 300.0                                                   # dried product spreads with a distance decay of this scale
 CREDIT_CAP = 0.35                                                        # distillers grains never replace more than this share of a county's corn feed energy
@@ -159,13 +279,13 @@ def _miles(lat1, lon1, lat2, lon2):
     return 3959.0 * 2 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
 
 
-def ddgs_credit(plants, grind_bu, counties, gross_by_species, *, corn_credit=CORN_CREDIT, wet_share=None, dried_export=DRIED_EXPORT_SHARE, wet_radius=WET_RADIUS_MI,
-                dried_scale=DRIED_SCALE_MI, cap=CREDIT_CAP):
+def ddgs_credit(plants, grind_bu, counties, gross_by_species, *, corn_credit=CORN_CREDIT, wet_share=None, dried_export=DRIED_EXPORT_SHARE, export_bu=None, wet_radius=WET_RADIUS_MI,
+                dried_scale=DRIED_SCALE_MI, cap=CREDIT_CAP, export_shares=None, export_max=EXPORT_STATE_MAX_SHARE, track_mi=None, river_mi=None):
     """Where each plant's distillers grains credit lands, in bushels of corn equivalent.
 
     Returns {"county": credit by county, "wet": ..., "dried": ..., "export": bu of dried product exported, "unplaced": bu above the county cap or with no one to feed it, "by_plant": credit by plant}.
     Wet and modified product goes to cattle and dairy within `wet_radius` miles of the plant (in proportion to their corn feed energy); dried goes to every kind of animal with a
-    distance decay of `dried_scale` miles; the exported part of the dried product is not placed. A county's credit is capped at `cap` of its corn feed energy."""
+    distance decay of `dried_scale` miles; the exported part of the dried product is not placed: `export_bu` (corn-equivalent bushels, from Census export tonnage) when given, taken from every plant's dried product pro rata, else the `dried_export` share. A county's credit is capped at `cap` of its corn feed energy."""
     ws = wet_share or {}
     gross = sum(gross_by_species.values())
     rum = sum(gross_by_species[sp] for sp in RUMINANTS)
@@ -181,7 +301,35 @@ def ddgs_credit(plants, grind_bu, counties, gross_by_species, *, corn_credit=COR
     no_wet = wet_w.sum(axis=1) <= 0                                         # no cattle in reach: that product is dried and moves like it
     dried_all = dried_all + np.where(no_wet, wet_amt, 0.0)
     wet_amt = np.where(no_wet, 0.0, wet_amt)
-    export = dried_all * dried_export
+    export_state, acc = None, None
+    if export_bu is not None and export_shares:                              # where the dried product leaves from: Census origin shares, port states passed on to the states that make it
+        states = [p["state"] for p in plants]
+        dried_state: dict = {}
+        for s, v in zip(states, dried_all):
+            dried_state[s] = dried_state.get(s, 0.0) + float(v)
+        export_state = allocate_exports(float(export_bu), export_shares, dried_state, export_max)
+        if track_mi is not None and river_mi is not None:                      # plants in a state carry its export by their own access, size and local feed demand
+            acc = plant_export_propensity(plants, grind_bu, counties, gross, track_mi, river_mi)
+            w = dried_all * acc["propensity"]
+            export = np.zeros(len(plants))
+            for s in set(states):
+                idx = [i for i, s_ in enumerate(states) if s_ == s]
+                want, cap_i, free = export_state.get(s, 0.0), EXPORT_PLANT_MAX * dried_all[idx], set(range(len(idx)))
+                got = np.zeros(len(idx))
+                for _ in range(30):
+                    left = want - got.sum()
+                    ws = np.array([w[idx[k]] if k in free else 0.0 for k in range(len(idx))])
+                    if left <= 1e-6 or ws.sum() <= 0:
+                        break
+                    add = np.minimum(left * ws / ws.sum(), cap_i - got)
+                    got += add
+                    free = {k for k in free if cap_i[k] - got[k] > 1e-6}
+                export[idx] = got
+        else:
+            acc = None
+            export = np.array([export_state.get(s, 0.0) * float(v) / max(dried_state[s], 1e-9) for s, v in zip(states, dried_all)], float)
+    else:
+        export = dried_all * dried_export if export_bu is None else dried_all * min(float(export_bu) / max(float(dried_all.sum()), 1e-9), 1.0)
     dried_dom = dried_all - export
     dried_w = gross[None, :] * np.exp(-dist / dried_scale)
     A_wet = wet_amt[:, None] * wet_w / np.maximum(wet_w.sum(axis=1, keepdims=True), 1e-300)
@@ -192,7 +340,8 @@ def ddgs_credit(plants, grind_bu, counties, gross_by_species, *, corn_credit=COR
     scale = np.where(col > lim, lim / np.maximum(col, 1e-300), 1.0)
     A = A * scale[None, :]
     return {"county": A.sum(axis=0), "wet": (A_wet * scale[None, :]).sum(axis=0), "dried": (A_dry * scale[None, :]).sum(axis=0), "export": float(export.sum()),
-            "unplaced": float(total.sum() - export.sum() - A.sum()), "by_plant": A.sum(axis=1)}
+            "unplaced": float(total.sum() - export.sum() - A.sum()), "by_plant": A.sum(axis=1), "export_state": export_state, "export_plant": export, "access": acc,
+            "dried_state": ({s: v for s, v in dried_state.items()} if export_state is not None else None)}
 
 
 def county_feed(counties, year, plants, grind_bu, feed_residual_bu, **credit_kw):

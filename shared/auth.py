@@ -6,6 +6,7 @@ and run once at the shell level (Home.py) instead of once per dashboard — so
 logging in covers every merged page in the session, and there's no risk of
 each dashboard's own gate stacking awkwardly with this one.
 """
+import hmac
 import os
 import streamlit as st
 
@@ -40,6 +41,50 @@ def require_admin_login():
         if entered:
             if entered == expected:
                 st.session_state["_jsa_authed"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    st.stop()
+
+
+def require_client_login():
+    """Gate the CLIENT portal behind one shared CLIENT_PASSWORD (secret or env).
+
+    UNLIKE require_admin_login, THIS FAILS CLOSED: with no CLIENT_PASSWORD configured nobody gets in
+    and the page says why. The staff gate can afford to be open when unset (local dev), but a client
+    deployment that lost its secret on a redeploy must not come up quietly open to the internet.
+    A different value from ADMIN_PASSWORD, so handing clients this one never hands out the staff portal."""
+    expected = None
+    try:
+        expected = st.secrets.get("CLIENT_PASSWORD")
+    except Exception:
+        pass
+    expected = expected or os.environ.get("CLIENT_PASSWORD")
+
+    if expected and st.session_state.get("_jsa_client_authed"):
+        return
+
+    _, mid, _ = st.columns([1, 1.4, 1])
+    with mid:
+        st.markdown(
+            "<div style='text-align:center;padding-top:64px'>"
+            "<div style='font-size:24px;font-weight:700;color:#32373c;"
+            "font-family:\"EB Garamond\",Georgia,serif'>"
+            "JSA Client Portal</div>"
+            "<div style='color:#64748b;font-size:13px;margin:6px 0 16px'>"
+            "John Stewart &amp; Associates · enter your access password to continue</div></div>",
+            unsafe_allow_html=True,
+        )
+        if not expected:
+            st.error("This portal is not configured yet (no access password is set), so it is closed.")
+            st.stop()
+        entered = st.text_input(
+            "Password", type="password", key="_jsa_client_pw_input",
+            label_visibility="collapsed", placeholder="Password",
+        )
+        if entered:
+            if hmac.compare_digest(entered.strip(), str(expected)):
+                st.session_state["_jsa_client_authed"] = True
                 st.rerun()
             else:
                 st.error("Incorrect password.")

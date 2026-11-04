@@ -1,10 +1,25 @@
 """
-Commitment of Traders -- where the funds are positioned in the cattle futures.
+Commitment of Traders -- where the funds are positioned in the cattle, hog and
+grain futures.
 
-THE PAGE EXISTS FOR TWO NUMBERS. Managed money net futures position in Live
-Cattle, and in Feeder Cattle. They are the first thing on the page, they are
-above the tabs, and they are above the outage guard. Everything else here is
-context for them and is arranged so it cannot push them below the fold.
+THE PAGE STILL EXISTS FOR TWO NUMBERS and opens on them. Managed money net
+futures position in Live Cattle, and in Feeder Cattle. They are the first thing
+on the page, they are above the tabs, and they are above the outage guard.
+Everything else here is context for them and is arranged so it cannot push them
+below the fold.
+
+SIX MORE MARKETS AND A COMBINED TOTAL were added 2026-11-03 -- lean hogs, corn,
+soybeans and the three wheat classes, behind a toggle that OPENS ON THE TWO
+CATTLE MARKETS, so the page a reader meets is the page that was here before it.
+`cot_positions.BASKET` is the eight, and the combined total sums exactly those
+eight whatever the toggle is set to.
+
+THE COMBINED PANEL IS THE ONE PIECE OF THIS THAT CAN MISLEAD A CATTLE TRADER,
+and `cot_positions` says at length why: over 1,063 weeks its weekly change
+correlates +0.90 with corn and -0.03 with feeder cattle. It is a grain number.
+So the panel never prints the total without the breakdown, and says in the open
+when the cattle moved the other way -- which they did on the week it shipped,
+both of them up while the total fell 145,446.
 
 WHY IT IS WORTH A PAGE WHEN THE LETTER ALREADY PRINTS THE SAME TWO FIGURES.
 The Friday letter's CFTC block gives the net and the week's change, which is
@@ -36,7 +51,16 @@ import streamlit as st
 
 # A Streamlit page's own directory is never added to sys.path automatically --
 # st.Page runs this file via exec() rather than as a script.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import portal_view  # noqa: E402
 
 # On Streamlit Community Cloud the secrets live in st.secrets rather than in a
 # local .env, and `snowflake_db.get_conn()` reads os.environ only. Forward them.
@@ -86,8 +110,37 @@ SHORT_COLOR  = "#dc2626"
 SPREAD_COLOR = "#b8c4bc"
 OI_COLOR     = "#9b89c4"
 
-MARKET_COLOR = {"LIVE_CATTLE": LIVE_COLOR, "FEEDER_CATTLE": FEEDER_COLOR}
+# A colour per market, livestock warm and grain cool, so the two families read
+# apart on the across-the-markets chart without a legend lookup. The basket has
+# its own ink -- JSA green -- because it is not one of the eight and must not
+# look like one more market on the same footing.
+HOG_COLOR     = "#b07aa1"
+CORN_COLOR    = "#d9a441"
+SOY_COLOR     = "#6a9c5a"
+WHEAT_COLOR   = "#8c7b6b"
+WHEAT2_COLOR  = "#a8927f"
+WHEAT3_COLOR  = "#c4b3a2"
+BASKET_COLOR  = JSA_GREEN
+
+MARKET_COLOR = {
+    "LIVE_CATTLE":   LIVE_COLOR,
+    "FEEDER_CATTLE": FEEDER_COLOR,
+    "LEAN_HOGS":     HOG_COLOR,
+    "CORN":          CORN_COLOR,
+    "SOYBEANS":      SOY_COLOR,
+    "WHEAT_SRW":     WHEAT_COLOR,
+    "WHEAT_HRW":     WHEAT2_COLOR,
+    "WHEAT_HRS":     WHEAT3_COLOR,
+    "SOYBEAN_MEAL":  "#9b89c4",
+    "SOYBEAN_OIL":   "#c4785a",
+    cot.BASKET_KEY:  BASKET_COLOR,
+}
 MARKET_CLS   = {"LIVE_CATTLE": "tile-live", "FEEDER_CATTLE": "tile-feeder"}
+
+# The toggle's own state. Kept out of the widget call so the default and the
+# empty-selection fallback are one value rather than two that can drift.
+PICK_KEY = "cot_markets"
+DEFAULT_PICK = list(cot.CATTLE)
 
 AXIS = dict(
     gridcolor=DM_BORDER, linecolor=DM_BORDER, showgrid=True,
@@ -258,7 +311,12 @@ def ordinal(p):
 
 # -- data --------------------------------------------------------------------
 
-@st.cache_data(ttl=1800, persist="disk", show_spinner="Reading CFTC positions…")
+# No persist="disk" -- it voids the ttl (Streamlit's own
+# local_disk_cache_storage.py: "has a TTL that will be ignored"). This key
+# already varies, because the call site passes cot.data_epoch(), so this one
+# was not frozen -- but the docstring below leans on the ttl three times as
+# the backstop for a late ETL, and none of that was happening.
+@st.cache_data(ttl=1800, show_spinner="Reading CFTC positions…")
 def load_cot(schema: int = cot.SCHEMA, epoch=None) -> dict:
     """
     The whole page's data, in two queries.
@@ -349,8 +407,8 @@ st.markdown(
     f"<h3 style='margin-bottom:2px;color:{DM_TEXT};"
     f"font-family:\"EB Garamond\",Georgia,serif'>Commitment of Traders</h3>"
     f"<div style='color:{DM_MUTED};font-size:0.86rem;margin-bottom:14px'>"
-    "Where the speculative funds are positioned in the cattle futures — "
-    "CFTC's weekly Disaggregated report, futures only."
+    "Where the speculative funds are positioned in the cattle, hog and grain "
+    "futures — CFTC's weekly Disaggregated report, futures only."
     "</div>",
     unsafe_allow_html=True,
 )
@@ -411,49 +469,85 @@ if not fresh.get("current"):
         "(`JSA-Dashboards/cftc-cot-etl`, Fridays 3pm CT) has probably not run."
     )
 
-# -- THE TWO FIGURES THE PAGE EXISTS FOR -------------------------------------
+# -- WHICH MARKETS ------------------------------------------------------------
+#
+# IT OPENS ON THE TWO CATTLE MARKETS AND IS NOT REMEMBERED ACROSS SESSIONS, so
+# the page a reader meets is exactly the page that was here before the toggle
+# existed. Everything else is opt-in.
+#
+# The widget costs no fetch. `load_cot()` has already pulled all ten markets in
+# one query -- 8,512 rows -- so changing the selection is a re-render and never
+# a round trip, which is the whole reason a toggle over eight markets is
+# reasonable here at all.
+_opts = [s for s in cot.BASKET if s in markets]
+picked = st.pills(
+    "Markets", _opts, selection_mode="multi", default=DEFAULT_PICK,
+    key=PICK_KEY, label_visibility="collapsed",
+    format_func=lambda s: cot.SHORT_LABELS.get(s, s),
+)
 
-hero_cols = st.columns(2)
-for col, series in zip(hero_cols, cot.CATTLE):
+# AN EMPTY SELECTION FALLS BACK RATHER THAN RENDERING NOTHING. `st.pills` lets
+# a reader deselect everything, and a page that answers that with a blank
+# screen reads as broken rather than as empty. The caption says what happened,
+# because silently substituting a selection the reader did not make is the
+# other half of the same fault.
+if not picked:
+    picked = list(DEFAULT_PICK)
+    st.caption("No market selected — showing the two cattle markets.")
+shown = [s for s in cot.BASKET if s in picked]
+
+# -- THE FIGURES THE PAGE EXISTS FOR -----------------------------------------
+
+
+def hero(series: str) -> str:
+    """One market's headline tile. Returns HTML so the caller owns the layout."""
     m = markets.get(series)
-    with col:
-        if not m:
-            st.markdown(
-                f'<div class="hero"><div class="hero-market">'
+    if not m:
+        return ('<div class="hero"><div class="hero-market">'
                 f'{cot.LABELS.get(series, series)}</div>'
-                '<div class="hero-label">no rows returned</div></div>',
-                unsafe_allow_html=True)
-            continue
-        L, W = m["latest"], m["why"]
-        mag, word = signed_words(L["net"])
-        side_cls = "hero-side-long" if word == "long" else "hero-side-short"
-        side_html = f' <span class="{side_cls}">{word}</span>' if word else ""
+                '<div class="hero-label">no rows returned</div></div>')
+    L, W = m["latest"], m["why"]
+    mag, word = signed_words(L["net"])
+    side_cls = "hero-side-long" if word == "long" else "hero-side-short"
+    side_html = f' <span class="{side_cls}">{word}</span>' if word else ""
 
-        # The label names the figure in full. "Managed money net" alone would
-        # not say whose, which market, or on what contract basis -- and a tile
-        # gets screenshotted away from the header above it.
-        legs = (f'Long {L["long"]:,.0f} against short {L["short"]:,.0f}'
-                f' · spreading {fmt(L["spread"])}')
-        # "mostly X" only parses when ONE leg carried the week. When the two
-        # legs moved together the phrase is already a whole clause -- "both
-        # sides added" -- and "mostly both sides added" is not English.
-        if not W.get("phrase"):
-            driver = ""
-        elif W.get("agree"):
-            driver = f'<br>The week\'s move was mostly <b>{W["phrase"]}</b>'
-        else:
-            driver = f'<br><b>{W["phrase"].capitalize()}</b>, so the net barely moved'
-        st.markdown(
-            f'<div class="hero" style="border-top-color:{MARKET_COLOR[series]}">'
-            f'<div class="hero-market">{m["label"]}</div>'
-            f'<div class="hero-label">Managed money net futures position</div>'
-            f'<div class="hero-value">{mag}{side_html}</div>'
-            f'<div class="hero-unit">contracts, as of Tuesday {_us(L["as_of"])}</div>'
-            f'{delta_html(L["wow"], unit="contracts", suffix=" vs week earlier", cls="hero-delta")}'
-            f'<div class="hero-legs">{legs}{driver}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    # The label names the figure in full. "Managed money net" alone would not
+    # say whose, which market, or on what contract basis -- and a tile gets
+    # screenshotted away from the header above it.
+    legs = (f'Long {L["long"]:,.0f} against short {L["short"]:,.0f}'
+            f' · spreading {fmt(L["spread"])}')
+    # "mostly X" only parses when ONE leg carried the week. When the two legs
+    # moved together the phrase is already a whole clause -- "both sides
+    # added" -- and "mostly both sides added" is not English.
+    if not W.get("phrase"):
+        driver = ""
+    elif W.get("agree"):
+        driver = f'<br>The week\'s move was mostly <b>{W["phrase"]}</b>'
+    else:
+        driver = f'<br><b>{W["phrase"].capitalize()}</b>, so the net barely moved'
+    return (
+        f'<div class="hero" style="border-top-color:'
+        f'{MARKET_COLOR.get(series, JSA_GREEN)}">'
+        f'<div class="hero-market">{m["label"]}</div>'
+        f'<div class="hero-label">Managed money net futures position</div>'
+        f'<div class="hero-value">{mag}{side_html}</div>'
+        f'<div class="hero-unit">contracts, as of Tuesday {_us(L["as_of"])}</div>'
+        f'{delta_html(L["wow"], unit="contracts", suffix=" vs week earlier", cls="hero-delta")}'
+        f'<div class="hero-legs">{legs}{driver}</div>'
+        f'</div>'
+    )
+
+
+# TWO PER ROW WHATEVER THE COUNT, which is the layout that was here when the
+# page showed exactly two. A row always asks for two columns even when it
+# holds one, or a lone tile stretches the full width and stops matching the
+# rows above it -- the trick the home grid and the TOOLS row already use.
+for _i in range(0, len(shown), 2):
+    _row = shown[_i:_i + 2]
+    _cols = st.columns(2)
+    for _c, _s in zip(_cols, _row):
+        with _c:
+            st.markdown(hero(_s), unsafe_allow_html=True)
 
 st.write("")
 
@@ -461,7 +555,8 @@ st.write("")
 audit = data.get("audit") or {}
 if audit.get("net_ok") and audit.get("chg_ok"):
     st.caption(
-        f"✓ Checked on load across all {audit.get('rows', 0):,} cattle rows: every "
+        f"✓ Checked on load across all {audit.get('rows', 0):,} market-weeks in "
+        f"the eight markets: every "
         "net equals its own long less short, and every week-over-week change "
         "equals CFTC's own published change column. Both identities hold exactly "
         "on the futures-only basis."
@@ -518,7 +613,17 @@ if cross.get("ok") is False:
 recs = {s: (markets.get(s) or {}).get("reconciliation") or {} for s in cot.CATTLE}
 split = [s for s in cot.CATTLE if recs.get(s, {}).get("sign_split")]
 
-st.markdown('<div class="sec-header">The same week, quoted three ways</div>',
+# IT STAYS ABOVE THE TABS AND IT STAYS CATTLE, whatever the toggle is set to,
+# and both halves of that are deliberate. The panel exists to stop a client
+# ringing about a cattle figure that disagrees with his broker's screen, and a
+# reconciliation he has to scroll past four charts to find cannot do that job.
+# It is not widened to the other six because nothing on this page quotes a
+# legacy grain number and nobody is going to ring about one -- so the heading
+# NAMES the two markets rather than leaving a reader to assume it covers
+# whatever he has selected. The headline-reads-on-its-own rule, applied to a
+# section header that now sits under a variable set of tiles.
+st.markdown('<div class="sec-header">Live Cattle and Feeder Cattle — the same '
+            'week, quoted three ways</div>',
             unsafe_allow_html=True)
 
 if split:
@@ -668,9 +773,20 @@ def categories_figure(rows: list):
 
 
 # -- one market's detail ------------------------------------------------------
+#
+# IT TAKES AN ENTRY, NOT A SERIES NAME, and that one change is what lets the
+# combined basket have the identical panel rather than a second implementation
+# of it. `cot.basket_frame()` builds the basket with a market's own column
+# names, so `latest()`, `context()`, `why()`, `decompose()` and
+# `series_frame()` all return the same shapes for it -- and every tile, chart,
+# percentile and record below works on the basket unchanged.
+#
+# Ross asked to "keep the format the same". The cheapest way to be sure of
+# that is for there to be only one format.
 
-def market_panel(series: str):
-    m = markets.get(series)
+def market_panel(series: str, m: dict | None = None):
+    if m is None:
+        m = markets.get(series)
     if not m:
         st.info(f"No rows returned for {cot.LABELS.get(series, series)}.")
         return
@@ -821,18 +937,31 @@ def market_panel(series: str):
     if bal is not None and abs(bal) > cot.OI_TOLERANCE:
         bal_note = (f"⚠️ The five categories sum to {bal:,.0f} rather than "
                     "zero, which should be impossible")
+    # THE TRADER COUNT IS OMITTED ON THE BASKET RATHER THAN DASHED, because the
+    # two read completely differently. A dash says CFTC did not publish it; the
+    # truth is that it cannot be summed at all -- the same fund trades corn and
+    # cattle, so adding the counts across eight markets would report it eight
+    # times and there is no published identity to de-duplicate on. Saying
+    # nothing is the honest answer; "—" would be a missing figure.
+    _counts = ""
+    if L.get("long_traders") is not None:
+        _counts = (f" {L['long_traders']:,} traders held the long side and "
+                   f"{L['short_traders']:,} the short, out of "
+                   f"{L['traders_total']:,} reportable traders in the market.")
+    elif series == cot.BASKET_KEY:
+        _counts = (" There is no trader count for the basket: a fund trading "
+                   "several of these markets would be counted once in each, "
+                   "and CFTC publishes nothing that would let the duplicates "
+                   "be removed.")
     st.caption(
         f"{bal_note}. Managed money is one of five groups CFTC splits the market "
         f"into; the report is called Disaggregated because the single "
         "'non-commercial' bucket of the older report mixed the funds in with "
-        "other large speculators. "
-        f"{L['long_traders'] or '—'} traders held the long side and "
-        f"{L['short_traders'] or '—'} the short, out of "
-        f"{L['traders_total'] or '—'} reportable traders in the market."
+        "other large speculators." + _counts
     )
 
     # -- the numbers ----------------------------------------------------------
-    with st.expander(f"{label} — the last 12 weeks, and the full series to download"):
+    for _ in portal_view.staff_expander(f"{label} — the last 12 weeks, and the full series to download"):
         g = m["frame"].tail(12).iloc[::-1]
         table = pd.DataFrame({
             "Week (Tuesday)": [_us(d.date()) for d in g["report_date"]],
@@ -855,41 +984,259 @@ def market_panel(series: str):
 
 # -- the tabs ----------------------------------------------------------------
 #
-# TABS RATHER THAN SEPARATE PAGES, AND THAT IS ALLOWED HERE. The rule further
-# up CLAUDE.md is that a hidden Streamlit tab is hidden and not skipped, so its
-# body runs on every rerun -- which makes a tab the wrong shape when the hidden
-# body is expensive. Every tab below reads the SAME two cached queries that
-# `load_cot()` already made, so the second and third cost rendering and no
-# network at all. Nothing on this page fetches from inside a tab.
+# -- the combined basket ------------------------------------------------------
 
-tab_live, tab_feeder, tab_compare = st.tabs(
-    ["Live Cattle", "Feeder Cattle", "Across the markets"])
+def basket_panel():
+    """
+    The eight markets added together, in the same shape as one market's panel.
 
-with tab_live:
-    market_panel("LIVE_CATTLE")
+    EVERY FIGURE HERE IS A SUM OF CONTRACTS AND THE PANEL SAYS SO BEFORE IT
+    SAYS ANYTHING ELSE. See `CONTRACTS_ARE_NOT_A_COMMON_UNIT` in
+    cot_positions.py: a corn contract is 5,000 bushels and a feeder cattle
+    contract is 50,000 lb, so adding them counts bets rather than money.
+    """
+    b = data.get("basket") or {}
+    if b.get("error") or not b.get("latest"):
+        st.info("The combined figure needs a week in which all eight markets "
+                "reported, and there is not one in the data returned.")
+        return
 
-with tab_feeder:
-    market_panel("FEEDER_CATTLE")
+    L, CV = b["latest"], b["cattle_vs"]
+    rows = b["contributions"]
+    mag, word = signed_words(L["net"])
+    side_cls = "hero-side-long" if word == "long" else "hero-side-short"
+    side_html = f' <span class="{side_cls}">{word}</span>' if word else ""
+    members = " · ".join(cot.SHORT_LABELS[s] for s in b["members"])
 
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown(
+            f'<div class="hero" style="border-top-color:{BASKET_COLOR}">'
+            f'<div class="hero-market">Managed money, eight markets combined</div>'
+            f'<div class="hero-label">Net futures position, summed across '
+            f'{len(b["members"])} US grain and livestock markets</div>'
+            f'<div class="hero-value">{mag}{side_html}</div>'
+            f'<div class="hero-unit">contracts, as of Tuesday {_us(L["as_of"])}</div>'
+            f'{delta_html(L["wow"], unit="contracts", suffix=" vs week earlier", cls="hero-delta")}'
+            f'<div class="hero-legs">Long {L["long"]:,.0f} against short '
+            f'{L["short"]:,.0f} · {fmt(L["net_pct_oi"], 1, "%")} of the '
+            f'{L["open_interest"]:,.0f} contracts of open interest in the eight'
+            f'<br>{members}</div>'
+            f'</div>', unsafe_allow_html=True)
+    with right:
+        # NAMING THE DIRECTION OF THE BIAS IS THE POINT. "A contract is not a
+        # common unit" is true and useless on its own: it does not tell a
+        # cattle trader whether his market is flattered or buried by it. It is
+        # buried. A feeder cattle contract is ten times a corn contract by
+        # weight and roughly eight times by money, so a sum counting them
+        # equally shrinks the cattle against the grain -- and this is a cattle
+        # dashboard. The share is computed; the eight-times is called roughly,
+        # because converting properly needs a price for all eight markets and
+        # the portal has no source covering both the grains and the cattle.
+        CS = b.get("cattle_share") or {}
+        _cs = ""
+        if CS.get("net_share") is not None:
+            _cs = (f'<br><br>The two cattle markets are <b>'
+                   f'{CS["net_share"]:,.0f}% of the total above</b> by contract '
+                   'count — and more than that by money, because a feeder '
+                   'cattle contract is worth roughly eight times a corn one at '
+                   'late-2026 prices. '
+                   # Kept on ONE line: split across an implicit concatenation
+                   # this phrase is invisible to a grep and to the test that
+                   # pins it, which CLAUDE.md records as its own trap.
+                   '<b>Counting contracts understates the cattle</b> here, '
+                   'which is the direction worth knowing on this page.')
+        st.markdown(
+            f'<div class="hero" style="border-top-color:{DM_BORDER}">'
+            f'<div class="hero-market">What a contract is</div>'
+            f'<div class="hero-label">why this is a count, not a size</div>'
+            f'<div class="hero-legs" style="margin-top:10px">'
+            'Corn, soybeans and all three wheats are <b>5,000 bushel</b> '
+            'contracts. Live cattle and lean hogs are <b>40,000 lb</b>, feeder '
+            'cattle <b>50,000 lb</b>. A contract is not a common unit, so this '
+            'total counts <b>how many bets the funds hold and which way</b> — '
+            'it is not a dollar exposure and cannot be converted to one '
+            'without a price for every market.'
+            f'{_cs}'
+            f'</div></div>', unsafe_allow_html=True)
+
+    # THE BASKET CAN DATE EARLIER THAN THE TILES ABOVE IT. An incomplete week
+    # is skipped, so a single late member moves this panel back a Tuesday while
+    # the market tiles and the page's own as-of line stay on the newest. Two
+    # dates on one page with nothing explaining is the staleness failure this
+    # repo keeps recording -- it has never fired on 1,064 weeks of the eight,
+    # and the first time it does it will say so rather than look fine.
+    if b.get("as_of") and as_of and b["as_of"] != as_of:
+        st.warning(
+            f"**This total is for Tuesday {_us(b['as_of'])}, a week earlier "
+            f"than the {_us(as_of)} figures above it.** At least one of the "
+            "eight has not reported the newer week, and a total over seven "
+            "markets is a different measurement wearing the same label — so "
+            "the combined series stops at the last week all eight filed."
+        )
+
+    # -- the warning this panel exists for ------------------------------------
+    #
+    # A CATTLE TRADER IS THE READER, AND THE TOTAL IS A GRAIN NUMBER. Over all
+    # 1,063 adjacent weeks the weekly change in this total correlates +0.897
+    # with corn and -0.028 with feeder cattle -- feeders move the other way in
+    # half of all weeks, which is a coin flip. So the panel never prints the
+    # total on its own, and when the cattle moved OPPOSITE to it this week it
+    # says so in the open rather than leaving the reader to find it in a table.
+    if CV.get("disagrees"):
+        cattle_names = " and ".join(
+            cot.SHORT_LABELS[r["series"]] for r in CV["cattle"])
+        st.warning(
+            f"**The total fell {abs(L['wow']):,.0f} contracts this week while "
+            f"{cattle_names} went the other way.** "
+            if L["wow"] < 0 else
+            f"**The total rose {abs(L['wow']):,.0f} contracts this week while "
+            f"{cattle_names} went the other way.** "
+        )
+    if CV.get("cattle_wow") is not None:
+        c_wow, r_wow = CV["cattle_wow"], CV["rest_wow"]
+        share = CV.get("rest_share")
+        _n = {6: "six", 5: "five", 7: "seven"}.get(CV.get("n_rest", 6),
+                                                   str(CV.get("n_rest", 6)))
+        _verb = (lambda v: "bought" if v > 0 else ("sold" if v < 0 else "held"))
+        # OVER 100% IS NOT AN ERROR AND THE SENTENCE HAS TO SAY WHY. When the
+        # cattle move against the total, the rest has to move further than the
+        # total did to get there -- so the share exceeds 100 exactly when the
+        # warning above has fired. Printed bare it reads as a bug.
+        _over = (share is not None and share > 100)
+        st.caption(
+            f"This week the two cattle markets **{_verb(c_wow)} "
+            f"{abs(c_wow):,.0f}** contracts between them while the other {_n} "
+            f"**{_verb(r_wow)} {abs(r_wow):,.0f}**"
+            + ((f" — {share:,.0f}% of the change in the total, which is over "
+                "100% because the cattle pulled the other way"
+                if _over else
+                f", so {share:,.0f}% of the change in the total came from "
+                "outside the cattle") if share is not None else "")
+            + ". Over the whole record the weekly change in this total runs "
+            "**+0.90 correlated with corn** and **−0.03 with feeder cattle**, "
+            "which is no relationship at all — so a move in the total says "
+            "very little about either cattle market, and the breakdown below "
+            "is the part to read."
+        )
+
+    # -- the breakdown, which the total is never printed without ---------------
+    st.markdown('<div class="sec-header">What the total is made of, '
+                'this week</div>', unsafe_allow_html=True)
+    table = pd.DataFrame([{
+        "Market": r["short_label"],
+        "Managed money net": f"{abs(r['net']):,.0f} {r['side']}",
+        "Change on the week": ("unchanged" if r["wow"] == 0 else
+                               f"{'+' if r['wow'] > 0 else '−'}{abs(r['wow']):,.0f}"),
+        "Share of the positioning": (f"{r['share']:,.1f}%"
+                                     if r["share"] is not None else "—"),
+        "One contract": r["contract"],
+    } for r in rows])
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+    _sum = sum(r["net"] for r in rows)
+    _ok = abs(_sum - L["net"]) < 0.5
+    st.caption(
+        ("✓ " if _ok else "⚠️ ")
+        + f"The eight nets sum to {abs(_sum):,.0f} {cot.side(_sum)}, which is "
+        + ("the headline above — checked on every load. "
+           if _ok else f"NOT the headline of {abs(L['net']):,.0f}. ")
+        + "**Share of the positioning** is each market's net as a share of the "
+        "eight gross nets added without regard to sign, so the shares are "
+        "positive and sum to 100 whichever way the individual bets point — "
+        "dividing by the total instead would hand a market a share above 100% "
+        "whenever another was short, which is arithmetic nobody can read."
+    )
+
+    # A WIRE FIGURE WILL NOT MATCH THIS, and the reason is the one the rest of
+    # the page already turns on. Reuters and the bank desks publish their
+    # combined ag number on FUTURES AND OPTIONS COMBINED and over their own
+    # basket -- Reuters' is seven grain and oilseed markets with no livestock
+    # in it at all. This page is futures-only, by the same choice that makes it
+    # agree with the Friday letter. Both are right; they are different figures.
+    st.caption(
+        "**A combined figure quoted on a wire will not match this one, and that "
+        "is not a fault in either.** The published versions — Reuters, and the "
+        "bank commodity desks — are futures **and options** combined, and each "
+        "uses its own basket: the Reuters one is seven grain and oilseed "
+        "markets with no livestock in it. This page is futures-only throughout, "
+        "which is what lets it agree to the contract with the Friday JSA "
+        "letter, and the eight markets are named on the tile above rather than "
+        "left to a label. There is no industry-standard basket to match."
+    )
+
+    skipped = b.get("skipped") or []
+    if skipped:
+        st.warning(
+            f"**{len(skipped)} week(s) are missing from the combined series** "
+            "because at least one of the eight did not report: "
+            + ", ".join(_us(d) for d in skipped[:6])
+            + ("…" if len(skipped) > 6 else "")
+            + ". A total over seven markets is a different measurement wearing "
+            "the same label, so those weeks are left out rather than summed "
+            "over whoever reported."
+        )
+
+    st.write("")
+    market_panel(cot.BASKET_KEY, b)
+
+
+# TABS RATHER THAN SEPARATE PAGES, AND THEY ARE LAZY NOW -- which the two-tab
+# version did not need to be.
+#
+# No tab here fetches: `load_cot()` has already pulled all ten markets in one
+# query, so a tab costs rendering and no network. That was cheap at two market
+# panels. At eight it is not -- each panel draws THREE plotly figures, so an
+# eager set would build twenty-seven charts on every rerun, and a rerun is
+# every click of the market toggle.
+#
+# So the set is lazy (`on_change="rerun"`) and every body is guarded by
+# `tab.open`. TWO THINGS THAT MUST STAY TOGETHER: `.open` is **None** on a set
+# that was NOT given `on_change="rerun"`, and None is falsy -- so guarding an
+# eager set with `.open` renders an empty tab nobody notices until they open
+# it. CLAUDE.md records that trap and the opposite one, where a page depends on
+# a hidden sibling executing. Nothing here does: every market panel reads only
+# its own entry, so making them lazy breaks nothing.
+_tab_labels = ([cot.SHORT_LABELS.get(s, s) for s in shown]
+               + ["Eight markets combined", "Across the markets"])
+_tabs = st.tabs(_tab_labels, on_change="rerun")
+_market_tabs = _tabs[:len(shown)]
+tab_basket, tab_compare = _tabs[-2], _tabs[-1]
+
+for _tab, _s in zip(_market_tabs, shown):
+    with _tab:
+        if _tab.open:
+            market_panel(_s)
+
+with tab_basket:
+    if tab_basket.open:
+        basket_panel()
+
+# NOT guarded by `.open`, unlike the market tabs above. This body is one chart
+# and two tables; the panels above are three plotly figures each, which is what
+# made laziness worth having. Leaving it eager keeps the indentation honest.
 with tab_compare:
-    st.markdown('<div class="sec-header">Both cattle markets on one scale</div>',
+    st.markdown('<div class="sec-header">Every selected market on one scale</div>',
                 unsafe_allow_html=True)
     st.caption(
-        "Plotted as a share of each market's own open interest, because Live "
-        "Cattle runs about five times the open interest of Feeder Cattle and a "
+        "Plotted as a share of each market's own open interest, because the "
+        "eight are nowhere near the same size — corn carries about 1.9 million "
+        "contracts of open interest against feeder cattle's 65,000, so a "
         "contract count would simply redraw that size difference. The share "
         "asks the question worth asking: how heavily are the funds committed in "
-        "each, relative to the market they are committed in."
+        "each, relative to the market they are committed in. It is also the one "
+        "comparison on this page that is dimensionless, and so the only one "
+        "that is strictly fair between a bushel market and a pound market."
     )
     fig = go.Figure()
-    for s in cot.CATTLE:
+    for s in shown:
         mm = markets.get(s)
         if not mm:
             continue
         fr = cot.series_frame(mm["frame"], 5)
         fig.add_trace(go.Scatter(
             x=fr["report_date"], y=fr["net_pct_oi"], mode="lines", name=mm["label"],
-            line=dict(width=1.8, color=MARKET_COLOR[s]),
+            line=dict(width=1.8, color=MARKET_COLOR.get(s, JSA_GREEN)),
             hovertemplate=mm["label"] + " %{y:.1f}% of OI<extra></extra>"))
     fig.add_hline(y=0, line_width=1.2, line_color=DM_MUTED)
     fig.update_layout(
@@ -899,17 +1246,23 @@ with tab_compare:
         xaxis=dict(**AXIS), yaxis=dict(**AXIS, title="net as % of open interest"))
     st.plotly_chart(fig, use_container_width=True, key="compare_net")
 
-    # -- the neighbours -------------------------------------------------------
-    st.markdown('<div class="sec-header">The rest of the cattle feeder\'s '
-                'board, same report, same week</div>', unsafe_allow_html=True)
+    # -- every market, in and out of the basket -------------------------------
+    st.markdown('<div class="sec-header">All ten markets on file, same report, '
+                'same week</div>', unsafe_allow_html=True)
     rows = []
-    for s in cot.CATTLE + cot.NEIGHBOURS:
+    for s in cot.BASKET + cot.NEIGHBOURS:
         mm = markets.get(s)
         if not mm:
             continue
         LL = mm["latest"]
         rows.append({
-            "Market": mm["label"],
+            "Market": mm["short_label"],
+            # THE COLUMN SAYS WHICH MARKETS THE TOTAL COVERS, because the two
+            # soy products are the ones a reader expects to find inside
+            # "soybeans" and they are not in it. Without this column somebody
+            # adds the ten rows themselves and gets a number the page does not
+            # print anywhere.
+            "In the combined total": "yes" if mm.get("in_basket") else "no",
             "Managed money net": f"{abs(LL['net']):,.0f} {cot.side(LL['net'])}",
             "Change on the week": ("unchanged" if LL["wow"] == 0 else
                                    f"{'+' if LL['wow'] > 0 else '−'}{abs(LL['wow']):,.0f}"),
@@ -920,10 +1273,13 @@ with tab_compare:
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     st.caption(
-        "Lean hogs is the third livestock market; corn and soybean meal are the "
-        "feeder's input cost, and a fund position in them moves a cattle feeding "
-        "margin as surely as one in the cattle. They cost no extra request — "
-        "the same query that fetches the cattle fetches these. Every figure is "
+        "The eight in the combined total are the three livestock markets, corn, "
+        "soybeans and the three wheat classes. "
+        "**Soybean meal and oil are shown and are deliberately not in it** — "
+        "they are the obvious thing a reader expects to find inside "
+        "\"soybeans\", so they are here with their own figures rather than "
+        "left for somebody to add in themselves. They cost no extra request: "
+        "the same query that fetches the eight fetches these. Every figure is "
         "futures-only, as of the same Tuesday."
     )
 
@@ -943,7 +1299,7 @@ with tab_compare:
         "to the contract rather than nearly.\n"
         "- It is the only one of the two bases that reconciles **exactly**. "
         "Every identity in the futures-only report holds with zero residual on "
-        "all 2,120 cattle rows since 2006: each category's longs plus the "
+        "every row of all eight markets since 2006: each category's longs plus the "
         "spread columns equal open interest, the five nets sum to zero, and "
         "CFTC's published weekly change equals the change in its own levels.\n"
         "- On the combined basis none of that is quite true, because CFTC "
