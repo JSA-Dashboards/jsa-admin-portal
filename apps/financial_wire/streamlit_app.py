@@ -171,7 +171,7 @@ def do_refresh():
     else:
         msgs.append("No Massive key in this app's secrets, so the futures stay as last pushed.")
     err = wire_store.request_refresh()
-    msgs.append("Email pull requested: your PC picks it up within about 10 minutes (5:30 to 8:30 AM Central, "
+    msgs.append("Email pull requested: your PC picks it up within about 30 minutes (5:30 to 8:30 AM Central, "
                 "Outlook open)." if not err else f"Could not request an email pull ({err}).")
     st.session_state["refresh_msgs"] = msgs
 
