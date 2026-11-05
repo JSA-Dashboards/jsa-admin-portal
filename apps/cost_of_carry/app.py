@@ -1,7 +1,5 @@
-import sys as _sys  # portal-sync: sibling imports resolve to this folder
-from pathlib import Path as _Path  # portal-sync
-_sys.path.insert(0, str(_Path(__file__).parent))  # portal-sync
 import base64
+import sys
 import dataclasses
 import os
 from datetime import date, datetime, timedelta
@@ -13,6 +11,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+# st.Page scripts don't get their own directory on sys.path.
+sys.path.insert(0, str(Path(__file__).parent))
+
 import coc_ethanol_grind as ethanol_grind
 import coc_interest_rates as interest_rates
 import coc_seasonal_pattern as seasonal_pattern
@@ -22,7 +23,8 @@ import coc_storage_rates as storage_rates
 import coc_vsr_tracker as vsr_tracker
 
 from coc_history_archive import ARCHIVE_CUTOFF_YEAR, archive_source, load_price_archive
-from coc_massive_api import MassiveApiError, get_fed_funds_rate, get_futures_curve, get_settlement_histories
+from coc_massive_api import (MassiveApiError, get_fed_funds_rate, get_futures_curve,
+                         get_settlement_histories)
 
 HERE = Path(__file__).parent
 
@@ -42,7 +44,7 @@ except Exception:
 # Streamlit Cloud supplies secrets via st.secrets, but snowflake_db reads os.environ so
 # it stays usable from plain scripts too. Bridge once, at import, before any DB access.
 for _key in ("USE_SNOWFLAKE", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD",
-             "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"):
+             "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE"):
     try:
         if _key in st.secrets and not os.environ.get(_key):
             os.environ[_key] = str(st.secrets[_key])
@@ -75,7 +77,8 @@ def watermark_uri(path: str) -> str:
     return "data:image/png;base64," + base64.b64encode(Path(path).read_bytes()).decode()
 
 
-pass  # portal-sync: st.set_page_config removed (Home.py makes the one call allowed per run)
+# st.set_page_config removed — the JSA Admin Portal shell (Home.py) makes the
+# single set_page_config call allowed per multi-page run.
 
 st.markdown("""<style>
 #MainMenu {visibility: hidden;}
@@ -2926,7 +2929,7 @@ def main():
             f"Data as of {datetime.now(EXCHANGE_TZ):%b %d, %Y %I:%M %p} CT · {DELAYED_QUOTES_NOTE}"
         )
     with refresh_col:
-        if not __import__("portal_view").is_client() and st.button("Refresh prices", icon=":material/refresh:", width="stretch",
+        if st.button("Refresh prices", icon=":material/refresh:", width="stretch",
                      help="Re-read live quotes now instead of waiting out the 5-minute cache. "
                           "Settlement-history charts are not re-pulled."):
             refresh_prices()

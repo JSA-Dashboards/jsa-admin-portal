@@ -25,6 +25,9 @@ import streamlit as st
 PLOTLY_UMD = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"
 HTML2CANVAS_ESM = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm"
 CHART_WIDTH = 1400
+# Below this table height the side note would set the image's height, leaving a tall
+# column of text beside a short table; such tables get the note underneath instead.
+NOTE_SIDE_MIN_HEIGHT = 260
 
 _HTML = """
 <div class="jsa-snap-row">
@@ -52,6 +55,7 @@ _JS = f"""
 const PLOTLY_UMD = "{PLOTLY_UMD}";
 const HTML2CANVAS_ESM = "{HTML2CANVAS_ESM}";
 const CHART_WIDTH = {CHART_WIDTH};
+const NOTE_SIDE_MIN_HEIGHT = {NOTE_SIDE_MIN_HEIGHT};
 
 function dataUrlToBlob(url) {{
   return fetch(url).then((r) => r.blob());
@@ -108,8 +112,10 @@ async function tableBlob(html, watermark, note) {{
   const html2canvas = mod.default || mod;
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;left:-100000px;top:0;background:#fff;padding:12px;" +
-    "display:flex;align-items:flex-start;gap:18px;" +
+    "display:inline-block;" +
     "font-family:'Source Sans Pro',Arial,sans-serif;font-size:13px;color:#31333f;";
+  const body = document.createElement("div");
+  body.style.cssText = "display:flex;align-items:flex-start;gap:18px;";
   const style = document.createElement("style");
   style.textContent =
     ".jsa-snap-table table{{border-collapse:collapse;}}" +
@@ -129,17 +135,30 @@ async function tableBlob(html, watermark, note) {{
     wrap.appendChild(mark);
   }}
   host.appendChild(style);
-  host.appendChild(wrap);
-  if (note) {{
-    // The image travels further than the page does, so the disclaimer rides along with
-    // it — beside the table, where it can't be cropped off the bottom.
-    const side = document.createElement("div");
-    side.style.cssText = "width:210px;flex:0 0 210px;align-self:stretch;font-size:11px;" +
-      "line-height:1.45;color:#6b7280;border-left:1px solid #e6e9ef;padding:4px 0 0 14px;";
-    side.innerHTML = note;
-    host.appendChild(side);
-  }}
+  body.appendChild(wrap);
+  host.appendChild(body);
   document.body.appendChild(host);
+
+  // The image travels further than the page does, so the disclaimer rides inside it.
+  // Beside the table only where the table is tall enough to carry it without stretching
+  // the picture; otherwise as a line underneath, which never changes the image's width.
+  if (note) {{
+    const tall = wrap.getBoundingClientRect().height >= NOTE_SIDE_MIN_HEIGHT;
+    const side = document.createElement("div");
+    if (tall) {{
+      side.style.cssText = "width:210px;flex:0 0 210px;font-size:11px;line-height:1.45;" +
+        "color:#6b7280;border-left:1px solid #e6e9ef;padding:2px 0 0 14px;";
+      side.innerHTML = note;
+      body.appendChild(side);
+    }} else {{
+      side.style.cssText = "max-width:" + Math.max(wrap.scrollWidth, 320) + "px;" +
+        "font-size:11px;line-height:1.45;color:#6b7280;" +
+        "border-top:1px solid #e6e9ef;margin-top:10px;padding-top:8px;";
+      // One flowing line, so the footer stays a couple of rows tall at most.
+      side.innerHTML = note.split("<br><br>").join(" ").split("<br>").join(" ");
+      host.appendChild(side);
+    }}
+  }}
   try {{
     if (watermark) {{
       const img = wrap.querySelector("img");
