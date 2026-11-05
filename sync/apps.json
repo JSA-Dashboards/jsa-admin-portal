@@ -253,6 +253,9 @@
    "repo": "JSA-Dashboards/river-fob-portal",
    "prefix_modules": "rf_",
    "preauth": true,
+   "exclude": [
+    "client_api"
+   ],
    "pin_env": {
     "SNOWFLAKE_DATABASE": "RIVER_FOB",
     "SNOWFLAKE_SCHEMA": "PUBLIC"
