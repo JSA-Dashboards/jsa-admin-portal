@@ -19,7 +19,7 @@ def tiles():
             return [{k.value: ast.literal_eval(v) for k, v in zip(d.keys, d.values)} for d in n.value.elts]
 
 
-STAFF_ONLY = {"cso-risk-analyzer", "rma-map", "teams-broadcast", "financial-wire", "grain-desk-status",
+STAFF_ONLY = {"cso-risk-analyzer", "rma-map", "teams-broadcast", "financial-wire", "grain-desk-status", "ask-ai", "ask-ai",
               "weekly-cattle-reports", "cattle-market-board"}
 
 

@@ -260,6 +260,9 @@ LIVE_DASHBOARDS = [
     {"title": "Grain Marketing Desk", "category": "Admin",
      "desc": "Status of the broker grain marketing app: live link, what is done, what is still open.",
      "page": "admin_pages/grain_desk_status.py", "url_path": "grain-desk-status"},
+    {"title": "Ask AI", "category": "Admin",
+     "desc": "Ask anything about JSA's data, see what the oversight bots flagged, and what changed in the latest WASDE.",
+     "page": "admin_pages/ask_ai.py", "url_path": "ask-ai"},
 ]
 
 # The livestock family lives in its own deployed app (JSA-Dashboards/livestock-portal), which has
