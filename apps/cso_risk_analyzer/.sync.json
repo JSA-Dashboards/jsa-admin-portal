@@ -1,8 +1,8 @@
 {
  "branch": "main",
- "commit": "7dbb539b2f9e97f6c088708f3c846e9e81aac4d1",
+ "commit": "a61bbabedcd334c8753f3f6ff91ec095f8d2c31c",
  "files": {
-  "app.py": "5cdb5fc97d9147e9b1bfd446409f99bc7024b50ce0b4fd80d0cfeddfc49b701a",
+  "app.py": "80c631045bf3e80f038cd289f5e09e60484b921dd2f20ee5c63b144a1d208448",
   "assets/jsa_logo.png": "988a051c0e5acefd01184e3f5462531a3d5a1fcbb573821e2ee3baee6dc0c4c6",
   "cso/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "cso/auth.py": "6aa16e4d333060e11e51cef52480b2ffef28dd933f19206c28389bc8290e9955",
@@ -13,8 +13,8 @@
   "cso/payoff_chart.py": "f52d6808af019ad5e55fd210adae71a94c6499b7c3338f2a797393e48e688904",
   "cso/pricing.py": "4f1f5d44f51e22d73eb124ba49c0a8fb917aba8bd90204523ffbc3edca4fed84",
   "cso/seasonal.py": "cf7b57806525b3c677088abf524e96d614d687457cb5520371e367e33c2b1c84",
-  "cso/seasonal_chart.py": "f08bc8ded1c4424eb08ab6e27163c62adda1fbe0b3a75874ce12143237444e07",
-  "cso/strategy.py": "7f5bcf5c02734d2f58cdd629b09ef9c4f982a74ba5f252a90925798ea390346a"
+  "cso/seasonal_chart.py": "3f5f2cf45f8e8e972d395b22a8b57deb5c71359706a1fbf3761c7f5b27ef8f2d",
+  "cso/strategy.py": "4743afe9a795ea04fa7470f515594ed5f8faa84a20cc7609f47c0c09c66f4bd4"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/cso-risk-analyzer",

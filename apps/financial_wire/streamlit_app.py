@@ -171,7 +171,7 @@ def do_refresh():
     else:
         msgs.append("No Massive key in this app's secrets, so the futures stay as last pushed.")
     err = wire_store.request_refresh()
-    msgs.append("Email pull requested: your PC picks it up within about 10 minutes (6:30 to 8:30 AM Central, "
+    msgs.append("Email pull requested: your PC picks it up within about 10 minutes (5:30 to 8:30 AM Central, "
                 "Outlook open)." if not err else f"Could not request an email pull ({err}).")
     st.session_state["refresh_msgs"] = msgs
 
@@ -208,7 +208,7 @@ for _s in _stale(wire):
     st.warning(f"Not today's email yet: {_s}. The morning push ran before it arrived.", icon=":material/schedule:")
 
 if not wire:
-    st.info("Clean slate: nothing yet today. The 6:30 AM pull builds the wire (use Refresh data once the emails are in).")
+    st.info("Clean slate: nothing yet today. The 5:30 AM pull builds the wire (use Refresh data once the emails are in).")
 else:
     if wire.get("history"):
         sec("Today in Markets History")
