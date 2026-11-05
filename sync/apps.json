@@ -254,7 +254,9 @@
    "prefix_modules": "rf_",
    "preauth": true,
    "exclude": [
-    "client_api"
+    "client_api",
+    "api_tab.py",
+    "api_admin.py"
    ],
    "pin_env": {
     "SNOWFLAKE_DATABASE": "RIVER_FOB",
@@ -265,6 +267,10 @@
      [
       "VIEW_ONLY = str(st.query_params.get(\"view\", \"\")).lower() in (",
       "VIEW_ONLY = __import__(\"portal_view\").is_client() or str(st.query_params.get(\"view\", \"\")).lower() in ("
+     ],
+     [
+      "API_ADMIN_TAB = True",
+      "API_ADMIN_TAB = False"
      ]
     ],
     "vessel_focus.py": [
