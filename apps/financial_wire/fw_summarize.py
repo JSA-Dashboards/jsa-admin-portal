@@ -70,9 +70,30 @@ def fetch_text(url: str) -> tuple[str, str]:
     return " ".join(p.paras)[:6000], p.meta
 
 
+_KEY_RX = __import__("re").compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")
+
+
 def _clean(v):
-    v = str(v or "").strip().strip("\"'").strip()
-    return v if v.startswith("sk-ant-") else ""
+    """The key inside whatever was stored: tolerates quotes, spaces, a pasted 'ANTHROPIC_API_KEY=' prefix,
+    or a line break. '' when the value holds no sk-ant- key."""
+    m = _KEY_RX.search(str(v or ""))
+    return m.group(0) if m else ""
+
+
+def _scan(obj, depth=0):
+    """Last resort: any string anywhere in the secrets that contains an sk-ant- key, whatever it is called."""
+    if depth > 4:
+        return ""
+    try:
+        if hasattr(obj, "items"):
+            for _k, v in obj.items():
+                k = _scan(v, depth + 1)
+                if k:
+                    return k
+            return ""
+    except Exception:
+        return ""
+    return _clean(obj) if isinstance(obj, str) else ""
 
 
 def _secret_names() -> list:
@@ -110,7 +131,7 @@ def api_key():
                 return k
         except Exception:
             pass
-    return None
+    return _scan(sec) or None
 
 
 def key_problem() -> str:

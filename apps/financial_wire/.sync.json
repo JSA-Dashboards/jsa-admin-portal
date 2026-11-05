@@ -1,13 +1,13 @@
 {
  "branch": "main",
- "commit": "a28330ab1d9e0a747b1f9d1e05a628c43f476859",
+ "commit": "cadd7ea6dced54939685956cc9ef49f76d1bfda9",
  "files": {
   "fw_build_fin_wire.py": "df76e44c081cfdf949cd1af1824c6a5bb002249a8cfc3265c0f9be718c3f33b9",
   "fw_explain.py": "ad9a9f16b19b45597d1f40aeed09382f2d05262380d7de3aead78742749eb016",
   "fw_futures_changes.py": "b08883fe0cfd64058a8773d8e32334d9c3ee519a88126a7add9c856862993209",
   "fw_headlines.py": "e3e38a744f636097f6ff3cc2bed2f7cacab570899245a6100b02c13bc9c668fb",
   "fw_massive_api.py": "489633f8d3f4d787d3ba5563e78d02272e3ffa72f170f6d40d1ce34521e32651",
-  "fw_summarize.py": "42e96be86d9d33f4d86e65e8613622594ac29b4b747e08143394aaf8fcf7bfab",
+  "fw_summarize.py": "35ebf17f623149e0d5f9840def37accec0a2a720133249e46affe2a1969c9ccc",
   "fw_wire_store.py": "96b82f8ee652bf35ade72ebe69f864eb77647acf398163c1a935fedfec592c98",
   "streamlit_app.py": "ac7d1ee3b801e4e6fdfef58c21dc5660cfd1b4818b90777368bcb4fb6c476c81"
  },
