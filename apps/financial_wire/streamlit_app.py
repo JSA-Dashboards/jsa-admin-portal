@@ -87,10 +87,10 @@ def tile(name: str, level: str, change: str) -> str:
 
 
 def outlook_draft(wire: dict, picked: list, recipient: str) -> bytes:
-    """An .eml flagged X-Unsent: Outlook opens it as an editable draft, subject 'Financial News'."""
+    """An .eml flagged X-Unsent: Outlook opens it as an editable draft, subject 'JSA Financial News'."""
     data = dict(wire, headlines=picked)
     msg = EmailMessage()
-    msg["Subject"] = "Financial News"
+    msg["Subject"] = "JSA Financial News"
     if recipient:
         msg["To"] = recipient
     msg["X-Unsent"] = "1"
@@ -283,8 +283,8 @@ if wire:
         st.iframe(build_fin_wire.build(dict(wire, headlines=entries, futures=futs, five=five, five_x=five_x, reading_x=wsj_x)), height=1400)
     st.download_button(
         "Create Outlook template", data=outlook_draft(dict(wire, futures=futs, five=five, five_x=five_x, reading_x=wsj_x), entries, wire.get("recipient", "")),
-        file_name="Financial News.eml", mime="message/rfc822", icon=":material/mail:", type="primary",
-        help="Opens in Outlook as an editable draft, subject 'Financial News', with the wire plus your ticked headlines.")
+        file_name="JSA Financial News.eml", mime="message/rfc822", icon=":material/mail:", type="primary",
+        help="Opens in Outlook as an editable draft, subject 'JSA Financial News', with the wire plus your ticked headlines.")
     if expl_note and (five or wsj_items):
         st.caption(f":material/warning: no explanations written: {expl_note}")
 else:
