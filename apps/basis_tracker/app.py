@@ -2952,7 +2952,6 @@ with tab_railfob:
             ("BN Western Rail", [
                 ["BN Hereford", "BN PNW", "BN COBO"],
                 ["BN Freight"],
-                ["BN PNW CP"],   # → "CP PNW", very bottom
             ]),
             ("CPKC Rail", [
                 ["CPKC Freight"],
@@ -2962,7 +2961,8 @@ with tab_railfob:
         # "Other" section kept surfacing (Kolten 2026-10-02). The rail EMAILS already drop it
         # via their 21-day inactivity cutoff; this keeps the on-screen board consistent.
         # Anything NEW that isn't placed above still lands in "Other" on purpose.
-        _MANUAL_HIDE = ("BN COBO Buyers",)
+        # "BN PNW CP" ("CP PNW") is off the board too (Kolten 2026-11-02: "drop the CP PNW from Western Rail"); the market stays in the archive.
+        _MANUAL_HIDE = ("BN COBO Buyers", "BN PNW CP")
         _rail_board("manual", _MANUAL_SECTIONS, "man", hide=_MANUAL_HIDE)
 
         # ── Email the rail board on demand (full build only; sends via local Outlook) ──
@@ -4605,6 +4605,11 @@ with tab_bids:
                 is_meal=(grain == "Soybean Meal"), unit=_basis_unit(grain),
             )
             st.markdown(table_html, unsafe_allow_html=True)
+
+            _ca_states = ("ON", "MB", "SK", "AB", "QC", "BC")                                   # Canadian provinces
+            if provider == "ADM" and grain != "Canola" and ((_cached_get_location_meta(provider).get(loc_key) or {}).get("state") in _ca_states):
+                st.caption("ADM posts its Canadian corn, soybeans and wheat as a Canadian-dollar cash price against US futures, so the tracker converts each bid to a US basis "
+                           "in cents per bushel: the cash price at that day's USD/CAD, minus the futures price. (Canola stays in C$/t against ICE canola futures.)")
 
             # Roll adjustment legend
             roll_parts = " &nbsp;|&nbsp; ".join(

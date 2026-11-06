@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "5c65682b7d795fc6852bfbe13a475b3b0526bf19",
+ "commit": "faa14bcbdacb8d2c5bed2e5085b3d9c0a0421008",
  "files": {
-  "app.py": "39b72c1c449ba8c4f131acab6049802e21c2e02c33d95faff9ef369ff160c6e8",
+  "app.py": "34c0ca350bc41e765b59d114c2ec85bae3e94f732060ea0808d99977df5afd3b",
   "assets/jsa_50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/jsa_mark.png": "c41717e8643c5886992a860f8fad093aba1e928f1834d913f495e31acc14b95e",
@@ -27,8 +27,8 @@
   "rf_deliverable_stocks.py": "b57f9e22fbd52780f2941e42cc203e78e66353a2392341a0d6600e5284266343",
   "rf_delivery_period.py": "2786db029e276605ea04789f4dc2c700a08ef836c4fbc29d53755686d3c13ebf",
   "rf_fastmarkets.py": "a049c94a8ef9bd7d603df59e3e04daa8c2c892fcf4b81e554ca3964ad48804a9",
-  "rf_fetch_bidsheet_email.py": "02895ae4eb36b7340f49c9ba7813d3bb0470121fe9bd5a4da9c9b855b63af2d9",
-  "rf_fetch_bidsheet_graph.py": "7059fc18c1366726f6aeea1037ff11ffe31097e83acb5c486c42d5257e281603",
+  "rf_fetch_bidsheet_email.py": "9844c42df3b405fd585aaf23755d838fdd56cfd9a9476c8d42cdd212e33fd2eb",
+  "rf_fetch_bidsheet_graph.py": "48188a02406724985e2e434972f2ab14e8dff6dc4cf0dff906d67b472aff5faf",
   "rf_fm_discover.py": "ecf35543ff2ebe421f7cd583ed8fe3a575c6e5355a51e436c31fcadeb88c7de2",
   "rf_fob_excel.py": "87eed1b0d0ba561c5b5d68f33e434ffebcb5413ce5019deb4b576b4bada9eb8c",
   "rf_fob_model.py": "5f0ce450ce2dcbe0d46287b74487497420a63e02116c3a33c408b3cbafc29cfc",
