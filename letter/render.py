@@ -78,6 +78,19 @@ def head(v) -> str:
     return MISSING if v is None else f"{float(v):,.0f}"
 
 
+def points(v) -> str:
+    """
+    53025.0 -> "53,025". An index quoted in WHOLE POINTS.
+
+    Same arithmetic as head() and deliberately not head(): that one is named
+    for a head count and reads as one at the call site. A price formatter
+    borrowing it is the sort of thing that survives until somebody changes
+    head() for head counts and moves the Dow with it.
+    """
+    return MISSING if v is None else f"{float(v):,.0f}"
+
+
+
 def head_k(v) -> str:
     """
     Head counts rounded to the nearest thousand, which is how the letter quotes
@@ -188,6 +201,14 @@ def _pm_label(report_date) -> str:
 
 
 # -- Sections -----------------------------------------------------------------
+
+
+# How each OUTSIDE_MARKETS style is quoted. The keys are the third element of
+# sources.OUTSIDE_MARKETS and a test asserts every one of them is in here --
+# a style with no entry falls back to decimals and prints a plausible,
+# wrongly-formatted number rather than failing.
+_OUTSIDE_FMT = {"eighths": eighths, "points": points, "decimal": money}
+
 
 def _bullets(items) -> str:
     if not items:
@@ -792,19 +813,27 @@ def am_blocks(ctx: dict, c: dict) -> list:
         out.append("<h2>Headlines</h2>" + _commentary(c["headlines"]))
 
     # 3. Overnight. Cattle do not trade overnight, so this is grain and macro.
+    #    One formatter per quoting convention: grain in eighths, an index in
+    #    whole points, everything else in decimals.
     #    Month BEFORE the commodity: "Dec Corn", not "Corn Dec".
     markets = [m for m in (ctx.get("outside") or []) if m.get("price") is not None]
     if markets:
         rows = []
         for m in markets:
-            fmt = eighths if m.get("style") == "eighths" else money
+            # money() is the FALLBACK, so a style nobody has taught this
+            # block about still prints a number rather than raising on a
+            # client's morning brief.
+            fmt = _OUTSIDE_FMT.get(m.get("style"), money)
             chg = m.get("change")
             chg_txt = (("+" if chg >= 0 else "") + fmt(chg)) if chg is not None else MISSING
             # Change BEFORE the price, joined by "at" -- the same shape the
             # evening letter uses for cattle ("Oct: +1.025 at 220.70") and the
             # shape Ross asked for: "Dec Corn -8'6 at 528".
-            rows.append(f"{_esc(m.get('month') or '')} {_esc(m['label'])}: "
-                        f"{chg_txt} at {fmt(m['price'])}")
+            # .strip() because the Dollar Index has NO contract month -- it
+            # is an index, not a curve -- and the f-string would otherwise
+            # open the bullet with a space.
+            name = f"{m.get('month') or ''} {m['label']}".strip()
+            rows.append(f"{_esc(name)}: {chg_txt} at {fmt(m['price'])}")
         out.append("<h2>Overnight Markets</h2>" + _bullets(rows))
 
     # 4. Yesterday, for anyone who did not read the evening letter. One line

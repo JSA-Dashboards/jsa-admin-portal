@@ -20,7 +20,7 @@ import importlib.util
 import io
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -1063,12 +1063,21 @@ def fetch_regional_cash_wtd(as_of: date) -> dict:
 # THESE ARE THE ONLY ONES WITH A REAL OVERNIGHT MOVE AT 8:30am CENTRAL. CME
 # livestock futures do not open until 08:30 CT, so there is no overnight cattle
 # print to report -- grain and equities have traded through the night and are
-# where the morning signal actually is. Dollar Index is deliberately absent:
-# Massive returns no contracts for DX.
+# where the morning signal actually is.
+#
+# THE DOLLAR INDEX IS NOT IN THIS LIST AND CANNOT BE. This note used to read
+# "Dollar Index is deliberately absent: Massive returns no contracts for DX",
+# which reads like a wrong code somebody could fix. The reason is structural:
+# **Massive carries four trading venues and they are all CME Group** -- XNYM,
+# XCME, XCBT, XCEC, about 25,000 products, zero ICE. DX is an ICE Futures U.S.
+# contract, so no spelling of the code will ever work; DX, DXY, USDX, ZDX and
+# the catalogue's whole `currency` sub-class were checked on 2026-11-04 and it
+# holds CME FX futures (6E, 6J, 6B...) and nothing resembling an index.
+# See fetch_dollar_index below, which is where the Dollar Index comes from.
 # "eighths" quotes in whole cents and eighths -- 531.25 prints as 531'2, the way
 # the grain trade writes it and the way Ross writes it ("5'4 lower at 531'2").
-# Corn, wheat, oats and soybeans trade in eighths; meal, equities and crude are
-# plain decimals.
+# Corn, wheat, oats and soybeans trade in eighths; crude is a plain decimal.
+# "points" is a whole-number index -- see render.points and the Dow below.
 OUTSIDE_MARKETS = [
     ("ZC", "Corn", "eighths"),
     # Directly under corn, because the order here IS the order on the page and
@@ -1076,8 +1085,139 @@ OUTSIDE_MARKETS = [
     # next year's corn crop, and the meal side of the board is a feed cost.
     ("ZS", "Soybeans", "eighths"),
     ("ES", "S&P", "decimal"),
+    # DIRECTLY UNDER THE S&P, for the same reason beans sit under corn: the two
+    # equity lines are one reading and a reader compares them. Added 2026-11-04
+    # on Ross's "lets add the nearby Dow Jones price like we have the SP and
+    # Crude oil for outside markets".
+    #
+    # YM IS THE CODE AND THE OTHERS DO NOT EXIST HERE. Probed against Massive
+    # the day it was added: `DJ` and `ZD` return no contracts at all -- the
+    # same silent nothing the Dollar Index gives, which is why DX is absent
+    # above. `MYM`, the Micro, returns the IDENTICAL price on the identical
+    # index; YM is the standard E-mini and the one the trade means by "the
+    # Dow".
+    #
+    # "points" RATHER THAN "decimal" BECAUSE YM TICKS IN WHOLE INDEX POINTS.
+    # money() would print 53,025.00 and +1,130.00 -- two characters of noise
+    # on the longest number in the block, directly above an S&P whose .25
+    # ticks make its decimals mean something. Ten consecutive settles were
+    # checked and every one is integral.
+    ("YM", "Dow", "points"),
     ("CL", "Crude", "decimal"),
 ]
+
+
+# -- The Dollar Index: a different host, because the futures feed has no ICE --
+# Added 2026-11-04 on Ross's "lets add the dollar index also and set it below
+# crude", after the probe above established the futures feed cannot serve it.
+#
+# DX-Y.NYB IS THE ICE DOLLAR INDEX -- the ~101 figure on a trading screen, not
+# the Federal Reserve's trade-weighted broad index, which is a DIFFERENT index
+# on a different basket and prints ~121. FRED serves that one keylessly and it
+# was rejected for this block: its newest row ran three sessions behind on the
+# day this was written, and a lagged figure in a section headed "Overnight
+# Markets" is worse than no figure.
+DXY_SYMBOL = "DX-Y.NYB"
+DXY_URL = f"https://query1.finance.yahoo.com/v8/finance/chart/{DXY_SYMBOL}"
+# Yahoo serves this endpoint a 404 to an unidentified client often enough to
+# be worth setting rather than discovering on a Monday morning.
+DXY_UA = "Mozilla/5.0 (compatible; JSA-letter/1.0)"
+
+
+def fetch_dollar_index(as_of: date) -> dict:
+    """
+    One row in the Outside Markets shape, for a thing that is not a contract.
+
+    THE BASE IS A DATED PRIOR CLOSE, NOT THE VENDOR'S CHANGE FIELD, and that
+    is the whole discipline of this block. Yahoo hands back
+    `regularMarketChangePercent` and `chartPreviousClose` ready-made, which is
+    exactly the shape of the field this module was burned by on 2026-09-24:
+    Massive's `previous_settlement` for crude reported Tuesday's settle on a
+    Wednesday and the brief printed +3.26 against a real +1.41. So the prior
+    close is taken from the dated daily series the same request returns --
+    last close STRICTLY BEFORE as_of -- and Yahoo's own figure is recorded
+    beside it so a disagreement is visible after the fact rather than
+    invisible.
+
+    THAT CAUTION PAID ON THE FIRST DAY, which is why it is spelled out.
+    `chartPreviousClose` IS NOT YESTERDAY'S CLOSE: on a ranged request it is
+    the close BEFORE THE WINDOW BEGINS. Measured 2026-11-04 on range=1mo --
+    it read 102.17, which is the 2026-10-04 close, a month old, while the
+    real 11-03 close in the same payload was 101.87. Trusting it would have
+    printed the Dollar Index down 0.73 where the overnight move was 0.43, a
+    70% overstatement, every single day and never on a day anyone would
+    notice. `vendor_disagrees` is therefore True in the ordinary case here
+    rather than the exceptional one.
+
+    DATES COME FROM THE EXCHANGE'S OWN OFFSET, not UTC. Yahoo stamps a daily
+    bar at the session open, which in New York is 13:00-14:00 UTC -- read as
+    UTC that is the right day, but the margin is hours and a DST shift or a
+    half-day eats it. `meta.gmtoffset` is in the payload; use it.
+
+    A STALE BASE YIELDS NO CHANGE, the MAX_PRIOR_SETTLE_AGE_DAYS rule the
+    futures path already applies: a multi-session move printed as an
+    overnight one is a wrong number that looks right.
+
+    Any failure returns the row with price None, which am_blocks drops -- so
+    an outage at Yahoo costs this one line and never the letter.
+    """
+    row = {"code": "DXY", "label": "Dollar Index", "style": "decimal",
+           "price": None, "change": None, "month": None, "ticker": None}
+    try:
+        resp = _session().get(DXY_URL, headers={"User-Agent": DXY_UA},
+                              params={"range": "1mo", "interval": "1d"}, timeout=20)
+        resp.raise_for_status()
+        result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
+        if not result:
+            return row
+        meta = result.get("meta") or {}
+        offset = int(meta.get("gmtoffset") or 0)
+        stamps = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+        closes = quote.get("close") or []
+
+        dated = []
+        for ts, close in zip(stamps, closes):
+            if close is None:
+                continue
+            when = datetime.fromtimestamp(int(ts) + offset, tz=timezone.utc).date()
+            dated.append((when, float(close)))
+        dated.sort()
+
+        price = meta.get("regularMarketPrice")
+        # The live quote is preferred over the newest daily bar for the same
+        # reason the futures path prefers the snapshot: that bar IS today's
+        # session in progress, and the brief wants where it stands now.
+        if price is None and dated:
+            price = dated[-1][1]
+
+        # (date, close), and unpacked in that order. Reversed once, this read
+        # `prior_close, prior_date = prior` -- a date into the price and a
+        # float into the date, so the staleness check raised TypeError, the
+        # except below swallowed it, and the row came back priced None. It
+        # renders as the Dollar Index line simply not being there, which is
+        # indistinguishable from Yahoo being down.
+        prior_date, prior_close = next(
+            ((d, c) for d, c in reversed(dated) if d < as_of), (None, None))
+        if prior_date is not None and (as_of - prior_date).days > MAX_PRIOR_SETTLE_AGE_DAYS:
+            prior_close, prior_date = None, None
+
+        vendor_prior = meta.get("chartPreviousClose") or meta.get("previousClose")
+        change = (float(price) - prior_close) if (price is not None and prior_close) else None
+
+        row.update({
+            "price": round(float(price), 4) if price is not None else None,
+            "prior_settle": round(float(prior_close), 4) if prior_close else None,
+            "prior_settle_date": prior_date.isoformat() if prior_date else None,
+            "vendor_prior_close": (round(float(vendor_prior), 4)
+                                   if vendor_prior else None),
+            "vendor_disagrees": bool(prior_close and vendor_prior
+                                     and abs(float(vendor_prior) - prior_close) > 0.0001),
+            "change": round(float(change), 4) if change is not None else None,
+        })
+    except Exception:                                   # noqa: BLE001
+        pass
+    return row
 
 
 def front_contracts(product_code: str, api_key: str, as_of: date, n: int = 1) -> list:
@@ -1270,6 +1410,13 @@ def fetch_outside_markets(api_key: str, as_of: date) -> list:
         except Exception:
             pass
         out.append(row)
+
+    # BELOW CRUDE, which is where Ross asked for it, and appended rather than
+    # listed in OUTSIDE_MARKETS because it is not a futures contract: no
+    # product code, no month, no settlement history. Keeping the tuple list
+    # purely for things the Massive loop can fetch is what stops that loop
+    # growing a special case. Same shape out, so am_blocks needs none either.
+    out.append(fetch_dollar_index(as_of))
     return out
 
 
