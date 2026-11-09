@@ -59,6 +59,8 @@ ABBR_TO_NAME = {
 # Three entries differ from the RMA tab's, whose queries match no NASS series (so those columns are blank there): the commodity is
 # SUNFLOWER (not SUNFLOWERS); dry beans are BEANS with class DRY EDIBLE, INCL CHICKPEAS; and NASS publishes hay as AREA HARVESTED only
 # (the crop's statisticcat_desc overrides AREA PLANTED). Checked against live NASS 2026-11-09.
+# dry beans: NASS ended the INCL CHICKPEAS series in 2018 and started (EXCL CHICKPEAS) in 2019, no overlap, so both are pulled and
+# joined by year under DryBeans.
 _ACR_PARAMS: dict = {
     "Wheat":      (("commodity_desc","WHEAT"),("class_desc","ALL CLASSES")),
     "Corn":       (("commodity_desc","CORN"),),
@@ -73,6 +75,7 @@ _ACR_PARAMS: dict = {
     "Peanuts":    (("commodity_desc","PEANUTS"),),
     "SugarBeets": (("commodity_desc","SUGARBEETS"),),
     "DryBeans":   (("commodity_desc","BEANS"),("class_desc","DRY EDIBLE, INCL CHICKPEAS")),
+    "DryBeans2":  (("commodity_desc","BEANS"),("class_desc","DRY EDIBLE, (EXCL CHICKPEAS)")),   # 2019 on; joined to DryBeans by year
     "Hay":        (("commodity_desc","HAY"),("class_desc","ALL CLASSES"),("statisticcat_desc","AREA HARVESTED")),
 }
 
@@ -358,6 +361,7 @@ def render():
     except Exception as e:
         st.error(f"NASS cache error: {e}")
         return
+    acr["DryBeans"] = {**acr.get("DryBeans", {}), **acr.pop("DryBeans2", {})}
     if not any(acr.values()):
         st.warning("No planted-acreage data came back from the NASS cache for this selection.")
         return

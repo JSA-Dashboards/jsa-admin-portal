@@ -1,10 +1,10 @@
 {
  "branch": "master",
- "commit": "1c4dca12c2d5c8d3cbbda60ad081cdcb63428f4f",
+ "commit": "9992453145af8f4261de4f8a5cfcdd5cc2841977",
  "files": {
-  "acreage_tab.py": "deda02838226fb1732c8fc405ff21a2bc4480bddb52c1ae46c583e54086d1ef9",
+  "acreage_tab.py": "d39f7c6d1b314e4d979a3228902c0800c472fc60a7a11499b53dde0c13b0af4a",
   "app.py": "aec2c4a6314894c5c0090615303dff7c0798eaa1a1f1144f1844ff966cc29508",
-  "asd_county_tab.py": "aede8c4471c78b503bba6d032be35957b152fb6c664003691020686f00c60251",
+  "asd_county_tab.py": "2faad88f2ecd77896258d8d0368b0df84ad68898a9e33b873e5b908fe8d81b94",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/jsa_50th_logo.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "data/acreage_crp.json": "abae30024b0562654e7560425b88f381066f1019dd237d0bde1b7a1988acf333",
