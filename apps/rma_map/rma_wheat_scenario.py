@@ -179,6 +179,39 @@ def _region_index(inp: dict):
     return [named.get(c["state"], other_i) for c in inp["counties"]]
 
 
+MILL_FOOD_USE_BU = 956e6                         # USDA's food use of wheat a year: the bushels the named mills together grind (their run rate is whatever makes the list add to it)
+
+
+MILL_RAIL = {"rate": 0.12, "fixed": 15.0, "min_miles": 250.0}   # wheat to a mill on a railroad: cents per bushel-mile, cents of handling and switching, and the shortest haul that goes by rail
+                                                                  # (a cheaper rate, 0.05, let a Wichita mill draw from 480 miles away; 0.12 keeps the local mills local)
+
+
+def mill_plant_rail(inp: dict, plants: list, rate: float = None) -> dict:
+    """The plant_rail argument of draw_model.solve for the flour mills: rail from counties within 60 miles of Class I track to a mill that lists a railroad, when it costs less than the truck."""
+    import rma_draw_model as dm
+    rs = dm.load_rail_service()
+    track = [min(rs.get(c["fips"], [9999] * 6)) for c in inp["counties"]]
+    return {**MILL_RAIL, **({"rate": float(rate)} if rate is not None else {}), "reach": 60.0, "track": track, "mask": [bool(p.get("rail")) for p in plants]}
+
+
+def mill_plants() -> list:
+    """The US flour mills as named plants for the model (flour_mills.py, Sosland's Grain & Milling Annual 2027): each with its daily capacity in cwt turned into the bushels it grinds a year,
+    scaled so the mills together grind USDA's food use. [] when the mill list is not available. Class-blind: a mill takes all classes here (its listed classes are kept in `classes`)."""
+    import rma_flour_mills as flour_mills
+    ms = [m for m in flour_mills.load() if m["cap_cwt_day"] and m["state"] != "PR" and m["lat"] is not None]
+    if not ms:
+        return []
+    util = MILL_FOOD_USE_BU / (sum(m["cap_cwt_day"] for m in ms) * BU_PER_CWT_DAY)
+    out, seen = [], {}
+    for m in ms:
+        base = f"{m['company']}, {m['city']} {m['state']}"
+        seen[base] = seen.get(base, 0) + 1
+        key = base if seen[base] == 1 else f"{base} #{seen[base]}"
+        out.append({"key": key, "state": m["state"], "lat": m["lat"], "lon": m["lon"], "need_bu": m["cap_cwt_day"] * BU_PER_CWT_DAY * util, "city": m["city"],
+                    "company": m["company"], "cls": "Flour mill", "cap_cwt_day": m["cap_cwt_day"], "classes": m["classes"], "rail": m["rail"], "river": ""})
+    return out
+
+
 def milling_local(inp: dict, cap: float = None) -> np.ndarray:
     """Per-county share of its crop milled inside its own region: the region's flour-milling capacity (NASS table, x utilization) over what the region grows, capped at 1. A region
     that grows less than its mills grind (the Northeast, California) keeps all of its wheat; one that grows several times what it grinds (the Pacific Northwest, the Dakotas) keeps

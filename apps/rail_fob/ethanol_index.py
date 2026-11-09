@@ -62,7 +62,7 @@ WITH latest AS (
   JOIN location_meta lm ON lm.provider = s.provider AND lm.location = s.location
   WHERE lm.facility_type IN ('Corn Processing', 'River Terminal') AND lm.state = %s AND s.timestamp >= %s
 )
-SELECT l.provider, l.location, lm.state, lm.facility_type, r.grain, r.delivery_month, r.futures_symbol, r.basis_cents, r.is_spot
+SELECT l.provider, l.location, lm.state, lm.facility_type, lm.delivery_zone, r.grain, r.delivery_month, r.futures_symbol, r.basis_cents, r.is_spot
 FROM latest l
 JOIN location_meta lm ON lm.provider = l.provider AND lm.location = l.location
 JOIN snapshot_rows r ON r.snapshot_id = l.id

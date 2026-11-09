@@ -142,6 +142,25 @@ def _weekday(d) -> str:
     return d.strftime("%A") if d else MISSING
 
 
+def _session(cutout) -> str:
+    """
+    'AM' or 'PM' -- which boxed beef report this slide's cutout came from.
+
+    Hard-coded "PM." until 2026-11-06. The letter now takes LM_XB402's
+    morning read when it is newer than the close, and this slide is built
+    from the SAME ctx -- so without this it would print "Friday PM." over a
+    morning number, on the one-pager that goes to clients.
+
+    DELIBERATELY SEPARATE FROM render._cut_label, which abbreviates the day
+    ("Thurs") where this spells it out ("Thursday"). CLAUDE.md keeps those
+    two spellings apart on purpose and tests/test_rundown.py pins this one by
+    exact row equality; merging the helpers would quietly restyle the slide.
+    A literal rather than sources.AM_SESSION, because this module may not
+    import the fetchers and a test asserts it.
+    """
+    return "AM" if str((cutout or {}).get("session") or "").upper() == "AM" else "PM"
+
+
 def _diff(a, b):
     a, b = _f(a), _f(b)
     return None if a is None or b is None else a - b
@@ -193,11 +212,12 @@ def rows(ctx: dict) -> list:
     choice = cutout.get("choice") or {}
     select = cutout.get("select") or {}
     when = _weekday(cutout.get("report_date"))
+    sess = _session(cutout)
     out.append((0, f"Choice- {money(choice.get('value'))}. "
-                   f"{signed_money(choice.get('change'))} {when} PM."))
+                   f"{signed_money(choice.get('change'))} {when} {sess}."))
     out.append((1, f"5-day average- {money(choice.get('avg5'))}."))
     out.append((0, f"Select- {money(select.get('value'))}. "
-                   f"{signed_money(select.get('change'))} {when} PM."))
+                   f"{signed_money(select.get('change'))} {when} {sess}."))
     out.append((1, f"5-day average- {money(select.get('avg5'))}."))
 
     # Derived here rather than taken from the feed: USDA publishes the two
@@ -243,7 +263,7 @@ def as_markdown(rows_: list) -> str:
 
 def freshness(ctx: dict, today: date = None) -> dict:
     """
-    Whether the PM cutout on this slide is today's or a previous session's.
+    Whether the cutout on this slide is today's CLOSE or something earlier.
 
     Streamlit Community Cloud has no scheduler, so nothing can rebuild this at
     3pm on its own -- the tab is built when it is opened. That makes "which
@@ -253,13 +273,22 @@ def freshness(ctx: dict, today: date = None) -> dict:
     the same trap as the stale futures feed in CLAUDE.md, where every check
     asked whether data came back and it had.
 
-    `stale` is deliberately false at a weekend and before the PM release --
-    there is no session to be behind on, so saying "stale" would train the
-    reader to ignore it.
+    `stale` is deliberately false at a weekend -- there is no session to be
+    behind on, so saying "stale" would train the reader to ignore it.
+
+    A MORNING READ IS STALE FOR THIS PURPOSE even though it is today's, and
+    that is a deliberate choice rather than a looseness in the word. Before
+    this slide could carry LM_XB402 at all, an afternoon build at 1pm held
+    YESTERDAY's close, `got < expected`, and the banner warned. Letting
+    today's morning read satisfy the date test would have silenced that
+    warning on exactly the builds that still need it -- the close is hours
+    away and the slide goes to clients. So the banner still fires; it just
+    says what it actually has now instead of guessing.
     """
     today = today or date.today()
     cutout = ctx.get("cutout") or {}
     got = _as_date(cutout.get("report_date"))
+    sess = _session(cutout)
 
     # Last weekday on or before today: Sat/Sun fall back to Friday.
     expected = today
@@ -267,12 +296,21 @@ def freshness(ctx: dict, today: date = None) -> dict:
         expected -= timedelta(days=1)
 
     if got is None:
-        return {"stale": True, "report_date": None, "expected": expected,
+        return {"stale": True, "session": None, "report_date": None,
+                "expected": expected,
                 "message": "No cutout in this build — the slide has no Choice or Select."}
+    if sess == "AM":
+        return {"stale": True, "session": sess, "report_date": got,
+                "expected": expected,
+                "message": (f"This is {_weekday(got)} {short_date(got)}'s MORNING read "
+                            f"(LM_XB402), not the close — the slide is labelled "
+                            f"{_weekday(got)} AM. LM_XB403 is out around 3pm CT; "
+                            f"press Fetch latest data after that for the close.")}
     if got >= expected:
-        return {"stale": False, "report_date": got, "expected": expected,
+        return {"stale": False, "session": sess, "report_date": got,
+                "expected": expected,
                 "message": f"PM cutout for {_weekday(got)} {short_date(got)} is in."}
-    return {"stale": True, "report_date": got, "expected": expected,
+    return {"stale": True, "session": sess, "report_date": got, "expected": expected,
             "message": (f"Still showing {_weekday(got)} {short_date(got)} — "
                         f"{_weekday(expected)}'s PM cutout has not landed yet. "
                         f"It is released around 3pm CT; press Fetch latest data after that.")}

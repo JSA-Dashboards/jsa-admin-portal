@@ -371,58 +371,79 @@ try:
 except TypeError:  # older Streamlit without st.html JS support
     import streamlit.components.v1 as _stc
     _stc.html(_BADGE_JS, height=0)
-st.title("📣 Teams Broadcast Tool")
-
 st.markdown("""
 <style>
-/* ── Hide Streamlit chrome ── */
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: hidden;}
-/* ── Spellcheck ── */
-textarea { spellcheck: true; }
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&family=Source+Sans+3:wght@400;600;700&display=swap');
+html, body, [data-testid="stAppViewContainer"] { background-color:#f6f8f7; color:#32373c; }
+html, body, p, span, div, label, button, td, th { font-family:'Source Sans 3','Source Sans Pro',sans-serif; }
+.block-container { padding-top: 2rem; max-width: 760px; }
 
-/* ── Mobile-first layout ── */
-/* Full-width primary buttons everywhere */
+/* Header */
+.dash-header { display:flex; align-items:center; gap:18px; padding-bottom:10px;
+    border-bottom:1px solid #d7e2dc; margin-bottom:14px; }
+.dash-header img { height:40px; }
+.dash-header .t b { font-family:'EB Garamond',Georgia,serif; font-size:1.7rem; color:#32373c; font-weight:600; }
+.dash-header .t div { font-size:.85rem; color:#5f7267; }
+
+/* Hide Streamlit chrome */
+#MainMenu, footer, header { visibility:hidden; }
+.stDeployButton { display:none; }
+
+/* Cards: expanders, forms, bordered containers */
+[data-testid="stExpander"], [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] {
+    background:#ffffff; border:1px solid #d7e2dc !important; border-radius:10px;
+}
+[data-testid="stAlert"] { border-radius:8px; }
+hr { border-color:#d7e2dc; }
+h2, h3 { font-family:'EB Garamond',Georgia,serif; font-weight:600; color:#32373c; }
+
+/* Inputs */
+[data-baseweb="select"] > div, [data-baseweb="textarea"], [data-baseweb="input"] {
+    border-color:#d7e2dc !important; border-radius:8px; background:#ffffff;
+}
+[data-testid="stFileUploader"] { width:100%; }
+[data-testid="stFileUploaderDropzone"] { background:#ffffff; border:1px dashed #b8c4bc; border-radius:10px; }
+textarea { spellcheck:true; }
+details summary { padding:10px 0; }
+
+/* Buttons: full width, 48px touch target */
 .stButton > button {
-    width: 100%;
-    min-height: 48px;
-    font-size: 1rem;
-    font-weight: 600;
-    border-radius: 8px;
+    width:100%; min-height:48px; font-size:1rem; font-weight:600; border-radius:8px;
 }
-/* Tabs: scroll horizontally on narrow screens, don't wrap */
+.stButton > button[kind="primary"] { background:#5e7164; border-color:#5e7164; }
+.stButton > button[kind="primary"]:hover { background:#4d5e53; border-color:#4d5e53; }
+.stButton > button[kind="primary"], .stButton > button[kind="primary"] *,
+.stButton > button[kind="primary"]:hover, .stButton > button[kind="primary"]:hover *,
+.stButton > button[kind="primary"]:disabled, .stButton > button[kind="primary"]:disabled * { color:#ffffff !important; }
+.stButton > button[kind="primary"]:disabled { opacity:.55; }
+.stButton > button[kind="secondary"] { background:#ffffff; border:1px solid #d7e2dc; color:#32373c; }
+
+/* Multiselect: wrap every chip onto its own line instead of scrolling sideways */
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div { flex-wrap:wrap !important; overflow:visible !important; max-height:none !important; height:auto !important; }
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div > div { flex-wrap:wrap !important; overflow:visible !important; max-height:none !important; }
+[data-testid="stMultiSelect"] [data-baseweb="tag"] { max-width:100% !important; height:auto; }
+[data-testid="stMultiSelect"] [data-baseweb="tag"] span { max-width:none !important; white-space:normal; }
+
+/* Tabs: scroll on narrow screens, JSA-green underline */
 .stTabs [data-baseweb="tab-list"] {
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    gap: 0;
-    scrollbar-width: none;
+    overflow-x:auto; flex-wrap:nowrap; gap:0; scrollbar-width:none; border-bottom:1px solid #d7e2dc;
 }
-.stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { display: none; }
-.stTabs [data-baseweb="tab"] {
-    white-space: nowrap;
-    padding: 8px 14px;
-    font-size: 0.9rem;
-}
-/* File uploader — larger tap area on mobile */
-[data-testid="stFileUploader"] {
-    width: 100%;
-}
-/* Expander tap target */
-details summary {
-    padding: 10px 0;
-}
-/* Selectbox full width */
-[data-testid="stSelectbox"] { width: 100%; }
-/* Remove excess top padding on mobile */
+.stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { display:none; }
+.stTabs [data-baseweb="tab"] { white-space:nowrap; padding:8px 14px; font-size:.95rem; font-weight:600; color:#5f7267; }
+.stTabs [aria-selected="true"] { color:#32373c; }
+.stTabs [data-baseweb="tab-highlight"] { background-color:#5e7164; }
+
 @media (max-width: 640px) {
     .block-container { padding-top: 1rem !important; }
-    h1 { font-size: 1.4rem !important; }
+    .dash-header img { display:none; }
+    .dash-header .t b { font-size:1.4rem; }
 }
 </style>
-<script>
-document.querySelectorAll('textarea').forEach(t => t.spellcheck = true);
-</script>
+<div class="dash-header">
+  <img src="https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png">
+  <div class="t"><b>Teams Broadcast</b>
+  <div>Teams &amp; WhatsApp messaging &middot; John Stewart &amp; Associates</div></div>
+</div>
 """, unsafe_allow_html=True)
 
 # ── Profile selector ──────────────────────────────────────────────────────────
@@ -538,7 +559,7 @@ with st.sidebar:
         st.query_params.clear()
         st.rerun()
 
-tab_broadcast, tab_whatsapp, tab_groups, tab_settings = st.tabs(["📣 Teams", "💬 WhatsApp", "👥 Groups", "⚙️ Settings"])
+tab_broadcast, tab_whatsapp, tab_groups, tab_settings = st.tabs([":material/groups: Teams", ":material/chat: WhatsApp", ":material/group_add: Groups", ":material/settings: Settings"])
 
 # ── Broadcast tab ─────────────────────────────────────────────────────────────
 
@@ -819,21 +840,29 @@ with tab_groups:
                 st.info("Teams chats not loaded — click **Refresh Teams chat list** above.")
 
             # Include saved IDs even if not in current fetch — don't silently drop them
-            all_options = list({cid: None for cid in list(_edit_cl.keys()) + current}.keys())
-            chosen = st.multiselect(
-                "Chats in this group",
-                options=all_options,
-                default=current,
-                format_func=lambda x: _edit_cl.get(x, f"⚠️ Unknown (remove & re-add) — {x}"),
-                key=f"chosen_{edit_target}",
+            st.markdown(f"**{len(current)} chat(s) in this group** — untick to remove")
+            _keep = []
+            for cid in current:
+                _ok = cid in _edit_cl
+                _lbl = _edit_cl[cid] if _ok else f"⚠️ Unknown (remove & re-add) — {cid}"
+                if st.checkbox(_lbl, value=True, key=f"keep_{edit_target}_{cid}"):
+                    _keep.append(cid)
+            _addable = [c for c in _edit_cl if c not in current]
+            _added = st.multiselect(
+                "Add chats",
+                options=_addable,
+                format_func=lambda x: _edit_cl.get(x, x),
+                key=f"add_{edit_target}",
             )
-            _teams_unknown = [x for x in chosen if x not in _edit_cl]
-            if _teams_unknown:
-                st.warning(f"{len(_teams_unknown)} unrecognized ID(s) — remove them and re-add the correct chat from the dropdown.")
+            chosen = _keep + _added
+            if any(c not in _edit_cl for c in current):
+                st.warning("Unrecognized ID(s) are flagged ⚠️ — untick them and add the correct chat under **Add chats**.")
 
             if st.button("Save Changes", type="primary"):
                 groups["subgroups"][edit_target] = chosen
                 save_groups(groups, profile)
+                for _k in [k for k in st.session_state if k.startswith(f"keep_{edit_target}_") or k == f"add_{edit_target}"]:
+                    del st.session_state[_k]
                 st.session_state.pop("groups_cache", None)
                 st.rerun()
         else:
@@ -891,6 +920,8 @@ with tab_groups:
                 if wa_new_name not in wa_groups_edit["subgroups"]:
                     wa_groups_edit["subgroups"][wa_new_name] = []
                     save_wa_groups(wa_groups_edit, profile)
+                    for _k in [k for k in st.session_state if k.startswith(f"wa_keep_{wa_edit_target}_") or k == f"wa_add_{wa_edit_target}"]:
+                        del st.session_state[_k]
                     st.success(f'Created "{wa_new_name}"')
                     st.rerun()
                 else:
@@ -911,17 +942,22 @@ with tab_groups:
                 wa_current = wa_groups_edit["subgroups"].get(wa_edit_target, [])
 
                 # Include saved IDs even if not in current fetch — don't silently drop them
-                all_wa_options = list({**{c: c for c in wa_current}, **wa_cl}.keys())
-                wa_chosen = st.multiselect(
-                    "Contacts in this group",
-                    options=all_wa_options,
-                    default=wa_current,
-                    format_func=lambda x: wa_cl.get(x, f"⚠️ Unknown (remove & re-add) — {x}"),
-                    key=f"wa_chosen_{wa_edit_target}"
+                st.markdown(f"**{len(wa_current)} contact(s) in this group** — untick to remove")
+                _wa_keep = []
+                for cid in wa_current:
+                    _lbl = wa_cl[cid] if cid in wa_cl else f"⚠️ Unknown (remove & re-add) — {cid}"
+                    if st.checkbox(_lbl, value=True, key=f"wa_keep_{wa_edit_target}_{cid}"):
+                        _wa_keep.append(cid)
+                _wa_addable = [c for c in wa_cl if c not in wa_current]
+                _wa_added = st.multiselect(
+                    "Add contacts",
+                    options=_wa_addable,
+                    format_func=lambda x: wa_cl.get(x, x),
+                    key=f"wa_add_{wa_edit_target}",
                 )
-                _unknown = [x for x in wa_chosen if x not in wa_cl]
-                if _unknown:
-                    st.warning(f"{len(_unknown)} unrecognized ID(s) above — remove them and re-add the correct chat from the current list.")
+                wa_chosen = _wa_keep + _wa_added
+                if any(c not in wa_cl for c in wa_current):
+                    st.warning("Unrecognized ID(s) are flagged ⚠️ — untick them and add the correct chat under **Add contacts**.")
 
                 if st.button("Save Changes", type="primary", key="wa_save"):
                     wa_groups_edit["subgroups"][wa_edit_target] = wa_chosen

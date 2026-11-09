@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "11e749bcb457219fa0fb3a442133f0c14d26879d",
+ "commit": "4f7785b9ed3115d42735538217964730c2076e74",
  "files": {
   "app.py": "ed6c294bcf8728d34f281ef412b30d06ce92a54f4940366c31c5c52605ae0ab8",
   "app_pages/add.py": "9606b5593e572b5375307e19e485fc14d2026a482a6d0ee9c8ad951575719be3",
@@ -12,7 +12,7 @@
   "app_pages/review.py": "170304c1ec3aca2ade79a23fd282553d28326e843cd86e1e831fd9b9895736bc",
   "app_pages/strip_trials.py": "956fc31444427d89816c277b76e05fb254d71671be7c7a1a170dc226804e6522",
   "app_pages/trials.py": "16e4f45854950de6f8c9137b728560af127289eb1de970e3d1b3e5d69b414f6c",
-  "assets/jsa_logo.png": "73f8e52b248df36161c4c7e3af49689ade6afcc120210faa90f160d2a7a00aa0",
+  "assets/jsa_logo.png": "3767cc8df9b2efae4f2b4b82f5380d0720cb9d504c1eb369cca3db5a1affee3a",
   "yp_analysis.py": "399facaf0f34cf32e185a116665cb9772e4d2dcc5b8d4874fa47a910984af562",
   "yp_baselines.py": "b2b70e04df775e4bb5553faf372e3fe1baf6822d24f0191027593595097956f3",
   "yp_checks.py": "7b9fe6d59843d6f066ac40887a52f5863e9185793a4f6ef7a72e7df0988339a4",

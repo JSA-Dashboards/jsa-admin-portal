@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import portal_view  # noqa: E402
 
+import ls_long_history as long_history
 import ls_snapshot_buttons as snapshot_buttons
 from ls_massive_api import MassiveApiError, get_futures_curve, get_settlement_histories
 
@@ -56,9 +57,18 @@ FND_COLOR = "#8e24aa"
 UP_COLOR = "#16a34a"
 DOWN_COLOR = "#dc2626"
 MAX_YEARS_BACK = 5
+# TWO DIFFERENT DEPTHS ON ONE PAGE NOW, so this names which is which.
+# It read "Massive's daily settlement history starts 2021-09-02, so seasonal
+# overlays cover roughly the last 4 full contract years" -- true of the overlays
+# and, since 2026-11-05, false as a statement about the page: Nearby continuous
+# reaches 2001. A page-level caption sits above every tab, so it has to be read
+# as covering all of them.
 DATA_START_NOTE = (
-    "Massive's daily settlement history starts 2021-09-02, so seasonal overlays "
-    "cover roughly the last 4 full contract years — older analogs are skipped, not wrong."
+    "**Per-contract views** — the seasonal overlays, calendar spreads and the spread "
+    "matrix — are built from individual contract months, which this feed carries back "
+    "about five years, so they cover roughly the last 4 full contract years; older "
+    "analogs are skipped, not wrong. **Nearby continuous** is spliced from a second "
+    "source and reaches back to 2001 — see that tab for its own start date."
 )
 FND_NOTE = (
     "FND marks CME's Live Cattle First Notice Day — the first Monday following the "
@@ -224,11 +234,25 @@ def load_histories(tickers: tuple[str, ...], api_key: str) -> dict[str, pd.Serie
 
 
 @st.cache_data(ttl="6h", show_spinner="Building continuous nearby series…")
-def build_continuous_series(product_code: str, api_key: str, as_of: str, curve: pd.DataFrame) -> pd.Series:
+def build_continuous_series(product_code: str, api_key: str, as_of: str, curve: pd.DataFrame,
+                            schema: int = long_history.SCHEMA) -> pd.Series:
     """Splice consecutive front-month contracts into one unadjusted 'nearby' series:
     on each date, the settle of whichever contract expires soonest. This is the
     standard nearby-futures construction — not back-adjusted, so a small gap can
-    appear at each roll where the new front month settled at a different level."""
+    appear at each roll where the new front month settled at a different level.
+
+    Massive's own history floors at 2021-11-08, so everything before that comes
+    from the continuous series in `long_history` — which agrees with this one to
+    the thousandth on 1,254 of the 1,255 days both cover. Massive still wins
+    every date it carries; see `long_history.splice` for why the two are kept
+    apart by date rather than merged.
+
+    `schema` is `long_history.SCHEMA` and exists only to be part of the cache
+    key: st.cache_data keys on this function's own code and never on the modules
+    it calls, so a reshaped return from long_history would otherwise be served
+    from a cache built before the reshape. It carries no underscore and is
+    passed at every call site, because an underscored or defaulted argument is
+    not hashed at all — the guard tests/test_cache_schema.py exists for."""
     as_of_date = date.fromisoformat(as_of)
     year_digit = as_of_date.year % 10
     tickers = []
@@ -259,11 +283,13 @@ def build_continuous_series(product_code: str, api_key: str, as_of: str, curve: 
         continuous.update(segment.to_dict())
         prev_expiry = expiry
 
-    if not continuous:
-        return pd.Series(dtype=float)
-    result = pd.Series(continuous).sort_index()
-    result.index = pd.to_datetime(result.index)
-    return result
+    if continuous:
+        result = pd.Series(continuous).sort_index()
+        result.index = pd.to_datetime(result.index)
+    else:
+        result = pd.Series(dtype=float)
+
+    return long_history.splice(result, long_history.fetch_nearby(product_code, as_of_date))
 
 
 def resample_ohlc(series: pd.Series, rule: str) -> pd.DataFrame:
@@ -758,6 +784,9 @@ def render_spread_matrix(commodity: dict, api_key: str, as_of: date):
 
 
 CONTINUOUS_FREQ = {"Daily": None, "Weekly": "W-FRI", "Monthly": "ME"}
+# How far back the USDA release table reaches. Its own window, deliberately
+# not the chart's -- see where it is used.
+REPORT_CALENDAR_YEARS = 5
 
 
 def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
@@ -771,7 +800,7 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
         st.error(f"Couldn't load {commodity['label']} quotes: {e}")
         return
 
-    series = build_continuous_series(code, api_key, as_of.isoformat(), curve)
+    series = build_continuous_series(code, api_key, as_of.isoformat(), curve, long_history.SCHEMA)
     if not len(series):
         st.warning(f"{commodity['label']}: no continuous history available.")
         return
@@ -839,13 +868,21 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
 
     st.divider()
     st.caption(f"**{commodity['label']}** — USDA report release calendar")
+    # THE CALENDAR NO LONGER FOLLOWS THE CHART, and the caption must not go on
+    # saying it does. It was `since = series.index.min()`, which was a ~5-year
+    # window while that was all the feed had; against a 2001 start it is four
+    # reports x 25 years of ESMIS pagination -- 25 releases a page, 29 pages for
+    # WASDE alone -- for a table of some 900 rows nobody scrolls. Bounded here
+    # and stated in the caption, so the window is a number a reader can see
+    # rather than an accident of how deep the price feed happens to go.
+    since_year = as_of.year - REPORT_CALENDAR_YEARS
     st.caption(
         "Skipped as chart markers here — at monthly/quarterly cadence over this much history they'd "
-        "read as a solid grid rather than a signal. Shown as a table instead, over the same span as "
-        "the chart above."
+        f"read as a solid grid rather than a signal. Shown as a table instead, covering the last "
+        f"{REPORT_CALENDAR_YEARS} years ({since_year}–{as_of.year}) rather than the chart's full span."
     )
     reports = REPORT_RELEVANCE.get(code, [])
-    since = series.index.min().date().isoformat()
+    since = max(series.index.min().date(), as_of - timedelta(days=365 * REPORT_CALENDAR_YEARS)).isoformat()
     rows = []
     for report in reports:
         for d in fetch_report_dates(report, since):
@@ -1227,7 +1264,7 @@ def tool_get_price_series(massive_key: str, as_of: date, commodity: str, days_ba
         return {"error": f"Unknown commodity '{commodity}'. Use Live Cattle, Feeder Cattle, or Lean Hogs."}
     try:
         curve = load_curve(code, massive_key, as_of.isoformat(), 15)
-        series = build_continuous_series(code, massive_key, as_of.isoformat(), curve)
+        series = build_continuous_series(code, massive_key, as_of.isoformat(), curve, long_history.SCHEMA)
     except MassiveApiError as e:
         return {"error": str(e)}
     if not len(series):
@@ -1262,7 +1299,7 @@ def tool_get_seasonal_stats(massive_key: str, as_of: date, commodity: str) -> di
         return {"error": f"Unknown commodity '{commodity}'."}
     try:
         curve = load_curve(code, massive_key, as_of.isoformat(), 15)
-        series = build_continuous_series(code, massive_key, as_of.isoformat(), curve)
+        series = build_continuous_series(code, massive_key, as_of.isoformat(), curve, long_history.SCHEMA)
     except MassiveApiError as e:
         return {"error": str(e)}
     per_year, summary, excluded = highs_lows_by_month(series)

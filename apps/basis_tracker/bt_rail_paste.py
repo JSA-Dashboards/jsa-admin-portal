@@ -11,6 +11,9 @@ It encodes the desk conventions (see the feedback-rail-entry memory):
     standard corn cycle via rail_corridors (post-FND roll), with the special rule
     that a **December delivery defaults to CH (March) unless tagged z**, and
     spanning packages (AMJJ, Jan-Jul, …) price vs 'R'.
+  • a slot named "Spot" prices vs the NEAREST futures month that is not past first
+    notice (CZ until Nov 30, then CH; beans likewise) - Kolten, 2026-11-05. A cell
+    tag still wins.
   • futures stored as a full CME symbol (ZCZ26, ZCH27) so the board's roll-adjust
     math works — or 'R' for a spanning package, or None when unknown/pending.
   • desk notations dropped (pk / wtx / mex / dom / KS / MO / center); a FH/LH/MP
@@ -23,13 +26,23 @@ Cell grammar handled: "PERIOD bid[/offer][tag]" repeated, e.g.
     Sep -5/+3  Oct 0/6  Nov 4/10  Dec 8/14z  JFM 12/18  AMJJ 17/25
 Everything between one value expression and the next is read as that cell's
 period, so multi-word periods ("FH Sep", "LH Oct/FH Nov", "Jan-Jul") work.
+
+The other layout is one quote per LINE: the bid on the left, the delivery period in the middle and the offer on the right, each side
+with its own optional tag letter (the CSX Columbus / Evansville sheet, 2026-11-09):
+    25z Nov 1-20 ?
+    30z Nov 40z
+    24h JFM 29h
+    25r Jan - Jul 31r
+A corridor's block is read that way when at least two of its lines are of that shape and they are nearly all the lines that carry a
+number (_bpo_matches); anything else is read with the grammar above, exactly as before. A day window stays in the label in this layout
+("Nov 1-20" and "Nov" are two periods; the first layout's _DATE_WINDOW strip would have merged them).
 """
 from __future__ import annotations
 
 import re
 from datetime import date, datetime
 
-from bt_rail_corridors import RAIL_BY_CORRIDOR, canonical_corridor, corn_futures, corn_fnd, period_start_month, soy_futures_for_period, soy_fnd
+from bt_rail_corridors import RAIL_BY_CORRIDOR, canonical_corridor, corn_futures, corn_fnd, period_start_month, soy_futures_for_period, soy_fnd, corn_front_contract, soy_front_contract
 
 _TAG2SHORT = {"u": "CU", "z": "CZ", "h": "CH", "k": "CK", "n": "CN"}
 # Soybean tag letters (desk writes them the same way as corn): x=Nov, f=Jan, etc.
@@ -87,6 +100,12 @@ _VALUE_NOTE = re.compile(
 _VAL = r"[+-]?\d+(?:\.\d+)?\??|flat|\*+|\?"
 _CELL = re.compile(rf"(?<![\w'.])({_VAL})(?:\s*/\s*({_VAL}))?([a-z])?", re.I)
 
+# The other layout: one quote per LINE, "bid[tag] PERIOD offer[tag]" - the bid on the LEFT, the delivery period in the MIDDLE, the offer on the
+# RIGHT (the CSX Columbus / Evansville sheet, 2026-11-09: "30z Nov 40z", "25z Nov 1-20 ?", "25r Jan - Jul 31r"). Each side may carry its own tag
+# letter abutting its number. The period starts with a letter and runs lazily up to the LAST value on the line, so a day window ("Nov 1-20") or a
+# spaced range ("Jan - Jul") stays whole inside it.
+_BPO_LINE = re.compile(rf"^\s*({_VAL})([A-Za-z])?\s+([A-Za-z].*?)\s+({_VAL})([A-Za-z])?\s*$", re.I)
+
 
 def _val(tok):
     """One value token → (number_or_None, raw_or_None). raw is set only for a
@@ -129,6 +148,11 @@ def _soy_to_full(short: str, as_of: date) -> str:
     return f"ZS{short[1]}{y % 100:02d}"
 
 
+def _is_spot(period: str) -> bool:
+    """A slot named just 'Spot' (any case): the board's nearby bid, which has no month of its own."""
+    return period.strip().lower() == "spot"
+
+
 def _futures_for(period: str, rail: str | None, tag: str | None, as_of: date,
                  commodity: str = "Corn"):
     """Resolve a cell's futures: full symbol (ZCZ26 / ZSX26), 'R' (spanning), or None.
@@ -140,6 +164,8 @@ def _futures_for(period: str, rail: str | None, tag: str | None, as_of: date,
     if c in _BEAN_WORDS:                               # ── soybeans ──
         if tag and tag.lower() in _SOY_TAG:
             short = _SOY_TAG[tag.lower()]              # explicit bean tag wins
+        elif _is_spot(period):
+            short = soy_front_contract(as_of)          # Spot = the nearest bean month not past first notice
         else:
             short = soy_futures_for_period(period, as_of)
         if not short or short == "R":
@@ -147,7 +173,8 @@ def _futures_for(period: str, rail: str | None, tag: str | None, as_of: date,
         return _soy_to_full(short, as_of)
     if c not in ("corn", "yellow corn", ""):           # wheat / other → blank
         return None
-    short = corn_futures(period, rail, as_of)          # 'CH' / 'CZ' / 'R' / None
+    # 'CH' / 'CZ' / 'R' / None; a Spot slot = the nearest month not past first notice
+    short = corn_front_contract(as_of) if _is_spot(period) else corn_futures(period, rail, as_of)
     # A tag picks the contract for a single-contract cell, but must NOT collapse a
     # spanning package (AMJJ tagged "kn" stays 'R', not CK).
     if tag and tag.lower() in _TAG2SHORT and short != "R":
@@ -193,6 +220,79 @@ def _clean_period(raw: str, corridor: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _route(corridor: str, commodity: str):
+    """(market, rail) a pasted corridor name and commodity are filed under: the registry name, and a soybean paste on a corn/beans dual
+    corridor routes to its own board card (e.g. CN 105s -> CN 105s Beans) so the two commodities don't collide."""
+    corridor = canonical_corridor(corridor)
+    if (commodity or "").strip().lower() in _BEAN_WORDS:
+        corridor = _BEANS_MARKET.get(corridor, corridor)
+    return corridor, RAIL_BY_CORRIDOR.get(corridor)
+
+
+def _bpo_matches(text):
+    """([regex matches], [skipped lines]) for a corridor block written as "bid PERIOD offer" lines, or None when it is not written that way.
+
+    It is when at least two lines match and they are at least three quarters of the lines that carry a number or a '?' (a header remnant such
+    as ", OH - CSX" carries none and is ignored). A line of the first layout starts with a period, never with a value, so it cannot match: a
+    block in that layout, or a mix with too few matching lines, keeps the original reading unchanged. The lines left over in a block that does
+    qualify are returned so the caller can say they were skipped."""
+    hits, skipped = [], []
+    for ln in str(text or "").splitlines():
+        ln = _VALUE_NOTE.sub("", ln)
+        if not re.search(r"[\d?]", ln):
+            continue
+        m = _BPO_LINE.match(ln)
+        if m:
+            hits.append(m)
+        else:
+            skipped.append(ln.strip())
+    quotes = len(hits) + len(skipped)
+    if len(hits) >= 2 and len(hits) * 4 >= quotes * 3:
+        return hits, skipped
+    return None
+
+
+def _parse_bpo(found, corridor, rail, as_of, commodity):
+    """Rows for a block in the "bid PERIOD offer" layout: the same row shape, tags and futures rules as the first layout."""
+    matches, skipped = found
+    up_il_split = corridor in ("UP Illinois (Dom)", "UP Illinois (Mex)")
+    rows = []
+    warnings = [f"Skipped a line that is not “bid PERIOD offer”: “{s}”." for s in skipped]
+    order = 0
+    for m in matches:
+        bid, bid_raw = _val(m.group(1))
+        offer, offer_raw = _val(m.group(4))
+        if bid is None and offer is None and not bid_raw and not offer_raw:
+            continue                                   # '*' on both sides: nothing quoted
+        raw_period = m.group(3)
+        period = _clean_period(raw_period, corridor)
+        if not period:
+            warnings.append(f"Skipped a quote with no period: “{m.group(0).strip()}”.")
+            continue
+        btag, otag = m.group(2), m.group(5)
+        if btag and otag and btag.lower() != otag.lower():
+            warnings.append(f"“{m.group(0).strip()}”: the bid is tagged {btag.lower()} and the offer {otag.lower()}; "
+                            f"the bid's tag picks the contract.")
+        tag = btag or otag
+        mkt = corridor
+        if up_il_split:
+            seg_l = raw_period.lower()
+            if re.search(r"\bmex\b", seg_l):
+                mkt = "UP Illinois (Mex)"
+            elif re.search(r"\bdom\b", seg_l):
+                mkt = "UP Illinois (Dom)"
+        rows.append({
+            "market": mkt, "rail": RAIL_BY_CORRIDOR.get(mkt, rail),
+            "commodity": commodity,
+            "period": period, "period_order": order,
+            "futures": _futures_for(period, rail, tag, as_of, commodity),
+            "bid": bid, "offer": offer,
+            "bid_raw": bid_raw, "offer_raw": offer_raw,
+        })
+        order += 1
+    return rows, warnings
+
+
 def parse_rundown(text: str, corridor: str, as_of=None, commodity: str = "Corn"):
     """Parse one corridor's pasted rundown into (rows, warnings).
 
@@ -206,14 +306,12 @@ def parse_rundown(text: str, corridor: str, as_of=None, commodity: str = "Corn")
     if isinstance(as_of, datetime):
         as_of = as_of.date()
     text = _NOISE.sub(" ", _normalize_punct(text))
+    corridor, rail = _route(corridor, commodity)
+    found = _bpo_matches(text)
+    if found:                               # "bid PERIOD offer" lines: decided BEFORE the date-window strip below, which would cut the window out of a label
+        return _parse_bpo(found, corridor, rail, as_of, commodity)
     text = _DATE_WINDOW.sub(" ", text)      # drop delivery-date windows ("Sep 25-30")
     text = _VALUE_NOTE.sub("", text)        # drop value-abutting notations ("128FH", "123pk")
-    corridor = canonical_corridor(corridor)
-    # A soybean paste on a corn/beans dual corridor routes to its own board card
-    # (e.g. CN 105s → CN 105s Beans) so the two commodities don't collide.
-    if (commodity or "").strip().lower() in _BEAN_WORDS:
-        corridor = _BEANS_MARKET.get(corridor, corridor)
-    rail = RAIL_BY_CORRIDOR.get(corridor)
 
     # UP Illinois is posted as ONE bare rundown whose cells carry (dom)/(mex)
     # tags; each row routes to its own sub-market. Untagged near-month cells keep

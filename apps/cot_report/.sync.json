@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "b326b053864154a536a6b993b225b124a5f448a1",
+ "commit": "1b50762bb40c70c2e6ee698d3591545a61b9bacc",
  "files": {
   "app.py": "7f8ccc340995daf97a37a487c4f416e8f45dc38d6e9dc4880b9405ea908cee0e",
   "cot_positions.py": "98107273e499997ad5cc947e7f90a1c382dfbd1e33168434b2ad7184edbd67bb"

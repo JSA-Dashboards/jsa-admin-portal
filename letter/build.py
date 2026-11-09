@@ -212,18 +212,32 @@ def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> Non
     problems, and a panel that cries every morning stops being read on the one
     morning it matters.
     """
-    # THE 3PM CENTRAL TRAP, AND WHY IT IS PM-ONLY. LM_XB403 PM publishes around
-    # 3pm Central. The evening letter is written after that and wants today's
-    # print, so an older one means the release has not landed. The MORNING
-    # brief legitimately quotes the previous session's cutout -- that is what a
+    # THE 3PM CENTRAL TRAP, AND WHY IT IS EVENING-ONLY. LM_XB403 publishes
+    # around 3pm Central. The evening letter is written after that and wants
+    # today's close, so anything older means the release has not landed. The
+    # MORNING brief legitimately quotes an earlier print -- that is what a
     # 07:30 letter is -- so firing there would warn every single day about the
     # letter working correctly.
-    cut_date = (ctx.get("cutout") or {}).get("report_date")
-    if kind != "am" and cut_date and date.fromisoformat(cut_date) < issue:
-        errors.append(
-            f"Boxed beef is the {cut_date} print, not {issue}'s. LM_XB403 PM releases "
-            f"about 3pm Central -- re-run after that for today's cutout. Until then the "
-            f"letter correctly labels it as the {cut_date} PM print.")
+    #
+    # IT HAS TO TEST THE SESSION AS WELL AS THE DATE, since 2026-11-06. The
+    # letter takes LM_XB402's morning read when it is newer, so on a 1pm build
+    # the cutout is dated TODAY and the date test alone goes quiet -- and this
+    # warning is the only thing that tells Ross to re-run after the close. A
+    # morning figure in an evening letter would then go out with nothing said.
+    cut = ctx.get("cutout") or {}
+    cut_date = cut.get("report_date")
+    cut_sess = str(cut.get("session") or "PM").upper()
+    if kind != "am" and cut_date:
+        if date.fromisoformat(cut_date) < issue:
+            errors.append(
+                f"Boxed beef is the {cut_date} print, not {issue}'s. LM_XB403 PM releases "
+                f"about 3pm Central -- re-run after that for today's cutout. Until then the "
+                f"letter correctly labels it as the {cut_date} {cut_sess} print.")
+        elif cut_sess == "AM":
+            errors.append(
+                f"Boxed beef is {cut_date}'s MORNING read (LM_XB402), not the close. The "
+                f"letter labels it AM and the figures are real, but LM_XB403 releases about "
+                f"3pm Central -- re-run after that if this is going out as the close.")
 
     ds = ctx.get("daily_slaughter") or {}
     if ds.get("status") and ds["status"].lower() != "final":
@@ -479,7 +493,15 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         select_technicals(ctx)
 
     ctx["cash"] = _try("cash trade (LM_CT150/CT154)", sources.fetch_cash_trade, errors) or {}
-    ctx["cutout"] = _try("boxed beef (LM_XB403/LSWFEDCC)", sources.fetch_cutout, errors) or {}
+    # THE FRESHER OF THE TWO BOXED BEEF REPORTS, through the one resolver --
+    # sources.pick_cutout says why the morning read wins only on a strictly
+    # later date and why that needs no clock. fetch_am_cutout is called
+    # OUTSIDE _try on purpose: it never raises and returns {} when the morning
+    # PDF cannot be had, so the absence of an upgrade is not an error anyone
+    # needs to be told about.
+    ctx["cutout"] = sources.pick_cutout(
+        _try("boxed beef (LM_XB403/LSWFEDCC)", sources.fetch_cutout, errors) or {},
+        sources.fetch_am_cutout())
     ctx["slaughter"] = _try("weekly slaughter (SJ_LS712)", sources.fetch_slaughter, errors) or {}
     ctx["daily_slaughter"] = _try("daily slaughter (AMS 3208)",
                                   sources.fetch_daily_slaughter, errors) or {}

@@ -123,7 +123,7 @@ FEED_LOCAL_MAX = 0.95                                  # a county never keeps mo
 
 
 @st.cache_data(show_spinner="Spreading livestock feed demand over the counties…")
-def _feed(year, fr_bu, util, credit, export_bu, wet_radius, cap, wet_items, shocks=None, regional=True):
+def _feed(year, fr_bu, util, credit, export_bu, wet_radius, cap, wet_items, shocks=None, regional=True, by_animal=True):
     """Corn livestock feed by county (Census herds x NASS inventories x feed per head, tied to USDA's feed and residual) net of the ethanol plants' distillers grains credit."""
     inp, add = _apply_shocks(dm.load(PATHS["corn"][0]), shocks)
     plants = inp["plants"]
@@ -137,15 +137,15 @@ def _feed(year, fr_bu, util, credit, export_bu, wet_radius, cap, wet_items, shoc
     pins = [r for r in inp["river"] if r["key"] in barge_keys]
     river_mi = fd._miles(p_lat, p_lon, np.array([r["lat"] for r in pins], float), np.array([r["lon"] for r in pins], float)).min(axis=1)
     out = fd.county_feed(inp["counties"], year, plants, grind, fr_bu, corn_credit=credit, wet_share=dict(wet_items), export_bu=export_bu, wet_radius=wet_radius, cap=cap,
-                         export_shares=fd.export_state_shares() if regional else None, track_mi=track_mi, river_mi=river_mi)
+                         export_shares=fd.export_state_shares() if regional else None, track_mi=track_mi, river_mi=river_mi, by_animal=by_animal)
     cr = out["credit"]
     return {"gross": out["gross"], "net": out["net"], "credit": cr["county"], "wet": cr["wet"], "dried": cr["dried"], "export": cr["export"], "unplaced": cr["unplaced"], "export_state": cr["export_state"], "dried_state": cr["dried_state"],
-            "export_plant": cr["export_plant"], "access": cr["access"], "track_mi": track_mi, "river_mi": river_mi,
+            "export_plant": cr["export_plant"], "access": cr["access"], "displace_lb": cr["displace_lb"], "track_mi": track_mi, "river_mi": river_mi,
             "by_plant": cr["by_plant"], "sbm_lb": out["sbm_lb"], "k": out["k"], "by_species": out["gross_by_species"], "grind": grind, "year": year, "credit_bu_per_bu": credit}
 
 
 @st.cache_data(show_spinner="Solving the draw…")
-def _solve(crop, rate, tau, river_premium, util, lock_scale, area_items, cap_items, plant_premium_items, river_scale=1.0, scale_items=(), rate_items=(), pnw_reach=30.0, barge_items=(), tau_items=(), extra_items=(), supply_total=None, frac_items=(), truck=None, vol_resp=0.0, vol_band=0.10, wcls=None, wperiod='avg', wyear=None, local_max=0.70, feed=None, shocks=None):
+def _solve(crop, rate, tau, river_premium, util, lock_scale, area_items, cap_items, plant_premium_items, river_scale=1.0, scale_items=(), rate_items=(), pnw_reach=30.0, barge_items=(), tau_items=(), extra_items=(), supply_total=None, frac_items=(), truck=None, vol_resp=0.0, vol_band=0.10, wcls=None, wperiod='avg', wyear=None, local_max=0.70, feed=None, shocks=None, mill_rail=0.12):
     inp, shock_add = _apply_shocks(dm.load(PATHS[crop][0]), shocks)
     nodes, extra = dm.load_nodes(PATHS[crop][1]), {}
     if crop == 'wheat':                                           # the class's supply, the class's hub targets, and the regional domestic use
@@ -153,6 +153,10 @@ def _solve(crop, rate, tau, river_premium, util, lock_scale, area_items, cap_ite
         nodes = ws.nodes_for(nodes, wperiod, wcls, inp)
         extra = dict(other_local=ws.milling_local(inp, local_max), other_rest_weight=ws.rest_weight(inp))
         inp = dict(inp, counties=[dict(c, supply_bu=float(v)) for c, v in zip(inp['counties'], sup)])
+        mills = ws.mill_plants() if wcls is None else []
+        if mills:                                                 # the named flour mills take the milling; what is left of domestic use (feed, seed, stocks) is taken pro rata, lighter in the Northwest
+            inp = dm.with_new_plants(inp, mills)
+            extra = dict(other_local=np.zeros(len(inp['counties'])), other_rest_weight=ws.rest_weight(inp), plant_rail=ws.mill_plant_rail(inp, inp['plants'], mill_rail) if mill_rail > 0 else None)
     if crop == 'corn' and feed:                                   # livestock feed stays in its own region (net of the distillers grains credit); the rest of domestic use is pro rata
         f_ = _feed(*feed)
         sup_ = np.array([c['supply_bu'] for c in inp['counties']], float) * ((float(supply_total) / sum(c['supply_bu'] for c in inp['counties'])) if supply_total else 1.0)
@@ -905,6 +909,7 @@ def _feed_panel(inp, res, feed_args):
         rows[s] = {"Corn grown": sup[m].sum() / 1e6, "Ethanol grind": f["grind"][pm].sum() / 1e6 if pm.any() else 0.0, "DDGS credit made": gen / 1e6,
                    "Livestock feed, gross": f["gross"][m].sum() / 1e6, "DDGS credit fed here": f["credit"][m].sum() / 1e6, "Livestock feed, net": f["net"][m].sum() / 1e6,
                    "Feed displaced by DDGS (%)": f["credit"][m].sum() / max(f["gross"][m].sum(), 1.0) * 100,
+                   "Corn per lb of DDGS fed here": float((f["credit"][m] * f["displace_lb"][m]).sum() / max(f["credit"][m].sum(), 1.0)),
                    "Soybean meal fed (M short tons)": f["sbm_lb"][m].sum() / 2000 / 1e6}
     df = pd.DataFrame(rows).T
     df["Net feed + ethanol vs grown"] = (df["Livestock feed, net"] + df["Ethanol grind"]) / df["Corn grown"].replace(0, np.nan)
@@ -920,8 +925,8 @@ def _feed_panel(inp, res, feed_args):
         fig.update_layout(barmode="stack", height=420, margin=dict(l=10, r=10, t=10, b=30), legend=dict(orientation="h", y=1.1, x=0), font=dict(color="#222"), paper_bgcolor="white", plot_bgcolor="white",
                           xaxis=dict(title="M bu a year", gridcolor="#e5e5e5"))
         st.plotly_chart(fig, use_container_width=True, key="draw_feed_chart", config=_img_config("corn demand by state", height=420))
-        st.dataframe(df.style.format({c: "{:,.0f}" for c in df.columns if c not in ("Soybean meal fed (M short tons)", "Net feed + ethanol vs grown", "Feed displaced by DDGS (%)")}
-                                     | {"Feed displaced by DDGS (%)": "{:.0f}"}
+        st.dataframe(df.style.format({c: "{:,.0f}" for c in df.columns if c not in ("Soybean meal fed (M short tons)", "Net feed + ethanol vs grown", "Feed displaced by DDGS (%)", "Corn per lb of DDGS fed here")}
+                                     | {"Feed displaced by DDGS (%)": "{:.0f}", "Corn per lb of DDGS fed here": "{:.2f}"}
                                      | {"Soybean meal fed (M short tons)": "{:,.2f}", "Net feed + ethanol vs grown": "{:.0%}"}, na_rep="-"), use_container_width=True, height=360)
         gen_t, placed, exp_, unp = tot["DDGS credit made"], tot["DDGS credit fed here"], f["export"] / 1e6, f["unplaced"] / 1e6
         st.caption(f"Nationally: ethanol grinds {tot['Ethanol grind']:,.0f}M bu and returns {gen_t:,.0f}M bu of corn-equivalent feed ({f['credit_bu_per_bu']:.2f} bu per bushel ground): {placed:,.0f}M is fed here, "
@@ -1007,6 +1012,13 @@ def _render(crop):
         base_inp = inp
         sup_w = ws.county_supply(base_inp, wsel["cls"], wsel["year"])
         inp = dict(base_inp, counties=[dict(c, supply_bu=float(v)) for c, v in zip(base_inp["counties"], sup_w)])
+        mills_ = ws.mill_plants() if wsel["cls"] is None else []
+        inp = dm.with_new_plants(inp, mills_)
+        if mills_:
+            st.caption(f"Flour mills: {len(mills_)} US mills from Sosland's Grain & Milling Annual 2027 (daily capacity by facility, together grinding USDA's food use of {ws.MILL_FOOD_USE_BU / 1e6:,.0f}M bu). "
+                       "They take all classes here; a single-class view still uses the regional milling capacity stand-in.")
+        elif wsel["cls"] is None:
+            st.caption("The flour mill list is not loaded here (it needs the MILLS_KEY secret), so milling uses the regional capacity stand-in.")
         nodes = ws.nodes_for(nodes, wsel["period"], wsel["cls"], base_inp)
         area_groups = [g for g in nodes["groups"] if g["kind"] in ("area", "pnw", "txgulf", "mexico", "lagulf", "mobile", "satl", "container", "cont_east", "lakes", "canada")]
     river_scale, pnw_scale, txg_scale, mex_scale, satl_scale, ctn_scale, lakes_scale, canada_scale = (
@@ -1091,6 +1103,11 @@ def _render(crop):
         t_bu = t2.number_input("Bushels per truckload", 600.0, 1200.0, 950.0 if corn else 900.0 if wheat else 850.0, 10.0, key=f"draw_truck_bu_{crop}",
                                help="The standard load: 950 bushels of corn, 900 of wheat, 850 of soybeans.")
         t_mult = t3.number_input("Truck rate vs AMS (x)", 0.5, 2.0, 1.0, 0.05, key="draw_truck_mult", help="1.0 = the AMS rate, plus the fuel adjustment for the diesel price above.")
+        mill_rail_ = 0.0
+        if wheat:
+            mill_rail_ = st.number_input("Rail to flour mills (cents a bushel-mile, 0 = trucks only)", 0.0, 0.5, ws.MILL_RAIL["rate"], 0.01, key="draww_mill_rail",
+                                         help="A mill on a railroad is reached by rail instead of truck when that costs less on a haul of 250 miles or more, from a county within 60 miles of Class I track: "
+                                              f"truck to the loader, this rate for the rail miles and {ws.MILL_RAIL['fixed']:.0f} cents of handling. Without it the eastern mills could only buy by truck.")
         truck = dm.truck_curve(ams, t_region, diesel, t_bu, t_mult)
         st.caption("Trucking cost at 25 / 50 / 100 / 200 / 300 road miles, cents a bushel: " + " / ".join(f"{float(dm.truck_cents(m, truck)):.0f}" for m in (25, 50, 100, 200, 300))
                    + f" (AMS {', '.join(ams['quarters'][:1])} to {ams['quarters'][-1]} rates, diesel ${diesel:.2f}). The cost has a fixed part of about "
@@ -1154,6 +1171,9 @@ def _render(crop):
                               help="Wet and modified distillers grains go to cattle and dairy this close to the plant. Dried product spreads with a distance decay of about 300 miles.")
             f_cap = f4.slider("Most feed energy replaced (%)", 15, 60, int(fd.CREDIT_CAP * 100), 1, key="drawc_feed_cap",
                               help="Distillers grains never replace more than this share of a county's corn feed energy.") / 100.0
+            f_by_animal = st.checkbox("Let the credit depend on the animals", value=True, key="drawc_feed_by_animal",
+                                      help="On: the credit averages the slider above, but distillers grains go to the rations that take them (cattle, dairy and hogs far more than poultry) and replace more corn "
+                                           "per pound in cattle country (wet product is worth 120-140% of corn to a feedlot) than with hogs and poultry. Off: the same credit everywhere, spread by feed energy.")
             f_regional = st.checkbox("Take exports from the states Census shows them leaving from", value=True, key="drawc_feed_regional",
                                      help="On: the exported distillers grains come from each state in proportion to Census's state of origin (a port or transload state such as Louisiana passes its share to the "
                                           "states that make the product), up to 60% of a state's dried product. Off: every plant exports the same share of its dried product.")
@@ -1167,7 +1187,7 @@ def _render(crop):
             bal_f = scales["supply"]["bal"] or {}
             fr_ = float(bal_f.get("feed_residual") or es.balance("corn")[max(es.balance("corn"), key=int)]["feed_residual"]) * 1e6
             feed_args = (int(scales["supply"]["my"]), fr_, float(util), float(f_credit), float(fd.export_credit_bu(f_exp * 1e6)), float(f_rad), float(f_cap),
-                         tuple(sorted((r_["State"], r_["Wet / modified share (%)"] / 100.0) for r_ in wet_df.to_dict("records"))), shocks_t, bool(f_regional))
+                         tuple(sorted((r_["State"], r_["Wet / modified share (%)"] / 100.0) for r_ in wet_df.to_dict("records"))), shocks_t, bool(f_regional), bool(f_by_animal))
     if corn or wheat:
         barge_fed, dest_add, frac_items = {}, 0.0, {}                       # barge-fed crush plants and plant start-ups are soybean features
     else:
@@ -1217,7 +1237,7 @@ def _render(crop):
                  (("Bunge North America Destrehan LA", dest_add),), supply_info["total_bu"],
                  tuple(sorted(frac_items.items())), truck, 0.0, 0.0,
                  scales['wheat']['cls'] if wheat else None, scales['wheat']['period'] if wheat else 'avg', scales['wheat']['year'] if wheat else None, local_max,
-                      (feed_args[:-2] + (shk, feed_args[-1])) if feed_args else None, shk)
+                      (feed_args[:-3] + (shk, feed_args[-2], feed_args[-1])) if feed_args else None, shk, mill_rail_)
     res = _run(shocks_t)
     res0 = _run(None) if shocks_t else None
     plants_t, river_t, cty_t = dm.summarize(inp, res, state)

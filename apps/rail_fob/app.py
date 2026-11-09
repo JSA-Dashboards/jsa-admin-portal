@@ -37,6 +37,7 @@ import bn_inputs as BNI
 import bn_locator as BL
 import cn_miles as CM
 import ethanol_index as EI
+import state_level as SL
 import ns_miles as NSM
 import freight_data as FD
 import rail_data as RD
@@ -1304,6 +1305,14 @@ _BN_TARGET_BY_LOWER = {m.lower(): m for m in _BN_TARGET_MONTHS}
 _BN_FILL_PACKAGES = {"AM": ("AMJJ",), "JJ": ("AMJJ",)}
 
 
+def _offer_only_month(cells, month_name):
+    """True when the month's OWN postings (the plain month, Split / FH / LH / MP of it) include an offer but no bid at all — a one-sided
+    offer posting. Kolten, 2026-11-09: leave those BLANK; don't fill the month from a package or from the other side."""
+    labels = (month_name, f"split {month_name}", f"fh {month_name}", f"lh {month_name}", f"mp {month_name}")
+    own = [c for p, c in cells.items() if p.strip().lower() in {x.lower() for x in labels}]
+    return any(c.get("offer") is not None for c in own) and not any(c.get("bid") is not None for c in own)
+
+
 def _bn_pair(cells, *labels):
     """(bid, offer) of the first matching period (exact label, case-insensitive) that has a bid —
     None if none does."""
@@ -1344,6 +1353,8 @@ def _bn_infer_quote(cells, month):
         return ((fh[0] + lh[0]) / 2, _bn_mean(fh[1], lh[1]))
     if fh or lh:
         return fh or lh
+    if _offer_only_month(cells, month):
+        return None
     for pkg in _BN_FILL_PACKAGES.get(month, ()):
         q = _bn_pair(cells, pkg)
         if q:
@@ -3297,6 +3308,8 @@ def _month_quote(cells, month):
         return ((fh[0] + lh[0]) / 2, _bn_mean(fh[1], lh[1]), "inferred")
     if fh or lh:
         return (*(fh or lh), "inferred")
+    if _offer_only_month(cells, name):
+        return None
     covering = []
     for p, c in cells.items():
         months = FD.period_months(p)
@@ -3321,6 +3334,15 @@ def _ethanol_index():
         return {}
 
 
+def _pick(vals, mode="best"):
+    """One number from a state's per-origin FOB values: the best (highest) origin — the State Summary — or their AVERAGE (the State Level
+    tab: the average freight spread of the state from that corridor, Kolten 2026-11-09)."""
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    return sum(vals) / len(vals) if mode == "avg" else max(vals)
+
+
 def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
     """The corridors the State Summary compares, for `months` = [(1-12, 'Nov'), ...]: [{label, bid(m) -> text, fob(state, m) -> ¢/bu
     | None, states}] and the footnotes. Each value is the corridor's STATE INDEX — the best (highest) FOB among that state's
@@ -3340,12 +3362,11 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
         cells, _eff = _bid_cells_for("manual", market, sel_date)
         quotes = {m: _month_quote(cells, m) for m, _l in months}
 
-        def fob(state, m, quotes=quotes, field=field):
+        def fob(state, m, mode="best", quotes=quotes, field=field):
             q = quotes.get(m)
-            vals = [q[0] - r[field + "_cpb"] for r in csx if r["state"] == state] if q else []
-            return max(vals) if vals else None
+            return _pick([q[0] - r[field + "_cpb"] for r in csx if r["state"] == state] if q else [], mode)
         corridors.append({"label": label, "bid": lambda m, quotes=quotes: bid_text(quotes.get(m)), "fob": fob,
-                          "states": {r["state"] for r in csx}})
+                          "bidnum": lambda state, m, quotes=quotes: (quotes.get(m) or (None,))[0], "states": {r["state"] for r in csx}})
     notes.append("CSX: the 2026-27 origin spreads; its fuel surcharge isn't included.")
 
     # ---- NS: best region, 105-car origins, with the fuel surcharge
@@ -3355,14 +3376,19 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
     ns_fsc, _parts = _fsc_by_period("NS", list(labels.values()))
     ns_fns = {field: _ns_freight_fn(field, True, ns_fsc) for field in FD.NS_REGIONS.values()}
 
-    def ns_fob(state, m):
+    def ns_fob(state, m, mode="best"):
         q = ns_quotes.get(m)
         if not q:
             return None
-        vals = [q[0] - f for r in ns if r["state"] == state for f in (fn(r, labels[m]) for fn in ns_fns.values()) if f is not None]
-        return max(vals) if vals else None
+        vals = []
+        for r in ns:
+            if r["state"] == state:
+                fs = [f for f in (fn(r, labels[m]) for fn in ns_fns.values()) if f is not None]
+                if fs:
+                    vals.append(q[0] - min(fs))
+        return _pick(vals, mode)
     corridors.append({"label": "NS", "bid": lambda m: bid_text(ns_quotes.get(m)), "fob": ns_fob,
-                      "states": {r["state"] for r in ns}})
+                      "bidnum": lambda state, m: (ns_quotes.get(m) or (None,))[0], "states": {r["state"] for r in ns}})
     notes.append("NS: 105-car-eligible origins, the cheapest of its three regions, with NS's fuel surcharge on the extra miles vs Ft Wayne.")
 
     # ---- BN: PNW and Hereford over every BNSF location
@@ -3385,15 +3411,14 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
             return _month_quote(cells_by_dest[dest], m)
         quotes = {m: bn_quote(m) for m, _l in months}
 
-        def bn_fob(state, m, spec=spec, quotes=quotes):
+        def bn_fob(state, m, mode="best", spec=spec, quotes=quotes):
             q = quotes.get(m)
             if not q:
                 return None
-            vals = [q[0] - f for r in bn_rows if r["state"] == state
-                    for f in [FD.bn_freight_cpb(r[spec["field"] + "_cpb"], labels[m])] if f is not None]
-            return max(vals) if vals else None
+            return _pick([q[0] - f for r in bn_rows if r["state"] == state
+                          for f in [FD.bn_freight_cpb(r[spec["field"] + "_cpb"], labels[m])] if f is not None], mode)
         corridors.append({"label": f"BN {dest}", "bid": lambda m, quotes=quotes: bid_text(quotes.get(m)), "fob": bn_fob,
-                          "states": {r["state"] for r in bn_rows}})
+                          "bidnum": lambda state, m, quotes=quotes: (quotes.get(m) or (None,))[0], "states": {r["state"] for r in bn_rows}})
     notes.append("BN: every BNSF location in the state (the sheet's 13 plus the price list's, with estimated miles), freight and fuel "
                  "surcharge for that month.")
 
@@ -3403,23 +3428,34 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
     iia_cells = _bid_cells_for("manual", US.BASES["Interior IA"], sel_date)[0]
     allen_cells = [_bid_cells_for("manual", mk, sel_date)[0] for mk in US.ALLEN_MARKETS.values()]
     up_q = {m: (_month_quote(g3_cells, m), _month_quote(iia_cells, m), [_month_quote(c, m) for c in allen_cells]) for m, _l in months}
-    up_rows = dict(_up_state_rows())
 
-    def up_fob(state, m):
+    def up_fob(state, m, mode="best"):
+        g, i, al = up_q[m]
+        if state == "IL":                                  # Allen Station's own Mexico bids (Kolten, 2026-11-09: "just Allen Station, show Mexico")
+            return al[0][0] if al and al[0] else None
+        origins = [o for o in US.origin_spreads() if o["state"] == state]
+        generic = US.generic_spreads(state)
+        if generic:
+            origins.append(generic)
+        vals = []
+        for o in origins:                                  # each origin trades its better base
+            per = [v for v in (US.fob(o, "Group 3", g[0]) if g else None, US.fob(o, "Interior IA", i[0]) if i else None) if v is not None]
+            if per:
+                vals.append(max(per))
+        return _pick(vals, mode)
+
+    def up_bidnum(state, m):
         g, i, al = up_q[m]
         if state == "IL":
-            vals = [q[0] for q in al if q]
-        else:
-            vals = [v for v in (up_rows[state]("Group 3", g[0]) if g else None, up_rows[state]("Interior IA", i[0]) if i else None)
-                    if v is not None]
-        return max(vals) if vals else None
+            return al[0][0] if al and al[0] else None
+        return (g or i or (None,))[0]
 
     def up_bid(m):
         g, i, _al = up_q[m]
         if not g and not i:
             return "—"
         return " / ".join(f"{n} {q[0]:+.0f}" + ("*" if q[2] != "month" else "") for n, q in (("G3", g), ("IIA", i)) if q)
-    corridors.append({"label": "UP", "bid": up_bid, "fob": up_fob, "states": {"NE", "IA", "MN", "IL"}})
+    corridors.append({"label": "UP", "bid": up_bid, "fob": up_fob, "bidnum": up_bidnum, "states": {"NE", "IA", "MN", "IL"}})
     notes.append("UP: each state's best origin on Group 3 or Interior IA (named origins at their stated discounts, the rest par to the base), "
                  "IL from Allen Station's own bids.")
 
@@ -3444,7 +3480,7 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
     if cn_src.startswith("CN 105s") and cn_cells and champ is not None:
         quotes = {m: _month_quote(cn_cells, m) for m, _l in months}
 
-        def cn_fob(state, m):
+        def cn_fob(state, m, mode="best"):
             q = quotes.get(m)
             f_champ = cn_freight(champ, m, CM.CHAMPAIGN_MILES) if q else None
             if f_champ is None:
@@ -3456,9 +3492,9 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
                 f = cn_freight(r, m, CM.miles_to_gulf(r["origin"], r["state"])[0])
                 if f is not None:
                     vals.append(q[0] + f_champ - f)
-            return max(vals) if vals else None
+            return _pick(vals, mode)
         corridors.append({"label": "CN 105s", "bid": lambda m: bid_text(quotes.get(m)), "fob": cn_fob,
-                          "states": {r["state"] for r in cn}})
+                          "bidnum": lambda state, m: (quotes.get(m) or (None,))[0], "states": {r["state"] for r in cn}})
         notes.append("CN: the CN 105s corn bid (FOB Champaign) carried to each origin by the freight difference — 105+ car shuttle origins, large "
                      "railroad cars, tariff at USDA's level plus CN's fuel surcharge on estimated miles.")
     else:
@@ -3467,7 +3503,7 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
         except Exception:
             cif = {}
         if cif:
-            def cn_fob(state, m):
+            def cn_fob(state, m, mode="best"):
                 price = cif.get(labels[m])
                 if price is None:
                     return None
@@ -3478,10 +3514,10 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
                     f = cn_freight(r, m, CM.miles_to_gulf(r["origin"], r["state"])[0])
                     if f is not None:
                         vals.append(price - f)
-                return max(vals) if vals else None
+                return _pick(vals, mode)
             corridors.append({"label": "CN CIF NOLA",
                               "bid": lambda m: "—" if cif.get(labels[m]) is None else f"{cif[labels[m]]:+.0f}",
-                              "fob": cn_fob, "states": {r["state"] for r in cn}})
+                              "fob": cn_fob, "bidnum": lambda state, m: cif.get(labels[m]), "states": {r["state"] for r in cn}})
             why = "" if cn_src.startswith("CIF") else " (no CN 105s bids on or before this posting date, so the CIF NOLA netback is shown)"
             notes.append("CN: corn netted back from the CIF NOLA curve (River FOB Portal), 105+ car shuttle origins, large railroad cars, tariff at "
                          "USDA's level plus CN's fuel surcharge on estimated miles" + why + ".")
@@ -3506,16 +3542,16 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids"):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _state_locations(state):
-    """{(facility_type, provider, location): {(year, month): basis ¢}} for the Basis Tracker's ethanol plants / corn processors and river
-    terminals in one state (ethanol_index.location_series); {} off Snowflake or if it can't be read."""
+def _state_location_rows(state):
+    """The Basis Tracker's latest corn bids at its ethanol plants / corn processors and river terminals in one state (ethanol_index.LOC_SQL
+    rows, with each location's delivery zone); [] off Snowflake or if it can't be read."""
     try:
         if not RD._use_snowflake():
-            return {}
+            return []
         since = (date.today() - timedelta(days=EI.LOOKBACK_DAYS)).isoformat()
-        return EI.location_series(RD._sf_rows(EI.LOC_SQL, (state, since)))
+        return list(RD._sf_rows(EI.LOC_SQL, (state, since)))
     except Exception:
-        return {}
+        return []
 
 
 # State Level rail rows, in the order and grouping of Kolten's "FOB Central IL Corn" sheet: (group, summary column label prefix, gateway)
@@ -3534,40 +3570,61 @@ def _state_level_tab(sel_date):
     by_label = {c["label"]: c for c in corridors}
     states = sorted({s_ for c in corridors for s_ in c["states"]})
     state = st.selectbox("State", states, index=states.index("IL") if "IL" in states else 0, key="sl_state")
-    locs = _state_locations(state)
+    loc_rows = _state_location_rows(state)
+    locs = EI.location_series(loc_rows)
 
     def lbl(key):
         return f"{key[1]} · {key[2]}"
-    plants = sorted((k for k in locs if k[0] == "Corn Processing"), key=lambda k: (-len(locs[k]), lbl(k)))
-    rivers = sorted((k for k in locs if k[0] == "River Terminal"), key=lambda k: (-len(locs[k]), lbl(k)))
-    c1, c2 = st.columns(2)
-    sel_plants = c1.multiselect("Ethanol plants", plants, default=plants[:5], format_func=lbl, key=f"sl_plants_{state}")
-    sel_rivers = c2.multiselect("River terminals", rivers, default=rivers[:5], format_func=lbl, key=f"sl_rivers_{state}")
+    # Illinois is cleaned up (Kolten, 2026-11-09): river = the Zone 2 / 3 / 5 and STL INDEXES, processor = the state Ethanol Index only — no pickers.
+    # The other states keep the pickers until they get the same treatment.
+    il = state == "IL"
+    sel_plants, sel_rivers, river_idx = [], [], {}
+    if il:
+        river_idx = SL.river_index(loc_rows)
+    else:
+        plants = sorted((k for k in locs if k[0] == "Corn Processing"), key=lambda k: (-len(locs[k]), lbl(k)))
+        rivers = sorted((k for k in locs if k[0] == "River Terminal"), key=lambda k: (-len(locs[k]), lbl(k)))
+        c1, c2 = st.columns(2)
+        sel_plants = c1.multiselect("Ethanol plants", plants, default=plants[:5], format_func=lbl, key=f"sl_plants_{state}")
+        sel_rivers = c2.multiselect("River terminals", rivers, default=rivers[:5], format_func=lbl, key=f"sl_rivers_{state}")
 
     def year_of(m):
         return today.year if m >= today.month else today.year + 1
 
     # rows: (group, origin, gateway / type, [value per month], rail?)
-    rows = []
+    rows = []     # (group, origin, gateway / type, spread text, [value per month], rail?)
+    for g in SL.IL_RIVER_ORDER if il else ():
+        series = river_idx.get(g, {})
+        n = max((v[1] for v in series.values()), default=0)
+        rows.append(("River", f"{g} index" if g != "STL" else "STL index", f"Avg of {n} terminals" if n else "—", "",
+                     [(series.get((year_of(m), m)) or (None,))[0] for m, _n in months], False))
     for key in sel_rivers:
-        rows.append(("River", lbl(key), "At the terminal", [locs[key].get((year_of(m), m)) for m, _n in months], False))
+        rows.append(("River", lbl(key), "At the terminal", "", [locs[key].get((year_of(m), m)) for m, _n in months], False))
     eth = by_label.get("Ethanol Index")
     if eth and state in eth["states"]:
-        rows.append(("Processor", "Ethanol Index (state average)", "Del", [eth["fob"](state, m) for m, _n in months], False))
+        rows.append(("Processor", "Ethanol Index", "State avg", "", [eth["fob"](state, m) for m, _n in months], False))
     for key in sel_plants:
-        rows.append(("Processor", lbl(key), "Del", [locs[key].get((year_of(m), m)) for m, _n in months], False))
+        rows.append(("Processor", lbl(key), "Del", "", [locs[key].get((year_of(m), m)) for m, _n in months], False))
     for group, prefix, gateway in _SL_RAIL_ROWS:
         c = next((c for lb, c in by_label.items() if lb == prefix or lb.startswith(prefix + " ")), None)
+        if il and c and c["label"] == "BN PNW":              # Illinois: PNW never makes sense (Kolten, 2026-11-09)
+            continue
+        if il and c and c["label"] == "UP":                  # Illinois UP is Allen Station, Mexico values
+            gateway = "Allen Station (Mexico)"
         if c and state in c["states"]:
-            rows.append((group, c["label"], gateway, [c["fob"](state, m) for m, _n in months], True))
-    if not any(any(v is not None for v in r[3]) for r in rows):
+            vals = [c["fob"](state, m, "avg") for m, _n in months]            # the state's AVERAGE freight spread from this corridor, not its best origin
+            j0 = next((j for j, v in enumerate(vals) if v is not None), None)
+            bid0 = c["bidnum"](state, months[j0][0]) if j0 is not None else None
+            spread = "" if bid0 is None else f"{_rnd(vals[j0] - bid0):+d}"
+            rows.append((group, c["label"], gateway, spread, vals, True))
+    if not any(any(v is not None for v in r[4]) for r in rows):
         st.info(f"No bids found for {state} yet.")
         return
 
     # shade the rail rows only (the sheet's rankings leave the river out): best two green, worst two red, per month
     shade = {}
     for j in range(len(months)):
-        ranked = sorted(((r[3][j], i) for i, r in enumerate(rows) if r[4] and r[3][j] is not None), reverse=True)
+        ranked = sorted(((r[4][j], i) for i, r in enumerate(rows) if r[5] and r[4][j] is not None), reverse=True)
         if len(ranked) >= 4:
             for _v, i in ranked[:2]:
                 shade[(i, j)] = "#dcfce7"
@@ -3575,17 +3632,18 @@ def _state_level_tab(sel_date):
                 shade[(i, j)] = "#fee2e2"
     sub_labels = ["Spot"] + [f"{k} Mon" for k in range(1, len(months))]
     html = ['<table class="sheet"><tbody>',
-            f'<tr><th class="title" rowspan="2" colspan="3">FOB {state} Corn</th>' + ''.join(f'<th class="grp gl">{n}</th>' for _m, n in months) + '</tr>',
+            f'<tr><th class="title" rowspan="2" colspan="4">FOB {state} Corn</th>' + ''.join(f'<th class="grp gl">{n}</th>' for _m, n in months) + '</tr>',
             '<tr>' + ''.join(f'<th class="sub gl">{t}</th>' for t in sub_labels) + '</tr>']
     last_group, spans = None, {}
     for r in rows:
         spans[r[0]] = spans.get(r[0], 0) + 1
-    for i, (group, origin, gate, vals, _rail) in enumerate(rows):
+    for i, (group, origin, gate, spread, vals, _rail) in enumerate(rows):
         cells = []
         if group != last_group:
             cells.append(f'<td class="lbl" rowspan="{spans[group]}" style="font-style:italic;color:#64748b">{group}</td>')
             last_group = group
-        cells.append(f'<td class="lbl">{origin}</td><td class="lbl" style="color:#64748b">{gate}</td>')
+        cells.append(f'<td class="lbl">{origin}</td><td class="lbl" style="color:#64748b">{gate}</td>'
+                     f'<td style="color:#64748b;text-align:center">{spread}</td>')
         for j, v in enumerate(vals):
             txt, neg = _bn_fob_cell(v)
             bg = f' style="background:{shade[(i, j)]}"' if (i, j) in shade else ""
@@ -3595,10 +3653,11 @@ def _state_level_tab(sel_date):
     table_html = ''.join(html)
     st.markdown(_card_open() + table_html + _card_close(), unsafe_allow_html=True)
     _table_actions(table_html, f"state_level_{state.lower()}.png")
-    st.markdown('<div class="legend">¢/bu as posted, negatives in parentheses. Rail rows are the state\'s best origin on that corridor after freight '
-                '(the State Summary\'s numbers); river terminal and ethanol plant rows are the Basis Tracker\'s latest corn bids for the month at that '
+    st.markdown('<div class="legend">¢/bu as posted, negatives in parentheses. Rail rows are the bid less the state\'s AVERAGE freight from that corridor '
+                '(the average across the corridor\'s origins in the state, not the best origin the State Summary uses); the Spread column is that average '
+                'freight spread at the front month (negative = freight against the bid, relative to Champaign for CN); river terminal and ethanol plant rows are the Basis Tracker\'s latest corn bids for the month at that '
                 'location (a plant bid is delivered; a river bid is at the terminal — truck freight and margin to bring them to an origin FOB, like the '
-                '37¢ + 4¢ on the sheet, are not applied). Ethanol Index is the average of every Corn Processing plant in the state. Green / red = the best / '
+                '37¢ + 4¢ on the sheet, are not applied). Ethanol Index is the average of every Corn Processing plant in the state. Illinois river rows are indexes: the average of the Basis Tracker terminals tagged Zone 2, Zone 3 and Zone 5, and STL (the St. Louis-area terminals, taken out of Zone 5). Green / red = the best / '
                 'worst two rail rows for the month. ' + " ".join(n for n in notes if n.startswith(("CSX", "NS", "BN", "UP", "CN"))) + '</div>',
                 unsafe_allow_html=True)
 
