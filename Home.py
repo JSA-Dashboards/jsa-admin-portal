@@ -501,7 +501,10 @@ def render_home():
 
     # Client strip: a slot above the tabs, filled once we know which tab is open (the grain prices on Grain Apps,
     # the livestock prices on Livestock Apps). The slot keeps it above the tiles while it is filled after them.
-    strip_slot = st.container() if CLIENT else None
+    strip_slot = st.empty() if CLIENT else None
+    if CLIENT and not st.session_state.get("_strip_seen"):
+        # First paint of a session: grey placeholder tiles hold the strip's space, so nothing jumps when it fills in.
+        strip_slot.markdown(quotes.placeholder_html(8), unsafe_allow_html=True)
     st.write("")
 
     # Two overall tabs. Only the open one runs (on_change="rerun" + .open), so the
@@ -514,8 +517,11 @@ def render_home():
         with livestock_tab:
             _render_livestock()
     if CLIENT:
-        with strip_slot:
-            quotes.render("livestock" if livestock_tab.open else "grain")
+        strip_kind = "livestock" if livestock_tab.open else "grain"
+        strip_data = quotes.fetch(strip_kind)        # the slow part, while the placeholder is still showing
+        with strip_slot.container():
+            quotes.render(strip_kind, strip_data)
+        st.session_state["_strip_seen"] = True
         st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
 
 

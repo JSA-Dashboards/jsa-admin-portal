@@ -266,6 +266,24 @@ QUOTE_CSS = """
 """
 
 
+SKELETON_CSS = """
+<style>
+@keyframes jsa-shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+.jsa-q-skel { min-height:6.4rem; background:linear-gradient(90deg,#f1f5f3 25%,#e4ece7 50%,#f1f5f3 75%);
+  background-size:200% 100%; animation:jsa-shimmer 1.6s linear infinite; border-top-color:#d7e2dc; }
+</style>
+"""
+
+
+def placeholder_html(n: int = 8) -> str:
+    """Grey, shimmering tiles the size of the real ones, shown while the prices load so the page does not jump
+    when they arrive (the tabs below draw first, then the strip fills in above them)."""
+    return (QUOTE_CSS + SKELETON_CSS
+            + f"<style>@media (min-width: 900px){{.jsa-quotes{{grid-template-columns:repeat({n}, minmax(0, 1fr));}}}}</style>"
+            + '<div class="jsa-quotes">' + '<div class="jsa-quote jsa-q-skel"></div>' * n + "</div>"
+            + '<div class="jsa-q-note">Loading prices&hellip;</div>')
+
+
 def strip_html(quotes: list[dict], kind: str = "grain") -> tuple[str, str]:
     """(the tiles block, the footnote)."""
     block = '<div class="jsa-quotes">' + "".join(tile_html(q) for q in quotes) + "</div>"
@@ -414,10 +432,17 @@ def load() -> tuple[list[dict], str | None]:
         return [], str(exc)[:160]
 
 
-def render(kind: str = "grain") -> None:
-    """`kind`: "grain" (the default strip) or "livestock" (the Livestock Apps tab's)."""
+def fetch(kind: str = "grain") -> tuple[list[dict], str | None]:
+    """The slow half of `render`: `kind` is "grain" (the default strip) or "livestock" (the Livestock Apps tab's).
+    Kept apart from drawing so the page can show a placeholder while this runs and replace it only once the
+    prices are in hand (opening a container in an st.empty() slot clears the slot at once)."""
+    return load_livestock() if kind == "livestock" else load()
+
+
+def render(kind: str = "grain", data: tuple[list[dict], str | None] | None = None) -> None:
+    """Draw the strip; `data` is `fetch(kind)`'s result when the caller already has it."""
     import streamlit as st
-    quotes, err = load_livestock() if kind == "livestock" else load()
+    quotes, err = data if data is not None else fetch(kind)
     if not quotes:
         # Say so rather than leave a gap nobody can explain; the reason goes to the app log, not to clients.
         log.warning("price strip is empty (error: %s)", err)
