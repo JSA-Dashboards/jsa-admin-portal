@@ -427,12 +427,13 @@ def render_home():
     st.markdown(_TILE_CSS, unsafe_allow_html=True)
     # Clients get their broker logins in the upper right of the header (opened in a new tab).
     if CLIENT:
-        col_logo, col_title, col_links = st.columns([1, 3, 3], vertical_alignment="top")
+        # The logo gets the largest share: it is the first thing a client sees.
+        col_logo, col_title, col_links = st.columns([3, 3.4, 3], vertical_alignment="center")
     else:
         col_logo, col_title = st.columns([1, 6])
         col_links = None
     with col_logo:
-        st.image(_asset("logo-full.png"), width=140)
+        st.image(_asset("logo-full.png"), width=340 if CLIENT else 140)
     if col_links is not None:
         with col_links:
             # Keep each label on one line ("MyStoneX" wrapped at tablet width) and push the pair to the right edge.
@@ -461,7 +462,8 @@ def render_home():
     with col_title:
         st.markdown(
             "<div style='padding-top:14px'>"
-            "<h2 style='margin:0;color:#32373c;font-family:\"EB Garamond\",Georgia,serif'>"
+            "<h2 style='margin:0;color:#32373c;font-family:\"EB Garamond\",Georgia,serif;"
+            "font-size:clamp(1.4rem,2.2vw,2rem)'>"
             + ("JSA Client Portal" if CLIENT else "JSA Admin Portal") +
             "</h2>"
             "<div style='color:#64748b'>John Stewart &amp; Associates · pick a dashboard</div>"

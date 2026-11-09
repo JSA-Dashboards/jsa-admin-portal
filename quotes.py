@@ -265,7 +265,10 @@ def render() -> None:
         st.markdown('<div style="color:#8a9a90;font-size:0.8rem;margin:0.2rem 0 0.8rem">'
                     'Futures prices are temporarily unavailable.</div>', unsafe_allow_html=True)
         return
-    st.markdown(QUOTE_CSS, unsafe_allow_html=True)
+    # On a wide screen the tiles share the whole row equally (auto-fill would leave an empty column at the right
+    # edge); on a narrower one the base rule wraps them into rows of equal-width tiles.
+    st.markdown(QUOTE_CSS + f"<style>@media (min-width: 900px){{.jsa-quotes{{grid-template-columns:"
+                f"repeat({len(quotes)}, minmax(0, 1fr));}}}}</style>", unsafe_allow_html=True)
     block, note = strip_html(quotes)
     st.markdown(block, unsafe_allow_html=True)
     st.markdown(f'<div class="jsa-q-note">{note}</div>', unsafe_allow_html=True)
