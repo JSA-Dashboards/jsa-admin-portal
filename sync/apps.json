@@ -256,7 +256,9 @@
    "exclude": [
     "client_api",
     "api_tab.py",
-    "api_admin.py"
+    "api_admin.py",
+    "river_email.py",
+    "river_whatsapp.py"
    ],
    "pin_env": {
     "SNOWFLAKE_DATABASE": "RIVER_FOB",
