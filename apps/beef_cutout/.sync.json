@@ -1,9 +1,9 @@
 {
  "branch": "master",
- "commit": "b326b053864154a536a6b993b225b124a5f448a1",
+ "commit": "d79a7d9b3a69f46f0c8e16b8e59514f27106ba04",
  "files": {
   "am_cutout.py": "4845480a999ba4d152d07fc37e928dc3fd87a293c33ebb5acff66565443c7c2e",
-  "app.py": "89324dc5d5ca7cb1e6ffb9d102db1e525bbcd904ded8a5c05b69b7efcaf92670"
+  "app.py": "f966f364c11a13430b598b0e16d8a9140845bf70abf55f9de3a90bd73b756bff"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/livestock-portal",

@@ -115,12 +115,20 @@ What `CLIENT` (in `Home.py`) changes:
   In the client view the wrapper sets `st.session_state["_session_only"]`, which the app's `state.session_only()` honors:
   a client's price stays in their session and the preset boxes disappear. That code lives in the jsa-risk-analyzer repo
   (`state.py`, `pages/import_excel.py`, `tests/test_session_only.py`); until it is pushed there and synced, the flag does nothing.
-- **Secrets for the client app:** the Snowflake block (no `SNOWFLAKE_SCHEMA`), `USE_SNOWFLAKE`, `MASSIVE_API_KEY`,
-  `NASS_API_KEY`, `CLIENT_PASSWORD`. NOT `ADMIN_PASSWORD`, `GRAPH_*`, `MARS_API_KEY` or `ANTHROPIC_API_KEY`.
-- **Known gaps to revisit:** (1) the client app runs as the same Snowflake service user, which can WRITE some schemas;
-  a read-only role would make "read-only" a property of the database too (check that apps that run `CREATE TABLE IF NOT
-  EXISTS` on start still load first). (2) Risk Analyzer was built client-facing (session-only book) but writes shared
-  reference marks/IV; the standalone app has the same behaviour. (3) Grain Seasonal's "H/L Forecast" tab is still shown.
+- **Secrets for the client app:** the Snowflake settings (no `SNOWFLAKE_SCHEMA`), `USE_SNOWFLAKE`, `MASSIVE_API_KEY`,
+  `MASSIVE_S3_ACCESS_KEY` / `_SECRET_KEY`, `NASS_API_KEY`, `MARS_API_KEY` (Beef Trimmings, Cattle Weights and the CME
+  Feeder Cattle Index read it), `EIA_API_KEY`, `CLIENT_PASSWORD`. NOT `ADMIN_PASSWORD`, `GRAPH_*`, `ANTHROPIC_API_KEY`,
+  `EDIT_PASSWORD`, `APP_PASSWORD`, `SIG_*`: the features that used them are hidden for clients.
+- **Read-only Snowflake login (2026-11-09):** `snowflake/client_portal_role.sql` creates `CLIENT_PORTAL_ROLE` (SELECT only, on
+  exactly the schemas the client dashboards read) and `CLIENT_PORTAL_SVC` (key-pair, TYPE=SERVICE, COMPUTE_WH). The client
+  app's Secrets then carry `SNOWFLAKE_USER` / `SNOWFLAKE_ROLE` / `SNOWFLAKE_PRIVATE_KEY` for that user instead of the
+  ADMIN_PORTAL_SVC ones, so a write fails in the database whatever the UI does. The private key lives only in the client app's
+  Secrets (and `~/.snowflake/keys/` on Kolten's PC), never in the repo. ROLLBACK: put the ADMIN_PORTAL_SVC values back in the
+  client app's Secrets and reboot. A NEW client dashboard that reads a new schema needs it added to the script's list and
+  re-run, or its tile says "does not exist or not authorized". Things that wrote on view and were handled: Rail FOB's BN
+  freight inputs (its own `RAIL_VIEW_ONLY` switch, which Home.py now sets for clients), the beef cutout's opportunistic bank
+  of the AM cutout (skipped for clients), Risk Analyzer's audit-log insert (now best-effort).
+- **Still open:** CME's terms for showing settlements to clients were not checked; the keep-alive job does not cover the client app.
 - Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.
 
 ## Lazy tabs: only the open tab runs (2026-10-12)

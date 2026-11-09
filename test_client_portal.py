@@ -43,3 +43,8 @@ def test_cso_is_a_coming_soon_tile_for_clients():
 
 def test_the_survey_sits_under_cash_grain_for_clients():
     assert literal("CLIENT_CATEGORY")["farmer-selling-survey"] == "Cash Grain"
+
+
+def test_the_broker_logins_are_the_two_links_clients_asked_for():
+    assert literal("BROKER_LINKS") == [("MyStoneX", "https://my.stonex.com/"),
+                                       ("Plus500", "https://client-portal.plus500.com/")]

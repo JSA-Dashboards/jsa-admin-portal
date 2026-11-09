@@ -1345,7 +1345,7 @@ except Exception as e:
 # no scheduler, so the series fills on the days somebody opens this page after
 # the morning release. See am_cutout.bank().
 am_bank_msg = ""
-if not am_row.get("error") and am_cutout.enabled():
+if not am_row.get("error") and am_cutout.enabled() and not __import__("portal_view").is_client():
     am_bank_msg = am_cutout.ensure_table() or am_cutout.bank(am_row)
     if am_bank_msg == "banked":
         fetch_am_history.clear()

@@ -64,7 +64,15 @@
   },
   "beef_cutout": {
    "repo": "JSA-Dashboards/livestock-portal",
-   "subdir": "apps/beef_cutout"
+   "subdir": "apps/beef_cutout",
+   "replace": {
+    "app.py": [
+     [
+      "if not am_row.get(\"error\") and am_cutout.enabled():",
+      "if not am_row.get(\"error\") and am_cutout.enabled() and not __import__(\"portal_view\").is_client():"
+     ]
+    ]
+   }
   },
   "mexican_feeder_imports": {
    "repo": "JSA-Dashboards/livestock-portal",

@@ -116,6 +116,7 @@ if CLIENT:
     # Read-only builds of the apps that have one (Basis Tracker reads this), and NO staff flag: the staff tools are not
     # registered below either, so there is nothing for _portal_is_admin to open.
     os.environ["VIEW_ONLY"] = "1"
+    os.environ["RAIL_VIEW_ONLY"] = "1"   # Rail FOB's own switch: no BN freight inputs, no editing (it reads this, not VIEW_ONLY)
     st.session_state.pop("_portal_is_admin", None)
 else:
     require_admin_login()
@@ -295,6 +296,8 @@ CLIENT_PAGES = {
 # Where a tile sits for clients when that differs from where staff see it.
 CLIENT_CATEGORY = {"farmer-selling-survey": "Cash Grain"}
 CLIENT_COMING_SOON = ["CSO & Spread Risk Analyzer", "High/Low Model"]
+# Broker account logins shown in the upper right of the client home page.
+BROKER_LINKS = [("MyStoneX", "https://my.stonex.com/"), ("Plus500", "https://client-portal.plus500.com/")]
 
 if CLIENT:
     LIVE_DASHBOARDS = [dict(d, category=CLIENT_CATEGORY.get(d["url_path"], d["category"]))
@@ -409,9 +412,24 @@ div[class*="st-key-soon_"] p {
 
 def render_home():
     st.markdown(_TILE_CSS, unsafe_allow_html=True)
-    col_logo, col_title = st.columns([1, 6])
+    # Clients get their broker logins in the upper right of the header (opened in a new tab).
+    if CLIENT:
+        col_logo, col_title, col_links = st.columns([1, 3, 3], vertical_alignment="top")
+    else:
+        col_logo, col_title = st.columns([1, 6])
+        col_links = None
     with col_logo:
         st.image(_asset("logo-full.png"), width=140)
+    if col_links is not None:
+        with col_links:
+            # Keep each label on one line ("MyStoneX" wrapped at tablet width) and push the pair to the right edge.
+            st.markdown("<style>[class*='st-key-broker_links'] a, [class*='st-key-broker_links'] p"
+                        "{white-space:nowrap !important;}</style>", unsafe_allow_html=True)
+            with st.container(key="broker_links"):
+                link_cols = st.columns([1, 1.15, 1.05])
+                for lc, (label_, url_) in zip(link_cols[1:], BROKER_LINKS):
+                    lc.link_button(label_, url_, icon=":material/open_in_new:", width="stretch",
+                                   help=f"Opens {url_} in a new tab")
     with col_title:
         st.markdown(
             "<div style='padding-top:14px'>"
