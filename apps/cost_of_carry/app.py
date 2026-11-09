@@ -809,8 +809,9 @@ MATRIX_ROTATION_BDAYS = 5
 
 
 def matrix_rotation_date(expiration: date) -> date:
-    """The day a contract leaves the spread matrix: five business days after its First
-    Notice Day, counted on the exchange calendar so a holiday in between pushes it out."""
+    """The day a contract leaves the Spread Matrix and the Summary: five business days
+    after its First Notice Day, counted on the exchange calendar so a holiday in between
+    pushes it out."""
     day = first_notice_day(expiration)
     for _ in range(MATRIX_ROTATION_BDAYS):
         day = vsr_tracker.next_business_day(day + timedelta(days=1))
@@ -821,6 +822,14 @@ def rotate_curve(curve: pd.DataFrame, as_of: date, keep: int) -> tuple[pd.DataFr
     """(the first `keep` contracts that haven't rotated out, the ones that have)."""
     done = curve["expiration"].map(lambda e: as_of >= matrix_rotation_date(e))
     return curve[~done].head(keep).reset_index(drop=True), curve[done]
+
+
+def rotated_label(rotated: pd.DataFrame, code: str) -> str:
+    """"Nov '26 on Nov 06 (First Notice Day Oct 30)" for each contract that has rotated out."""
+    return "; ".join(
+        f"{friendly_contract(r.ticker, code)} on {matrix_rotation_date(r.expiration):%b %d} "
+        f"(First Notice Day {first_notice_day(r.expiration):%b %d})"
+        for r in rotated.itertuples())
 
 
 def shift_ticker_year(ticker: str, product_code: str, delta: int) -> str | None:
@@ -1326,10 +1335,12 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
     )
 
     try:
-        curve = load_curve(code, api_key, as_of.isoformat(), SUMMARY_CONTRACTS)
+        # One spare month, so the section keeps SUMMARY_CONTRACTS once the front one has rotated out.
+        curve = load_curve(code, api_key, as_of.isoformat(), SUMMARY_CONTRACTS + 1)
     except MassiveApiError as e:
         st.error(f"{commodity['label']}: {e}")
         return
+    curve, rotated = rotate_curve(curve, as_of, SUMMARY_CONTRACTS)
     if curve.empty:
         st.warning(f"{commodity['label']}: no live contracts.")
         return
@@ -1361,6 +1372,13 @@ def summary_section(commodity: dict, api_key: str, as_of: date, annual_rate_pct:
             f"{DERIVED_SPREADS_SHORT}</div>",
             unsafe_allow_html=True,
         )
+        if len(rotated):
+            st.markdown(
+                f"<div style='font-size:0.75rem;line-height:1.5;color:#6b7280;padding-top:10px;'>"
+                f"Rotated out, five business days after First Notice Day: "
+                f"{rotated_label(rotated, code)}.</div>",
+                unsafe_allow_html=True,
+            )
 
     display = pd.DataFrame({
         "near_idx": table["near_idx"],
@@ -2354,11 +2372,8 @@ def render_matrix(api_key: str, as_of: date, default_rate_pct: float):
         st.warning("Not enough live contracts to build a matrix.")
         return
     if len(rotated):
-        gone = "; ".join(
-            f"{friendly_contract(r.ticker, code)} on {matrix_rotation_date(r.expiration):%b %d} "
-            f"(First Notice Day {first_notice_day(r.expiration):%b %d})"
-            for r in rotated.itertuples())
-        st.caption(f"Rotated out of the matrix, five business days after First Notice Day: {gone}.")
+        st.caption("Rotated out of the matrix, five business days after First Notice Day: "
+                   f"{rotated_label(rotated, code)}.")
 
     frame, labels = build_matrix(curve, code, storage_rate, annual_rate_pct / 100,
                                  commodity["multiplier"])
