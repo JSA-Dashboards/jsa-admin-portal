@@ -805,6 +805,24 @@ def first_notice_day(expiration: date) -> date:
     return (first_of_delivery_month - pd.offsets.BDay(1)).date()
 
 
+MATRIX_ROTATION_BDAYS = 5
+
+
+def matrix_rotation_date(expiration: date) -> date:
+    """The day a contract leaves the spread matrix: five business days after its First
+    Notice Day, counted on the exchange calendar so a holiday in between pushes it out."""
+    day = first_notice_day(expiration)
+    for _ in range(MATRIX_ROTATION_BDAYS):
+        day = vsr_tracker.next_business_day(day + timedelta(days=1))
+    return day
+
+
+def rotate_curve(curve: pd.DataFrame, as_of: date, keep: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(the first `keep` contracts that haven't rotated out, the ones that have)."""
+    done = curve["expiration"].map(lambda e: as_of >= matrix_rotation_date(e))
+    return curve[~done].head(keep).reset_index(drop=True), curve[done]
+
+
 def shift_ticker_year(ticker: str, product_code: str, delta: int) -> str | None:
     """ZCU6 -> ZCU5 at delta=-1. Massive quotes outrights with a single-digit year,
     and resolves that digit to the most recent matching contract."""
@@ -2326,13 +2344,21 @@ def render_matrix(api_key: str, as_of: date, default_rate_pct: float):
                                           value=default_rate_pct, step=0.01, key="mx_rate", width=190)
 
     try:
-        curve = load_curve(code, api_key, as_of.isoformat(), n_load)
+        # One spare month, so the matrix keeps n_load contracts once the front one has rotated out.
+        curve = load_curve(code, api_key, as_of.isoformat(), n_load + 1)
     except MassiveApiError as e:
         st.error(f"Couldn't load {pick} quotes: {e}")
         return
+    curve, rotated = rotate_curve(curve, as_of, n_load)
     if curve.empty or len(curve) < 2:
         st.warning("Not enough live contracts to build a matrix.")
         return
+    if len(rotated):
+        gone = "; ".join(
+            f"{friendly_contract(r.ticker, code)} on {matrix_rotation_date(r.expiration):%b %d} "
+            f"(First Notice Day {first_notice_day(r.expiration):%b %d})"
+            for r in rotated.itertuples())
+        st.caption(f"Rotated out of the matrix, five business days after First Notice Day: {gone}.")
 
     frame, labels = build_matrix(curve, code, storage_rate, annual_rate_pct / 100,
                                  commodity["multiplier"])
