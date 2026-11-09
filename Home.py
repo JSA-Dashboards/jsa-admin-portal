@@ -433,7 +433,7 @@ def render_home():
         col_logo, col_title = st.columns([1, 6])
         col_links = None
     with col_logo:
-        st.image(_asset("logo-full.png"), width=340 if CLIENT else 140)
+        st.image(_asset("logo-jsa-large.png" if CLIENT else "logo-full.png"), width=380 if CLIENT else 140)
     if col_links is not None:
         with col_links:
             # Keep each label on one line ("MyStoneX" wrapped at tablet width) and push the pair to the right edge.
@@ -445,9 +445,11 @@ def render_home():
                         ".jsa-broker:hover{border-color:#5e7164;box-shadow:0 1px 4px rgba(50,55,60,.18);}"
                         ".jsa-broker img{max-height:1.6rem;max-width:100%;width:auto;display:block;}"
                         ".jsa-broker-head{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;"
-                        "color:#5f7267;font-weight:600;text-align:right;margin:0 0 0.35rem;}</style>",
+                        "color:#5f7267;font-weight:600;text-align:center;margin:0 0 0.35rem;}</style>",
                         unsafe_allow_html=True)
-            st.markdown(f'<div class="jsa-broker-head">{BROKER_HEADING}</div>', unsafe_allow_html=True)
+            # Centered over the pair of buttons: the same column split as the buttons below, minus the spacer.
+            head_cols = st.columns([0.4, 2])
+            head_cols[1].markdown(f'<div class="jsa-broker-head">{BROKER_HEADING}</div>', unsafe_allow_html=True)
             with st.container(key="broker_links"):
                 link_cols = st.columns([0.4, 1, 1])
                 for lc, (label_, url_, logo_) in zip(link_cols[1:], BROKER_LINKS):
