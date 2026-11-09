@@ -141,6 +141,10 @@ What `CLIENT` (in `Home.py`) changes:
   notice day; read the way the COT dashboard does, `cot_massive.livestock_settles`), the index is CME's PUBLISHED value from
   `JSA.CME_FEEDER_CATTLE.CME_FTP_DAILY` with its own date (CME posts it 1-3 days late; JSA's reconstruction is never shown to
   clients), corn is the grain strip's own tile. Futures and index are cached separately and a failed read raises so it is not cached.
+  `quotes.warm_livestock()` (called once the grain strip is drawn) fills those caches in a daemon thread so the Livestock tab opens
+  instantly (the Massive fetch alone takes ~13 s); at most one warm-up per 13 minutes per app process, whoever visits. The strip
+  shows shimmer placeholder tiles on a session's first paint (`placeholder_html`) and the real one replaces them only once the
+  prices are fetched (`fetch` then `render`: opening a container inside an st.empty slot clears the slot at once).
 - **Keep-alive:** the client URL is in `sync/keep_alive_apps.txt` (20 apps, all up at the 11-09 check).
 - **Still open:** CME's terms for showing settlements to clients were not checked.
 - Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.

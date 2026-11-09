@@ -522,6 +522,8 @@ def render_home():
         with strip_slot.container():
             quotes.render(strip_kind, strip_data)
         st.session_state["_strip_seen"] = True
+        if strip_kind == "grain":
+            quotes.warm_livestock()   # fill the Livestock strip's caches now, so that tab opens instantly
         st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
 
 

@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -406,6 +408,43 @@ def load_livestock() -> tuple[list[dict], str | None]:
         log.warning("livestock strip failed: %s", exc)
         return [], str(exc)[:160]
     return tiles, None
+
+
+WARM_EVERY_SECONDS = 780          # a little under the 15-minute cache, so the cache is refilled as it expires
+_warm_lock = threading.Lock()
+_warm_at = 0.0
+
+
+def warm_livestock() -> bool:
+    """Fill the Livestock strip's caches in the background, so the first click on Livestock Apps is instant.
+
+    Called once the grain strip is drawn. At most one warm-up per WARM_EVERY_SECONDS for the whole app process
+    (the caches are shared by every visitor), so a busy hour is one extra set of Massive calls per window, not
+    one per visit. A daemon thread that never touches the page: it calls `load_livestock()`, which only fills
+    st.cache_data, and a failure there just leaves the tab to load it the ordinary way. Returns whether it
+    started one."""
+    global _warm_at
+    with _warm_lock:
+        if time.time() - _warm_at < WARM_EVERY_SECONDS:
+            return False
+        _warm_at = time.time()
+
+    def work():
+        try:
+            load_livestock()
+        except Exception as exc:  # noqa: BLE001 -- load_livestock does not raise; belt and braces
+            log.warning("livestock warm-up failed: %s", exc)
+
+    t = threading.Thread(target=work, name="jsa-livestock-warm", daemon=True)
+    try:   # let the cache see the app's runtime, as Streamlit documents for threads that use its caches
+        from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        ctx = get_script_run_ctx()
+        if ctx is not None:
+            add_script_run_ctx(t, ctx)
+    except Exception:  # noqa: BLE001
+        pass
+    t.start()
+    return True
 
 
 def load() -> tuple[list[dict], str | None]:

@@ -205,3 +205,17 @@ def test_livestock_footnote_dates_the_futures_and_the_index_separately():
     qs = quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, TODAY)
     _, note = quotes.strip_html(qs, "livestock")
     assert "Nov 3" in note and "1-3 business days" in note and "Nearby contracts roll after first notice" not in note
+
+
+def test_livestock_warmup_starts_at_most_once_per_window(monkeypatch):
+    started = []
+    monkeypatch.setattr(quotes, "load_livestock", lambda: started.append(1) or ([], None))
+    monkeypatch.setattr(quotes, "_warm_at", 0.0)
+    assert quotes.warm_livestock() is True
+    assert quotes.warm_livestock() is False          # a second visitor in the same window does not start another
+    for t in __import__("threading").enumerate():
+        if t.name == "jsa-livestock-warm":
+            t.join(5)
+    assert started == [1]
+    monkeypatch.setattr(quotes, "_warm_at", quotes.time.time() - quotes.WARM_EVERY_SECONDS - 1)
+    assert quotes.warm_livestock() is True           # the window has passed: warm again
