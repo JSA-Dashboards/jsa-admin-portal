@@ -99,3 +99,48 @@ def test_tiles_color_the_change_and_say_unch():
     dn = quotes.tile_html(dict(label="Corn", contract="Dec 26", value=436.0, change=-4.0, unit="¢/bu", decimals=2))
     fl = quotes.tile_html(dict(label="Corn", contract="Dec 26", value=436.0, change=0.0, unit="¢/bu", decimals=2))
     assert "jsa-q-up" in up and "▲" in up and "jsa-q-down" in dn and "▼" in dn and "unch" in fl
+
+
+def test_a_broken_ethanol_frame_never_takes_the_grains_down():
+    """The live bug: cot_client._query coerced contract_ym and asof_date to numbers (NaN), which raised inside
+    build_quotes and removed EVERY tile. A bad ethanol read must cost only the Chi Platts tile."""
+    mangled = pd.DataFrame(dict(asof_date=[float("nan")] * 2, contract_ym=[float("nan")] * 2,
+                                settle=[2.14, 2.20], prev_settle=[2.10, 2.17]))
+    qs = by_label(quotes.build_quotes(settles(), mangled, TODAY, FM))
+    assert "Chi Platts ethanol" not in qs
+    assert {"Corn", "SRW wheat", "HRW wheat", "Soybeans", "Soybean meal", "Soybean oil", "Soy crush"} <= set(qs)
+
+
+def test_one_failing_grain_does_not_remove_the_others(monkeypatch):
+    real = FM.front_month
+
+    def boom(contracts, today):
+        if any(m == "F" for _, m in contracts):     # the soybean/meal/oil Jan contracts
+            raise RuntimeError("bad contract data")
+        return real(contracts, today)
+
+    monkeypatch.setattr(FM, "front_month", boom)
+    qs = by_label(quotes.build_quotes(settles(), ETH, TODAY, FM))
+    assert "Corn" in qs and "SRW wheat" in qs
+
+
+def test_the_ethanol_reader_keeps_the_contract_month_and_date(monkeypatch):
+    class Conn:
+        closed = False
+
+        def close(self):
+            Conn.closed = True
+
+    class Cc:
+        @staticmethod
+        def _connect():
+            return Conn()
+
+    raw = pd.DataFrame({"ASOF_DATE": ["2026-11-03"], "CONTRACT_YM": ["2026-11"], "SETTLE": ["2.14"], "PREV_SETTLE": ["2.10"]})
+    monkeypatch.setattr(pd, "read_sql", lambda sql, conn: raw.copy())
+    df = quotes._read_ethanol(Cc)
+    assert list(df.columns) == ["asof_date", "contract_ym", "settle", "prev_settle"]
+    assert df.contract_ym.iloc[0] == "2026-11" and str(df.asof_date.iloc[0]) == "2026-11-03"
+    assert df.settle.iloc[0] == 2.14 and Conn.closed
+    q = by_label(quotes.build_quotes(settles(), df, TODAY, FM))["Chi Platts ethanol"]
+    assert q["contract"] == "Nov 26" and q["value"] == 2.14

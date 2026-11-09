@@ -25,6 +25,7 @@ the mirrored copy under apps/cftc_cot so there is one implementation of it.
 from __future__ import annotations
 
 import importlib.util
+import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -32,6 +33,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 HERE = Path(__file__).parent
+log = logging.getLogger("quotes")
 CT = ZoneInfo("America/Chicago")
 MONTHS = dict(zip("FGHJKMNQUVXZ", ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]))
 
@@ -104,39 +106,51 @@ def build_quotes(settles: pd.DataFrame, ethanol: pd.DataFrame, today: date, fm) 
 
     by_label = {}
     for label, code, unit, dec in GRAIN_QUOTES:
-        q = grain(label, code, unit, dec)
+        try:
+            q = grain(label, code, unit, dec)
+        except Exception as exc:  # noqa: BLE001 -- one market must not take the strip down
+            log.warning("quote %s failed: %s", label, exc)
+            continue
         if q:
             by_label[label] = q
 
     # Chi Platts: current-month CU contract of the latest capture (cash-settled: no notice day)
     eth = None
-    if ethanol is not None and len(ethanol):
-        e = ethanol.dropna(subset=["settle"]).copy()
-        if len(e):
-            asof = pd.to_datetime(e["asof_date"]).dt.date.max()
-            if (today - asof).days <= STALE_ETHANOL_DAYS:
-                cur = asof.strftime("%Y-%m")
-                e = e[e.contract_ym.astype(str) >= cur].sort_values("contract_ym")
-                if len(e):
-                    r = e.iloc[0]
-                    y, m = int(str(r.contract_ym)[:4]), int(str(r.contract_ym)[5:7])
-                    chg = None if pd.isna(r.get("prev_settle")) else float(r.settle) - float(r.prev_settle)
-                    eth = {"label": "Chi Platts ethanol", "contract": f"{MONTHS['FGHJKMNQUVXZ'[m - 1]]} {str(y)[2:]}",
-                           "value": float(r.settle), "change": chg, "unit": "$/gal", "decimals": 4, "as_of": asof}
+    try:
+        if ethanol is not None and len(ethanol):
+            e = ethanol.dropna(subset=["settle"]).copy()
+            if len(e):
+                asof = pd.to_datetime(e["asof_date"]).dt.date.max()
+                if (today - asof).days <= STALE_ETHANOL_DAYS:
+                    cur = asof.strftime("%Y-%m")
+                    e = e[e.contract_ym.astype(str) >= cur].sort_values("contract_ym")
+                    if len(e):
+                        r = e.iloc[0]
+                        y, m = int(str(r.contract_ym)[:4]), int(str(r.contract_ym)[5:7])
+                        chg = None if pd.isna(r.get("prev_settle")) else float(r.settle) - float(r.prev_settle)
+                        eth = {"label": "Chi Platts ethanol", "contract": f"{MONTHS['FGHJKMNQUVXZ'[m - 1]]} {str(y)[2:]}",
+                               "value": float(r.settle), "change": chg, "unit": "$/gal", "decimals": 4, "as_of": asof}
+    except Exception as exc:  # noqa: BLE001 -- the grains still draw without the ethanol proxy
+        log.warning("Chi Platts quote failed: %s", exc)
+        eth = None
 
     # Soy crush on the soybean nearby's month
     crush = None
-    if "ZS" in fronts:
-        y, m = fronts["ZS"]
-        soy, meal, oil = (_series(settles, c, y, m) for c in ("ZS", "ZM", "ZL"))
-        both = pd.concat([soy, meal, oil], axis=1, keys=["soy", "meal", "oil"]).dropna()
-        if len(both) >= 1:
-            board = 0.022 * both.meal + 0.11 * both.oil - both.soy / 100.0
-            mv = _move(board)
-            if mv:
-                last, chg, day = mv
-                crush = {"label": "Soy crush", "contract": f"{_label(y, m)} board", "value": last, "change": chg,
-                         "unit": "$/bu", "decimals": 2, "as_of": day}
+    try:
+        if "ZS" in fronts:
+            y, m = fronts["ZS"]
+            soy, meal, oil = (_series(settles, c, y, m) for c in ("ZS", "ZM", "ZL"))
+            both = pd.concat([soy, meal, oil], axis=1, keys=["soy", "meal", "oil"]).dropna()
+            if len(both) >= 1:
+                board = 0.022 * both.meal + 0.11 * both.oil - both.soy / 100.0
+                mv = _move(board)
+                if mv:
+                    last, chg, day = mv
+                    crush = {"label": "Soy crush", "contract": f"{_label(y, m)} board", "value": last, "change": chg,
+                             "unit": "$/bu", "decimals": 2, "as_of": day}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Soy crush quote failed: %s", exc)
+        crush = None
 
     for label in ("Corn",):
         if label in by_label:
@@ -196,6 +210,28 @@ def strip_html(quotes: list[dict]) -> tuple[str, str]:
 
 
 # -- data ---------------------------------------------------------------------
+ETHANOL_SQL = (
+    "SELECT asof_date, contract_ym, settle, prev_settle FROM JSA.BASIS_TRACKER.ETHANOL_FUTURES "
+    "WHERE product_code = 'CU' AND settle IS NOT NULL AND asof_date = "
+    "(SELECT MAX(asof_date) FROM JSA.BASIS_TRACKER.ETHANOL_FUTURES WHERE product_code = 'CU' "
+    "AND settle IS NOT NULL) ORDER BY contract_ym")
+
+
+def _read_ethanol(cc) -> pd.DataFrame:
+    """The latest ethanol capture, read straight from the connection. NOT through cot_client._query: that
+    helper turns every column it does not know into a number, which blanked contract_ym and asof_date and
+    took the whole strip down with it."""
+    conn = cc._connect()
+    try:
+        df = pd.read_sql(ETHANOL_SQL, conn)
+    finally:
+        conn.close()
+    df.columns = [c.lower() for c in df.columns]
+    for c in ("settle", "prev_settle"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
 def load() -> tuple[list[dict], str | None]:
     """Cached reader: (tiles, error). Never raises: the strip must not take the page down."""
     import streamlit as st
@@ -207,18 +243,16 @@ def load() -> tuple[list[dict], str | None]:
         fm = _cot_module("futures_move")
         settles = cc.load_settlements((today - timedelta(days=40)).isoformat())
         try:
-            eth = cc._query(
-                "SELECT asof_date, contract_ym, settle, prev_settle FROM JSA.BASIS_TRACKER.ETHANOL_FUTURES "
-                "WHERE product_code = 'CU' AND settle IS NOT NULL AND asof_date = "
-                "(SELECT MAX(asof_date) FROM JSA.BASIS_TRACKER.ETHANOL_FUTURES WHERE product_code = 'CU' "
-                "AND settle IS NOT NULL) ORDER BY contract_ym")
-        except Exception:  # noqa: BLE001 -- the grains still draw without the ethanol proxy
+            eth = _read_ethanol(cc)
+        except Exception as exc:  # noqa: BLE001 -- the grains still draw without the ethanol proxy
+            log.warning("ethanol read failed: %s", exc)
             eth = pd.DataFrame()
         return build_quotes(settles, eth, today, fm)
 
     try:
         return _load(datetime.now(CT).date().isoformat()), None
     except Exception as exc:  # noqa: BLE001
+        log.warning("price strip failed: %s", exc)
         return [], str(exc)[:160]
 
 
@@ -226,7 +260,11 @@ def render() -> None:
     import streamlit as st
     quotes, err = load()
     if not quotes:
-        return  # nothing to show beats a broken header
+        # Say so rather than leave a gap nobody can explain; the reason goes to the app log, not to clients.
+        log.warning("price strip is empty (error: %s)", err)
+        st.markdown('<div style="color:#8a9a90;font-size:0.8rem;margin:0.2rem 0 0.8rem">'
+                    'Futures prices are temporarily unavailable.</div>', unsafe_allow_html=True)
+        return
     st.markdown(QUOTE_CSS, unsafe_allow_html=True)
     block, note = strip_html(quotes)
     st.markdown(block, unsafe_allow_html=True)
