@@ -307,6 +307,7 @@ CLIENT_PAGES = {
 CLIENT_CATEGORY = {"farmer-selling-survey": "Cash Grain"}
 CLIENT_COMING_SOON = ["CSO & Spread Risk Analyzer", "High/Low Model"]
 # Broker account logins shown in the upper right of the client home page.
+BROKER_HEADING = "Access to Client Portals"
 # (label, url, logo file under assets/). A logo makes the link a logo button; with no logo file it is a text button.
 BROKER_LINKS = [("MyStoneX", "https://my.stonex.com/", "logo-stonex.png"),
                 ("Plus500", "https://client-portal.plus500.com/", "logo-plus500.png")]
@@ -441,8 +442,11 @@ def render_home():
                         "padding:0 0.8rem;background:#fff;border:1px solid #d7e2dc;border-radius:8px;"
                         "box-sizing:border-box;transition:border-color .15s, box-shadow .15s;}"
                         ".jsa-broker:hover{border-color:#5e7164;box-shadow:0 1px 4px rgba(50,55,60,.18);}"
-                        ".jsa-broker img{max-height:1.6rem;max-width:100%;width:auto;display:block;}</style>",
+                        ".jsa-broker img{max-height:1.6rem;max-width:100%;width:auto;display:block;}"
+                        ".jsa-broker-head{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;"
+                        "color:#5f7267;font-weight:600;text-align:right;margin:0 0 0.35rem;}</style>",
                         unsafe_allow_html=True)
+            st.markdown(f'<div class="jsa-broker-head">{BROKER_HEADING}</div>', unsafe_allow_html=True)
             with st.container(key="broker_links"):
                 link_cols = st.columns([0.4, 1, 1])
                 for lc, (label_, url_, logo_) in zip(link_cols[1:], BROKER_LINKS):

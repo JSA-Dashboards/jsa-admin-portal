@@ -55,3 +55,8 @@ def test_a_broker_logo_file_that_is_named_exists_or_falls_back_to_a_text_button(
     # Missing logo = text button (Home.py checks), so this only documents which logos are on disk.
     present = {logo for _l, _u, logo in literal("BROKER_LINKS") if (Path(__file__).parent / "assets" / logo).exists()}
     assert "logo-stonex.png" in present
+    assert "logo-plus500.png" in present
+
+
+def test_the_broker_buttons_are_labelled_access_to_client_portals():
+    assert literal("BROKER_HEADING") == "Access to Client Portals"
