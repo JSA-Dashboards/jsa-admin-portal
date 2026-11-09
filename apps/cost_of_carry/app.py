@@ -456,14 +456,19 @@ def render_commodity(commodity: dict, api_key: str, as_of: date, default_rate_pc
         annual_rate = annual_rate_pct / 100
 
         try:
-            curve = load_curve(commodity["product_code"], api_key, as_of.isoformat(), n_contracts)
+            # One spare month, so the tab keeps n_contracts once the front one has rotated out.
+            curve = load_curve(commodity["product_code"], api_key, as_of.isoformat(), n_contracts + 1)
         except MassiveApiError as e:
             st.error(f"Couldn't load live quotes: {e}")
             return
+        curve, rotated = rotate_curve(curve, as_of, n_contracts)
 
         if curve.empty:
             st.warning("No live contracts returned for this market right now.")
             return
+        if len(rotated):
+            st.caption("Rotated out, five business days after First Notice Day: "
+                       f"{rotated_label(rotated, commodity['product_code'])}.")
 
         try:
             history = load_history(tuple(curve["ticker"]), api_key, as_of.isoformat())
@@ -809,9 +814,9 @@ MATRIX_ROTATION_BDAYS = 5
 
 
 def matrix_rotation_date(expiration: date) -> date:
-    """The day a contract leaves the Spread Matrix and the Summary: five business days
-    after its First Notice Day, counted on the exchange calendar so a holiday in between
-    pushes it out."""
+    """The day a contract leaves the Spread Matrix, the Summary and the per-market tabs:
+    five business days after its First Notice Day, counted on the exchange calendar so a
+    holiday in between pushes it out."""
     day = first_notice_day(expiration)
     for _ in range(MATRIX_ROTATION_BDAYS):
         day = vsr_tracker.next_business_day(day + timedelta(days=1))
