@@ -144,3 +144,64 @@ def test_the_ethanol_reader_keeps_the_contract_month_and_date(monkeypatch):
     assert df.settle.iloc[0] == 2.14 and Conn.closed
     q = by_label(quotes.build_quotes(settles(), df, TODAY, FM))["Chi Platts ethanol"]
     assert q["contract"] == "Nov 26" and q["value"] == 2.14
+
+
+# -- Livestock tab strip ---------------------------------------------------------------
+def ls_rows(code, month, year, prices, expiry, start="2026-10-28"):
+    days = pd.date_range(start, periods=len(prices), freq="B")
+    return [dict(product_code=code, month=month, year=year, date=d, settle=p, expiry=expiry)
+            for d, p in zip(days, prices)]
+
+
+def livestock():
+    r = []
+    r += ls_rows("LE", "Z", 2026, [230.1, 231.0, 232.5, 232.0, 233.25], date(2026, 12, 31))
+    r += ls_rows("LE", "G", 2027, [235.0, 235.5, 236.0, 236.5, 237.0], date(2027, 2, 26))
+    r += ls_rows("GF", "F", 2027, [340.0, 341.0, 342.0, 341.5, 343.0], date(2027, 1, 28))
+    r += ls_rows("GF", "X", 2026, [335.0, 336.0, 337.0, 336.5, 338.0], date(2026, 11, 20))
+    r += ls_rows("HE", "Z", 2026, [80.0, 80.5, 81.0, 80.25, 80.75], date(2026, 12, 14))
+    return pd.DataFrame(r)
+
+
+FEEDER = pd.DataFrame([dict(report_date="2026-11-02", fci_value=361.10), dict(report_date="2026-11-03", fci_value=362.40)])
+CORN_TILE = dict(label="Corn", contract="Dec 26", value=436.0, change=4.0, unit="¢/bu", decimals=2,
+                 as_of=date(2026, 11, 3))
+
+
+def test_livestock_tiles_in_the_requested_order():
+    qs = quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, TODAY)
+    assert [q["label"] for q in qs] == ["Live cattle", "Feeder cattle", "Feeder Cattle Index", "Lean hogs", "Corn"]
+
+
+def test_livestock_nearby_is_the_nearest_unexpired_contract_and_change_is_one_contract():
+    q = by_label(quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, TODAY))
+    assert q["Live cattle"]["contract"] == "Dec 26"
+    assert q["Live cattle"]["value"] == 233.25 and q["Live cattle"]["change"] == pytest.approx(1.25)
+    assert q["Feeder cattle"]["contract"] == "Nov 26"             # nearer than Jan 27 and not expired yet
+    assert q["Feeder cattle"]["value"] == 338.0
+
+
+def test_an_expired_livestock_contract_is_skipped_for_the_next():
+    q = by_label(quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, date(2026, 11, 21)))
+    assert q["Feeder cattle"]["contract"] == "Jan 27"             # Nov expired on the 20th
+
+
+def test_feeder_index_carries_its_own_published_date_and_change():
+    q = by_label(quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, TODAY))["Feeder Cattle Index"]
+    assert q["value"] == 362.40 and q["change"] == pytest.approx(1.30) and q["unit"] == "$/cwt"
+    assert q["as_of"] == date(2026, 11, 3) and "Nov 3" in q["contract"]
+
+
+def test_stale_feeder_index_is_left_out_and_missing_pieces_do_not_break_the_rest():
+    old = pd.DataFrame([dict(report_date="2026-10-01", fci_value=350.0)])
+    qs = quotes.build_livestock_quotes(livestock(), old, None, TODAY)
+    assert [q["label"] for q in qs] == ["Live cattle", "Feeder cattle", "Lean hogs"]
+    only_index = quotes.build_livestock_quotes(pd.DataFrame(), FEEDER, None, TODAY)
+    assert [q["label"] for q in only_index] == ["Feeder Cattle Index"]
+    assert quotes.build_livestock_quotes(pd.DataFrame(), pd.DataFrame(), None, TODAY) == []
+
+
+def test_livestock_footnote_dates_the_futures_and_the_index_separately():
+    qs = quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, TODAY)
+    _, note = quotes.strip_html(qs, "livestock")
+    assert "Nov 3" in note and "1-3 business days" in note and "Nearby contracts roll after first notice" not in note

@@ -135,6 +135,12 @@ What `CLIENT` (in `Home.py`) changes:
 - **Logo (2026-11-09):** the 500x140 JSA logo replaced the old 222x60 file in `assets/logo-full.png` and in 12 standalone repos
   (dark = `logo-full.png` / `jsa_logo_full.png`, white for dark headers = `jsa_logo_white.png`). All size code is by height, so a
   same-shape logo drops in. The client header uses `assets/logo-jsa-large.png` at width 380.
+- **Price strip follows the tab (2026-11-09):** `strip_slot` in Home.py is filled after the Grain / Livestock tabs, with
+  `quotes.render("livestock" if livestock_tab.open else "grain")`. The Livestock strip is live cattle, feeder cattle, the CME Feeder
+  Cattle Index, lean hogs and corn: the three futures are Massive settles on the nearest unexpired contract (cash-settled, so no
+  notice day; read the way the COT dashboard does, `cot_massive.livestock_settles`), the index is CME's PUBLISHED value from
+  `JSA.CME_FEEDER_CATTLE.CME_FTP_DAILY` with its own date (CME posts it 1-3 days late; JSA's reconstruction is never shown to
+  clients), corn is the grain strip's own tile. Futures and index are cached separately and a failed read raises so it is not cached.
 - **Keep-alive:** the client URL is in `sync/keep_alive_apps.txt` (20 apps, all up at the 11-09 check).
 - **Still open:** CME's terms for showing settlements to clients were not checked.
 - Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.

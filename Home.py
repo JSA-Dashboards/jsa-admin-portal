@@ -488,7 +488,8 @@ def render_home():
                                        help=f"Opens {url_} in a new tab")
     with col_title:
         st.markdown(
-            "<div style='padding-top:14px'>"
+            # Clients: the title block is centered in its column, which sits in the middle of the header row.
+            f"<div style='padding-top:14px{';text-align:center' if CLIENT else ''}'>"
             "<h2 style='margin:0;color:#32373c;font-family:\"EB Garamond\",Georgia,serif;"
             "font-size:clamp(1.4rem,2.2vw,2rem)'>"
             + ("JSA Client Portal" if CLIENT else "JSA Admin Portal") +
@@ -498,8 +499,9 @@ def render_home():
             unsafe_allow_html=True,
         )
 
-    if CLIENT:
-        quotes.render()   # nearby prices with the daily change, above the tiles
+    # Client strip: a slot above the tabs, filled once we know which tab is open (the grain prices on Grain Apps,
+    # the livestock prices on Livestock Apps). The slot keeps it above the tiles while it is filled after them.
+    strip_slot = st.container() if CLIENT else None
     st.write("")
 
     # Two overall tabs. Only the open one runs (on_change="rerun" + .open), so the
@@ -512,6 +514,8 @@ def render_home():
         with livestock_tab:
             _render_livestock()
     if CLIENT:
+        with strip_slot:
+            quotes.render("livestock" if livestock_tab.open else "grain")
         st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
 
 
