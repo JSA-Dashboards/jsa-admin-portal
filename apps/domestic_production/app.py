@@ -1769,10 +1769,11 @@ with st.spinner("Fetching USDA NASS data..."):
     snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_nat, tab_state, tab_asdc, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
+tab_nat, tab_state, tab_asdc, tab_acreage, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
     "  📊  National Overview  ",
     "  🗺️  State Level  ",
     "  🧭  ASD & County Level  ",
+    "  🌱  Acreage Summary  ",
     "  📦  Quarterly Stocks  ",
     "  🔄  Revision Tracker  ",
     "  🌾  WASDE  ",
@@ -2934,6 +2935,16 @@ with tab_asdc:
             st.error(f"The ASD & County Level tab needs a package this app does not have yet ({_e}). Add geopandas and shapely to requirements.txt.")
         else:
             asd_county_tab.render()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 3c — ACREAGE SUMMARY
+# Planted acres by crop, prevent plant and CRP, U.S. or one state. Ported from the RMA dashboard's tab of the same name
+# (acreage_tab.py); its NASS data comes from the shared cache like the rest of this app.
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_acreage:
+    if tab_acreage.open:
+        import acreage_tab
+        acreage_tab.render()
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 4 — QUARTERLY STOCKS

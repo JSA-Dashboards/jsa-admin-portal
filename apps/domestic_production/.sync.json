@@ -1,11 +1,14 @@
 {
  "branch": "master",
- "commit": "8f92f032fae1bb738e7115214302b57b378b09a0",
+ "commit": "1c4dca12c2d5c8d3cbbda60ad081cdcb63428f4f",
  "files": {
-  "app.py": "736340ff172c08e54160ce5749d480d675d57f64268aaeeb880d844aa926d109",
+  "acreage_tab.py": "deda02838226fb1732c8fc405ff21a2bc4480bddb52c1ae46c583e54086d1ef9",
+  "app.py": "aec2c4a6314894c5c0090615303dff7c0798eaa1a1f1144f1844ff966cc29508",
   "asd_county_tab.py": "aede8c4471c78b503bba6d032be35957b152fb6c664003691020686f00c60251",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/jsa_50th_logo.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
+  "data/acreage_crp.json": "abae30024b0562654e7560425b88f381066f1019dd237d0bde1b7a1988acf333",
+  "data/acreage_prevent_plant.csv": "be84d6a03add417c5b47a98db1e0cfc6ba2cd09c041c0b505a707e5efb356992",
   "data/wheat/county_class_prior.csv": "2a3bf0bd68ab66b741671e22384931fcecfc4e246cf2819980e0fd7098d54a80",
   "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
  },
