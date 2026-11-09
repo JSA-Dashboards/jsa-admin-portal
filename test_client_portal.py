@@ -60,3 +60,9 @@ def test_a_broker_logo_file_that_is_named_exists_or_falls_back_to_a_text_button(
 
 def test_the_broker_buttons_are_labelled_access_to_client_portals():
     assert literal("BROKER_HEADING") == "Access to Client Portals"
+
+
+def test_client_tile_text_never_mentions_admin_or_internal_pages():
+    for url_path, text in literal("CLIENT_DESC").items():
+        assert url_path in literal("CLIENT_PAGES")
+        assert "admin" not in text.lower() and "entry" not in text.lower() and "strip trial" not in text.lower()

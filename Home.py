@@ -12,6 +12,7 @@ login gate, then hands off to st.navigation (top nav, no sidebar).
 """
 import html
 import os
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -305,7 +306,30 @@ CLIENT_PAGES = {
 }
 # Where a tile sits for clients when that differs from where staff see it.
 CLIENT_CATEGORY = {"farmer-selling-survey": "Cash Grain"}
+# Tile text that mentions things clients do not get (admin queues, entry screens, internal pages).
+CLIENT_DESC = {
+    "china-soybeans": "Progress toward China's 25 MMT soybean commitment: USDA-confirmed, unknown-destination and trade-intel sales.",
+    "yield-observations": "County yield reports from Ag Trader Talk and JSA: explore them on the map and read the report text.",
+    "farmer-selling-survey": "Share of the crop farmers report sold, by crop year: corn, soybeans and HRW / SRW / HRS wheat.",
+}
 CLIENT_COMING_SOON = ["CSO & Spread Risk Analyzer", "High/Low Model"]
+# The standard JSA legal footer, verbatim from the other dashboards (Cost of Carry's DISCLAIMER_FOOTER_HTML, beef cutout,
+# risk analyzer ...), shown at the bottom of the client home page. Only the rule's colour is lighter, for this light page.
+DISCLAIMER_FOOTER_HTML = (
+    '<hr style="border-color:#d7e2dc;margin-top:32px;margin-bottom:16px">'
+    '<div style="font-family:inherit;color:#888;font-size:inherit;line-height:1.6;text-align:center;padding:0 24px 24px;">'
+    'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative '
+    'products involves substantial risk of loss and may not be suitable for all investors. '
+    'This communication is provided for informational purposes only and does not constitute investment '
+    'advice, a recommendation, or an offer or solicitation to buy or sell any futures, options, cash '
+    'commodities, or derivative products. John Stewart &amp; Associates, Inc. does not accept orders to '
+    'buy or sell any financial instruments via email. The information contained herein has been obtained '
+    'from sources believed to be reliable; however, its accuracy and completeness are not guaranteed. '
+    'Any opinions expressed are solely those of the author, are subject to change without notice, and '
+    'should not be relied upon as a basis for investment decisions. Past performance is not indicative of '
+    'future results. This message may contain confidential or proprietary information intended solely for '
+    'the use of the designated recipient. &copy; John Stewart &amp; Associates, Inc. {year}</div>'
+)
 # Broker account logins shown in the upper right of the client home page.
 BROKER_HEADING = "Access to Client Portals"
 # (label, url, logo file under assets/). A logo makes the link a logo button; with no logo file it is a text button.
@@ -313,7 +337,8 @@ BROKER_LINKS = [("MyStoneX", "https://my.stonex.com/", "logo-stonex.png"),
                 ("Plus500", "https://client-portal.plus500.com/", "logo-plus500.png")]
 
 if CLIENT:
-    LIVE_DASHBOARDS = [dict(d, category=CLIENT_CATEGORY.get(d["url_path"], d["category"]))
+    LIVE_DASHBOARDS = [dict(d, category=CLIENT_CATEGORY.get(d["url_path"], d["category"]),
+                            desc=CLIENT_DESC.get(d["url_path"], d["desc"]))
                        for d in LIVE_DASHBOARDS if d["url_path"] in CLIENT_PAGES]
     COMING_SOON = CLIENT_COMING_SOON
 
@@ -486,6 +511,8 @@ def render_home():
     if livestock_tab.open:
         with livestock_tab:
             _render_livestock()
+    if CLIENT:
+        st.markdown(DISCLAIMER_FOOTER_HTML.format(year=datetime.now().year), unsafe_allow_html=True)
 
 
 def _render_tiles(include):

@@ -2,6 +2,7 @@
 # it never sleeps (Cloud sleeps an app after ~12 h without a visitor) and wakes it if it already has.
 # Blank lines and # comments are ignored. Checked 2026-11-03: every URL below exists.
 https://jsatools-corporate.streamlit.app/
+https://jsa-app-client-dashboard.streamlit.app/
 https://basis-tracker-view.streamlit.app/
 https://jsa-basis-tracker.streamlit.app/
 https://river-fob.streamlit.app/
