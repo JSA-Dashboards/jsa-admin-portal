@@ -46,5 +46,12 @@ def test_the_survey_sits_under_cash_grain_for_clients():
 
 
 def test_the_broker_logins_are_the_two_links_clients_asked_for():
-    assert literal("BROKER_LINKS") == [("MyStoneX", "https://my.stonex.com/"),
-                                       ("Plus500", "https://client-portal.plus500.com/")]
+    links = literal("BROKER_LINKS")
+    assert [(label, url) for label, url, _logo in links] == [("MyStoneX", "https://my.stonex.com/"),
+                                                              ("Plus500", "https://client-portal.plus500.com/")]
+
+
+def test_a_broker_logo_file_that_is_named_exists_or_falls_back_to_a_text_button():
+    # Missing logo = text button (Home.py checks), so this only documents which logos are on disk.
+    present = {logo for _l, _u, logo in literal("BROKER_LINKS") if (Path(__file__).parent / "assets" / logo).exists()}
+    assert "logo-stonex.png" in present

@@ -40,6 +40,16 @@ def _asset(name: str) -> str:
     return str(HERE / "assets" / name)
 
 
+@st.cache_data(show_spinner=False)
+def _data_uri(name: str) -> str:
+    """An image under assets/ as a data: URI ("" if the file is not there)."""
+    import base64
+    try:
+        return "data:image/png;base64," + base64.b64encode((HERE / "assets" / name).read_bytes()).decode()
+    except OSError:
+        return ""
+
+
 st.set_page_config(
     page_title="JSA Client Portal" if CLIENT else "JSA Admin Portal",
     page_icon=_asset("jsa_favicon.png"),
@@ -297,7 +307,9 @@ CLIENT_PAGES = {
 CLIENT_CATEGORY = {"farmer-selling-survey": "Cash Grain"}
 CLIENT_COMING_SOON = ["CSO & Spread Risk Analyzer", "High/Low Model"]
 # Broker account logins shown in the upper right of the client home page.
-BROKER_LINKS = [("MyStoneX", "https://my.stonex.com/"), ("Plus500", "https://client-portal.plus500.com/")]
+# (label, url, logo file under assets/). A logo makes the link a logo button; with no logo file it is a text button.
+BROKER_LINKS = [("MyStoneX", "https://my.stonex.com/", "logo-stonex.png"),
+                ("Plus500", "https://client-portal.plus500.com/", "logo-plus500.png")]
 
 if CLIENT:
     LIVE_DASHBOARDS = [dict(d, category=CLIENT_CATEGORY.get(d["url_path"], d["category"]))
@@ -424,12 +436,24 @@ def render_home():
         with col_links:
             # Keep each label on one line ("MyStoneX" wrapped at tablet width) and push the pair to the right edge.
             st.markdown("<style>[class*='st-key-broker_links'] a, [class*='st-key-broker_links'] p"
-                        "{white-space:nowrap !important;}</style>", unsafe_allow_html=True)
+                        "{white-space:nowrap !important;}"
+                        ".jsa-broker{display:flex;align-items:center;justify-content:center;height:2.6rem;"
+                        "padding:0 0.8rem;background:#fff;border:1px solid #d7e2dc;border-radius:8px;"
+                        "box-sizing:border-box;transition:border-color .15s, box-shadow .15s;}"
+                        ".jsa-broker:hover{border-color:#5e7164;box-shadow:0 1px 4px rgba(50,55,60,.18);}"
+                        ".jsa-broker img{max-height:1.6rem;max-width:100%;width:auto;display:block;}</style>",
+                        unsafe_allow_html=True)
             with st.container(key="broker_links"):
-                link_cols = st.columns([1, 1.15, 1.05])
-                for lc, (label_, url_) in zip(link_cols[1:], BROKER_LINKS):
-                    lc.link_button(label_, url_, icon=":material/open_in_new:", width="stretch",
-                                   help=f"Opens {url_} in a new tab")
+                link_cols = st.columns([0.4, 1, 1])
+                for lc, (label_, url_, logo_) in zip(link_cols[1:], BROKER_LINKS):
+                    uri = _data_uri(logo_)
+                    if uri:   # the company's own logo is the button
+                        lc.markdown(f'<a class="jsa-broker" href="{url_}" target="_blank" rel="noopener noreferrer" '
+                                    f'title="Open {label_} in a new tab"><img src="{uri}" alt="{label_}"></a>',
+                                    unsafe_allow_html=True)
+                    else:
+                        lc.link_button(label_, url_, icon=":material/open_in_new:", width="stretch",
+                                       help=f"Opens {url_} in a new tab")
     with col_title:
         st.markdown(
             "<div style='padding-top:14px'>"
