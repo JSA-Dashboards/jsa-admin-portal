@@ -128,7 +128,15 @@ What `CLIENT` (in `Home.py`) changes:
   re-run, or its tile says "does not exist or not authorized". Things that wrote on view and were handled: Rail FOB's BN
   freight inputs (its own `RAIL_VIEW_ONLY` switch, which Home.py now sets for clients), the beef cutout's opportunistic bank
   of the AM cutout (skipped for clients), Risk Analyzer's audit-log insert (now best-effort).
-- **Still open:** CME's terms for showing settlements to clients were not checked; the keep-alive job does not cover the client app.
+- **Disclaimer + tile wording (2026-11-09):** the client home ends with the standard JSA legal footer (`DISCLAIMER_FOOTER_HTML` in
+  Home.py, client mode only; staff pages carry their own per-app footers). `CLIENT_DESC` overrides the tile text for China Soybean
+  Purchases, Yield Observations and Farmer Selling Survey so clients are not told about admin queues, entry screens or trials they
+  cannot see (a test keeps "admin" / "entry" out of it). Add an override whenever a tile's description mentions a staff-only feature.
+- **Logo (2026-11-09):** the 500x140 JSA logo replaced the old 222x60 file in `assets/logo-full.png` and in 12 standalone repos
+  (dark = `logo-full.png` / `jsa_logo_full.png`, white for dark headers = `jsa_logo_white.png`). All size code is by height, so a
+  same-shape logo drops in. The client header uses `assets/logo-jsa-large.png` at width 380.
+- **Keep-alive:** the client URL is in `sync/keep_alive_apps.txt` (20 apps, all up at the 11-09 check).
+- **Still open:** CME's terms for showing settlements to clients were not checked.
 - Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.
 
 ## Lazy tabs: only the open tab runs (2026-10-12)
