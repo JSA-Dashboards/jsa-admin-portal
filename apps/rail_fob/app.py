@@ -3549,7 +3549,10 @@ def _state_location_rows(state):
         if not RD._use_snowflake():
             return []
         since = (date.today() - timedelta(days=EI.LOOKBACK_DAYS)).isoformat()
-        return list(RD._sf_rows(EI.LOC_SQL, (state, since)))
+        rows = list(RD._sf_rows(EI.LOC_SQL, (state, since)))
+        if state == "IN":                      # Indiana's Louisville values are CGB's Louisville / Jeffersonville bids (KY and an elevator type)
+            rows += list(RD._sf_rows(SL.EXTRA_SQL, (*SL.IN_EXTRA_LOCATIONS, since)))
+        return rows
     except Exception:
         return []
 
@@ -3578,9 +3581,10 @@ def _state_level_tab(sel_date):
     # Illinois is cleaned up (Kolten, 2026-11-09): river = the Zone 2 / 3 / 5 and STL INDEXES, processor = the state Ethanol Index only — no pickers.
     # The other states keep the pickers until they get the same treatment.
     il = state == "IL"
+    cleaned = state in SL.RIVER_ORDER                  # IL and IN: river rows are indexes, processor is the state Ethanol Index only
     sel_plants, sel_rivers, river_idx = [], [], {}
-    if il:
-        river_idx = SL.river_index(loc_rows)
+    if cleaned:
+        river_idx = SL.river_index(loc_rows, state)
     else:
         plants = sorted((k for k in locs if k[0] == "Corn Processing"), key=lambda k: (-len(locs[k]), lbl(k)))
         rivers = sorted((k for k in locs if k[0] == "River Terminal"), key=lambda k: (-len(locs[k]), lbl(k)))
@@ -3593,10 +3597,10 @@ def _state_level_tab(sel_date):
 
     # rows: (group, origin, gateway / type, [value per month], rail?)
     rows = []     # (group, origin, gateway / type, spread text, [value per month], rail?)
-    for g in SL.IL_RIVER_ORDER if il else ():
+    for g in SL.RIVER_ORDER.get(state, ()):
         series = river_idx.get(g, {})
         n = max((v[1] for v in series.values()), default=0)
-        rows.append(("River", f"{g} index" if g != "STL" else "STL index", f"Avg of {n} terminals" if n else "—", "",
+        rows.append(("River", f"{g} index" if g != "STL" else "STL index", f"Avg of {n} terminal{'s' if n != 1 else ''}" if n else "—", "",
                      [(series.get((year_of(m), m)) or (None,))[0] for m, _n in months], False))
     for key in sel_rivers:
         rows.append(("River", lbl(key), "At the terminal", "", [locs[key].get((year_of(m), m)) for m, _n in months], False))
@@ -3657,7 +3661,7 @@ def _state_level_tab(sel_date):
                 '(the average across the corridor\'s origins in the state, not the best origin the State Summary uses); the Spread column is that average '
                 'freight spread at the front month (negative = freight against the bid, relative to Champaign for CN); river terminal and ethanol plant rows are the Basis Tracker\'s latest corn bids for the month at that '
                 'location (a plant bid is delivered; a river bid is at the terminal — truck freight and margin to bring them to an origin FOB, like the '
-                '37¢ + 4¢ on the sheet, are not applied). Ethanol Index is the average of every Corn Processing plant in the state. Illinois river rows are indexes: the average of the Basis Tracker terminals tagged Zone 2, Zone 3 and Zone 5, and STL (the St. Louis-area terminals, taken out of Zone 5). Green / red = the best / '
+                '37¢ + 4¢ on the sheet, are not applied). Ethanol Index is the average of every Corn Processing plant in the state. Illinois river rows are indexes: the average of the Basis Tracker terminals tagged Zone 2, Zone 3 and Zone 5, and STL (the St. Louis-area terminals, taken out of Zone 5); Indiana river rows are indexes: Evansville (the ADM Evansville terminals) and Louisville (CGB Louisville and Jeffersonville). Green / red = the best / '
                 'worst two rail rows for the month. ' + " ".join(n for n in notes if n.startswith(("CSX", "NS", "BN", "UP", "CN"))) + '</div>',
                 unsafe_allow_html=True)
 

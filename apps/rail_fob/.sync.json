@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "5b6cd63dd829cb6f89a2006a996358dd352bcf60",
+ "commit": "f2504d13d254fe545819cb0d011a03b1a25ab6e4",
  "files": {
-  "app.py": "c07d705ae31b84558b3b4b1f4e8541f78f2191ee9bb2ab77824284a342a57f5d",
+  "app.py": "5226e06df8279120cfdf140dac51c54293c67a07af94b3ece476f675a98db435",
   "assets/bnsf_logo.svg": "bd80d9a840b51727b873ae7aaadbb3f1b2619e5db5612da2eb5a215d74a21c52",
   "assets/cn_logo.svg": "dc56e86ec24dbab2418861f2df0b42fe6bf5b72cd9fd02749ca528fc91332cfe",
   "assets/csx_logo.svg": "c92e5d154083088adc09b25f9b57fc430f632e90835a3c1bf7fa2301f95d3a39",
@@ -67,7 +67,7 @@
   "river_data.py": "b3ad643184f69c0fc861c7d1a633c0f00442173daca9382ac2d1652dcf1d93ca",
   "shipment_data.py": "05f8ce8edccea7c401b30943dd477a14dffd005d9300d9df4142ad89508e2b9d",
   "snowflake_setup.sql": "10e7e0e50fdddf1aa52d79a93e0bbd80f8aa9244a329fb7cff7a84958913e97f",
-  "state_level.py": "cf00451a1b1493aab0cd55c4035f94364258a7e5b7d64e18fad26bb35bad9685",
+  "state_level.py": "2557fd0c91072e84d897fb33dc6bd78f20bcbd5722bda117d95920644ff34eb1",
   "up_spreads.py": "124cf74986453d200411dd8a750a5be201da63065e90fe91469df67d258b2543",
   "usda_cn.py": "0ab282a474ea1752019b5169238576f1f1f89320df8b8c6eaa232b0f55e5b836"
  },
