@@ -174,6 +174,11 @@ LIVE_DASHBOARDS = [
     {"title": "Domestic Production", "category": "Supply & Demand",
      "desc": "USDA NASS corn production — national overview and state-level detail.",
      "page": "apps/domestic_production/app.py", "url_path": "domestic-production"},
+    # CLIENT PORTAL ONLY (Kolten 2026-11-10: "should be included on the Supply & Demand, but the view only side").
+    # It left the staff portal on 11-03 because its first load slowed the other apps there, so staff do not get it.
+    {"title": "Crop Conditions & Yield Model", "category": "Supply & Demand", "client_only": True,
+     "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
+     "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
     {"title": "Crop Progress", "category": "Supply & Demand",
      "desc": "NASS weekly crop progress by state: planted, emerged, harvested and more vs last week, last year and the 5-year average.",
      "page": "apps/crop_progress/app.py", "url_path": "crop-progress"},
@@ -296,7 +301,7 @@ CLIENT_PAGES = {
     # Futures, Options & Spreads
     "cost-of-carry", "grain-seasonal-spreads", "cftc-cot", "risk-analyzer",
     # Supply & Demand
-    "domestic-production", "crop-progress", "yield-observations", "eia-energy", "wasde",
+    "domestic-production", "crop-conditions", "crop-progress", "yield-observations", "eia-energy", "wasde",
     # Grain Flows
     "major-exporters", "rail-shipments", "vessel-lineup", "china-soybeans",
     # Livestock
@@ -341,6 +346,9 @@ if CLIENT:
                             desc=CLIENT_DESC.get(d["url_path"], d["desc"]))
                        for d in LIVE_DASHBOARDS if d["url_path"] in CLIENT_PAGES]
     COMING_SOON = CLIENT_COMING_SOON
+else:
+    # Tiles marked client_only are the client portal's alone: neither a tile nor a navigation page for staff.
+    LIVE_DASHBOARDS = [d for d in LIVE_DASHBOARDS if not d.get("client_only")]
 
 _TILE_CSS = """
 <style>

@@ -133,6 +133,18 @@
     ]
    }
   },
+  "crop_conditions": {
+   "repo": "JSA-Dashboards/crop-conditions-dashboard",
+   "private": true,
+   "replace": {
+    "app.py": [
+     [
+      "if st.button(\"🔄\", help=\"Refresh data from USDA NASS",
+      "if not __import__(\"portal_view\").is_client() and st.button(\"🔄\", help=\"Refresh data from USDA NASS"
+     ]
+    ]
+   }
+  },
   "crop_progress": {
    "repo": "JSA-Dashboards/crop-progress-dashboard",
    "branch": "main"

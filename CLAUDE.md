@@ -176,6 +176,14 @@ NASS ETL and cache, and the separate **Crop Progress** tile. To bring it back: r
 `LIVE_DASHBOARDS` tile (`apps/crop_conditions/app.py`, url_path `crop-conditions`), then `apply crop_conditions`;
 the yield portal's Field check page reappears on its own.
 
+**Back on the CLIENT portal only (2026-11-10).** Kolten: "the Crop Conditions dashboard should be included on the Supply & Demand, but the
+view only side". The tile has `"client_only": True` in `LIVE_DASHBOARDS` (Home.py drops client_only tiles for staff, so the staff portal still
+does not have it), `crop-conditions` is in `CLIENT_PAGES`, and `sync/apps.json` has the entry again WITHOUT the `FIELD_CHECK` pin (so the yield portal's
+Field check page stays hidden) and with one `replace` that hides the 🔄 NASS refresh button for clients. The app is otherwise read-only (it reads
+`JSA.NASS_CACHE` through `nass_cache_client.py`, writes nothing; its Excel download buttons stay, like the other client apps' downloads). **Its code is now
+mirrored into this PUBLIC repo** (Kolten approved that on 11-10; before it was history only). The cost to watch is the one that took it off staff: a heavy first load,
+now in the client app's process. `test_client_portal.py` pins the client-only set to exactly `crop-conditions`.
+
 ## Risk Analyzer (`apps/risk_analyzer/`, added 2026-10-12)
 
 A synced mirror of `JSA-Dashboards/jsa-risk-analyzer`, tile under "Futures, Options & Spreads".
