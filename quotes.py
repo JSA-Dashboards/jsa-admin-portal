@@ -4,7 +4,18 @@ quotes.py -- the nearby-futures price strip at the top of the CLIENT portal.
 Corn, Chi Platts ethanol, SRW, HRW, soybeans, meal, soy oil and the soy crush, each on its NEARBY
 contract with the last settlement and the change from the prior settlement.
 
-SETTLEMENTS, NOT LIVE QUOTES. The grains come from the daily settlement bank
+DELAYED QUOTES (Kolten 2026-11-10: "make the quote tiles the 10 min delay after all"). The futures tiles show the LAST TRADE from Massive's
+/snapshot, the change being that price less the PRIOR SESSION's settlement, and the footnote says when the trade was. The snapshot is only used when Massive
+itself labels it DELAYED (CME's delay is 10 minutes): a feed that ever turned real-time would be ignored and the tile would fall back to the settlement
+below, because showing real-time CME prices to clients is a licence matter, not a display one. The ethanol proxy and the Feeder Cattle Index have no
+intraday price and stay end-of-day; the soy crush is rebuilt from the three delayed prices. The settlement figures below remain the fallback and the
+prior-settle reference. The prior settlement comes from OUR settlement series, not from the snapshot's own `previous_settlement`:
+after the day's settlement posts, Massive rolls that field to the settlement just posted (Dec corn on 2026-11-10 read 449.0, the very
+settle, so the change came out -1.0 for a day that settled +9.75), which is wrong for a day-over-day change. The trade date of a last trade is
+its calendar date before 5 PM CT and the next business day from 5 PM (CME's trade-date roll), and the reference is the latest settlement
+BEFORE that trade date.
+
+SETTLEMENTS, NOT LIVE QUOTES (the fallback, and the base the delayed prices are laid over). The grains come from the daily settlement bank
 (JSA.COST_OF_CARRY.FUTURES_SETTLEMENTS, filled each weekday at 4:30pm CT), so the strip reads the
 previous session until that load runs; Chi Platts is the CME Chicago Ethanol (Platts) futures settle
 from JSA.BASIS_TRACKER.ETHANOL_FUTURES, a futures proxy and not the Platts assessment.
@@ -82,6 +93,31 @@ def _series(settles: pd.DataFrame, code: str, year: int, month: str) -> pd.Serie
     return d.set_index("date").settle.astype(float).sort_index()
 
 
+def _hist(series: pd.Series, n: int = 8) -> dict:
+    """The last `n` settlements of a series as {iso date: value}: what a delayed price is measured against."""
+    s = series.dropna().tail(n)
+    return {pd.Timestamp(d).date().isoformat(): float(v) for d, v in s.items()}
+
+
+def trade_date(ts: datetime) -> date:
+    """CME trade date of a trade at `ts` (Central): the calendar date before 5 PM, the next business day from 5 PM on."""
+    d = ts.date() + timedelta(days=1) if ts.hour >= 17 else ts.date()
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def prior_settle(hist: dict | None, ts: datetime):
+    """Latest settlement strictly before the trade date of `ts`; None when there is none close enough (a week-end and a
+    holiday make 4 days) to be the real prior settlement."""
+    td = trade_date(ts)
+    before = [(date.fromisoformat(k), v) for k, v in (hist or {}).items() if date.fromisoformat(k) < td]
+    if not before:
+        return None
+    d, v = max(before)
+    return v if (td - d).days <= 4 else None
+
+
 def _move(series: pd.Series):
     """(last, change from the prior settle, date of last) or None."""
     s = series.dropna()
@@ -116,7 +152,8 @@ def build_quotes(settles: pd.DataFrame, ethanol: pd.DataFrame, today: date, fm) 
         if mv is None:
             return None
         last, chg, day = mv
-        return {"label": label, "contract": _label(*front), "value": last, "change": chg, "unit": unit,
+        return {"label": label, "contract": _label(*front), "ticker": f"{code}{front[1]}{str(front[0])[-1]}",
+                "hist": _hist(_series(settles, code, *front)), "value": last, "change": chg, "unit": unit,
                 "decimals": dec, "as_of": day}
 
     by_label = {}
@@ -162,6 +199,8 @@ def build_quotes(settles: pd.DataFrame, ethanol: pd.DataFrame, today: date, fm) 
                 if mv:
                     last, chg, day = mv
                     crush = {"label": "Soy crush", "contract": f"{_label(y, m)} board", "value": last, "change": chg,
+                             "crush_tickers": {c: f"{c}{m}{str(y)[-1]}" for c in ("ZS", "ZM", "ZL")},
+                             "hist": _hist(board),
                              "unit": "$/bu", "decimals": 2, "as_of": day}
     except Exception as exc:  # noqa: BLE001
         log.warning("Soy crush quote failed: %s", exc)
@@ -204,7 +243,8 @@ def build_livestock_quotes(ls: pd.DataFrame, index: pd.DataFrame, corn: dict | N
                 if mv is None:
                     continue
                 last, chg, day = mv
-                made[label] = {"label": label, "contract": _label(y, m), "value": last, "change": chg,
+                made[label] = {"label": label, "contract": _label(y, m), "ticker": f"{code}{m}{str(y)[-1]}",
+                               "hist": _hist(_series(ls, code, y, m)), "value": last, "change": chg,
                                "unit": unit, "decimals": dec, "as_of": day}
             except Exception as exc:  # noqa: BLE001 -- one market must not take the strip down
                 log.warning("quote %s failed: %s", label, exc)
@@ -233,6 +273,87 @@ def build_livestock_quotes(ls: pd.DataFrame, index: pd.DataFrame, corn: dict | N
     if corn:
         out.append(corn)
     return out
+
+
+SNAPSHOT_TTL = 60                 # seconds the delayed prices are reused for, across every visitor
+
+
+def parse_snapshots(results: list[dict]) -> dict[str, dict]:
+    """{ticker: {"price", "as_of"}} from /snapshot rows. A row counts only when it carries a last trade AND Massive's
+    own DELAYED label; anything else is left out (the tile keeps its settlement)."""
+    out: dict[str, dict] = {}
+    for r in results or []:
+        try:
+            lt = r.get("last_trade") or {}
+            tf = str(lt.get("timeframe", "")).upper()
+            px, ts = lt.get("price"), lt.get("last_updated")
+            if tf != "DELAYED" or not px or not ts:
+                continue
+            tkr = (r.get("details") or {}).get("ticker") or r.get("ticker")      # Massive puts it under details
+            if not tkr:
+                continue
+            out[tkr] = {"price": float(px), "as_of": datetime.fromtimestamp(int(ts) / 1e9, CT)}
+        except Exception as exc:  # noqa: BLE001 -- one bad row must not take the rest down
+            log.warning("snapshot row skipped: %s", exc)
+    return out
+
+
+def overlay_delayed(tiles: list[dict], snaps: dict[str, dict]) -> list[dict]:
+    """Lay the delayed last-trade prices over settlement tiles (same order, same labels). A tile whose ticker has no
+    usable snapshot keeps its settlement; the soy crush is rebuilt only when all three legs have one."""
+    out = []
+    for q in tiles:
+        q = dict(q)
+        sn = snaps.get(q.get("ticker", ""))
+        if sn:
+            prev = prior_settle(q.get("hist"), sn["as_of"])
+            if prev is not None:
+                q.update(value=sn["price"], change=sn["price"] - prev, as_of=sn["as_of"], delayed=True)
+        elif q.get("crush_tickers"):
+            legs = {c: snaps.get(t) for c, t in q["crush_tickers"].items()}
+            if all(legs.values()):
+                when = min(v["as_of"] for v in legs.values())
+                prev = prior_settle(q.get("hist"), when)
+                if prev is not None:
+                    last = 0.022 * legs["ZM"]["price"] + 0.11 * legs["ZL"]["price"] - legs["ZS"]["price"] / 100.0
+                    q.update(value=last, change=last - prev, delayed=True, as_of=when)
+        out.append(q)
+    return out
+
+
+def wanted_tickers(tiles: list[dict]) -> list[str]:
+    t: list[str] = []
+    for q in tiles:
+        if q.get("ticker"):
+            t.append(q["ticker"])
+        t.extend((q.get("crush_tickers") or {}).values())
+    return sorted(set(t))
+
+
+def with_delayed(tiles: list[dict]) -> list[dict]:
+    """`tiles` with delayed prices laid over them. Never raises: any failure leaves the settlement tiles as they are."""
+    import streamlit as st
+
+    @st.cache_data(ttl=SNAPSHOT_TTL, show_spinner=False)
+    def _snaps(tickers: tuple) -> dict:
+        cc = _cot_module("cot_client")
+        key = cc._secret("MASSIVE_API_KEY")
+        if not key:
+            raise RuntimeError("no MASSIVE_API_KEY")
+        data = _cot_module("cot_massive")._get("/snapshot", key, {"ticker.any_of": ",".join(tickers), "limit": len(tickers)})
+        return parse_snapshots(data.get("results", []))      # raising above keeps a failure out of the cache
+
+    try:
+        tk = wanted_tickers(tiles)
+        return overlay_delayed(tiles, _snaps(tuple(tk))) if tk else tiles
+    except Exception as exc:  # noqa: BLE001
+        log.warning("delayed prices unavailable, showing settlements: %s", exc)
+        return tiles
+
+
+def _clock(ts: datetime) -> str:
+    h = ts.hour % 12 or 12
+    return f"{ts.strftime('%a %b')} {ts.day}, {h}:{ts.minute:02d} {'AM' if ts.hour < 12 else 'PM'} CT"
 
 
 def tile_html(q: dict) -> str:
@@ -288,6 +409,24 @@ def placeholder_html(n: int = 8) -> str:
 
 def strip_html(quotes: list[dict], kind: str = "grain") -> tuple[str, str]:
     """(the tiles block, the footnote)."""
+    delayed = [q for q in quotes if q.get("delayed")]
+    if delayed:
+        # Tiles with no intraday price (ethanol) are marked as end-of-day so the strip is honest tile by tile.
+        quotes = [q if (q.get("delayed") or q.get("index")) else dict(q, contract=f"{q['contract']} · settle") for q in quotes]
+        block = '<div class="jsa-quotes">' + "".join(tile_html(q) for q in quotes) + "</div>"
+        latest = max(q["as_of"] for q in delayed)
+        idx = next((q for q in quotes if q.get("index")), None)
+        what = ("Chi Platts is the CME Chicago ethanol futures settle (end of day). "
+                if any(q["label"] == "Chi Platts ethanol" for q in quotes) else "")
+        crush = ("Soy crush is the board crush on the soybean nearby month. "
+                 if any(q["label"] == "Soy crush" for q in quotes) else "")
+        roll = ("Nearby contracts roll after first notice day. " if kind == "grain"
+                else "Livestock futures are on the nearest unexpired contract. ")
+        cash = (f"The Feeder Cattle Index is CME's published cash index for {idx['as_of'].strftime('%b')} {idx['as_of'].day}; "
+                "CME posts it 1-3 business days after the sales date. " if idx else "")
+        note = (f"Futures prices are delayed at least 10 minutes (last trade as of {_clock(latest)}); change is from the prior settlement. "
+                f"{roll}{what}{crush}{cash}Not live quotes.")
+        return block, note
     block = '<div class="jsa-quotes">' + "".join(tile_html(q) for q in quotes) + "</div>"
     days = sorted({q["as_of"] for q in quotes if not q.get("index")} or {q["as_of"] for q in quotes})
     as_of = days[-1]
@@ -403,7 +542,7 @@ def load_livestock() -> tuple[list[dict], str | None]:
     except Exception as exc:  # noqa: BLE001
         log.warning("corn tile for the livestock strip failed: %s", exc)
     try:
-        tiles = build_livestock_quotes(ls, idx, corn, today)
+        tiles = with_delayed(build_livestock_quotes(ls, idx, corn, today))
     except Exception as exc:  # noqa: BLE001
         log.warning("livestock strip failed: %s", exc)
         return [], str(exc)[:160]
@@ -465,7 +604,7 @@ def load() -> tuple[list[dict], str | None]:
         return build_quotes(settles, eth, today, fm)
 
     try:
-        return _load(datetime.now(CT).date().isoformat()), None
+        return with_delayed(_load(datetime.now(CT).date().isoformat())), None
     except Exception as exc:  # noqa: BLE001
         log.warning("price strip failed: %s", exc)
         return [], str(exc)[:160]

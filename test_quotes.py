@@ -219,3 +219,91 @@ def test_livestock_warmup_starts_at_most_once_per_window(monkeypatch):
     assert started == [1]
     monkeypatch.setattr(quotes, "_warm_at", quotes.time.time() - quotes.WARM_EVERY_SECONDS - 1)
     assert quotes.warm_livestock() is True           # the window has passed: warm again
+
+
+# -- Delayed quotes laid over the settlement tiles ------------------------------------------
+from datetime import datetime  # noqa: E402
+
+
+def snap(ticker, price, tf="DELAYED", ts=None):
+    ns = int((ts or datetime(2026, 11, 4, 10, 15, tzinfo=quotes.CT)).timestamp() * 1e9)
+    return {"details": {"ticker": ticker}, "last_trade": {"timeframe": tf, "price": price, "last_updated": ns},
+            # Massive rolls this to the settle JUST posted after the close, so it must never be used as the reference
+            "session": {"previous_settlement": price - 1}}
+
+
+def test_only_snapshots_labelled_delayed_are_used():
+    got = quotes.parse_snapshots([snap("ZCZ6", 438.0),
+                                  snap("ZSF7", 1022.0, tf="REAL-TIME"),              # a real-time feed is never shown
+                                  {"details": {"ticker": "ZMF7"}, "last_trade": {"timeframe": "DELAYED", "price": 300, "last_updated": 0}},
+                                  {"details": {"ticker": "ZLF7"}, "last_trade": {}}])
+    assert list(got) == ["ZCZ6"]
+    assert got["ZCZ6"]["price"] == 438.0 and got["ZCZ6"]["as_of"].hour == 10 and got["ZCZ6"]["as_of"].minute == 15
+
+
+def test_trade_date_rolls_at_5pm_central_and_skips_the_weekend():
+    ct = quotes.CT
+    assert quotes.trade_date(datetime(2026, 11, 10, 16, 59, tzinfo=ct)) == date(2026, 11, 10)
+    assert quotes.trade_date(datetime(2026, 11, 10, 17, 0, tzinfo=ct)) == date(2026, 11, 11)      # evening session = next trade date
+    assert quotes.trade_date(datetime(2026, 11, 6, 17, 30, tzinfo=ct)) == date(2026, 11, 9)       # Friday evening -> Monday
+    assert quotes.trade_date(datetime(2026, 11, 8, 18, 0, tzinfo=ct)) == date(2026, 11, 9)        # Sunday 6 PM open -> Monday
+
+
+def test_prior_settle_is_the_one_before_the_trade_date_not_the_one_just_posted():
+    hist = {"2026-11-06": 441.5, "2026-11-09": 439.25, "2026-11-10": 449.0}
+    ct = quotes.CT
+    # 1:19 PM on the 10th: the day's own settle (449.0) is not the reference, Monday's is
+    assert quotes.prior_settle(hist, datetime(2026, 11, 10, 13, 19, tzinfo=ct)) == 439.25
+    assert quotes.prior_settle(hist, datetime(2026, 11, 10, 19, 5, tzinfo=ct)) == 449.0           # overnight session: today's settle
+    assert quotes.prior_settle(hist, datetime(2026, 11, 9, 9, 0, tzinfo=ct)) == 441.5             # Monday morning: Friday's
+    assert quotes.prior_settle({"2026-10-20": 400.0}, datetime(2026, 11, 10, 9, 0, tzinfo=ct)) is None   # stale reference: no tile
+    assert quotes.prior_settle({}, datetime(2026, 11, 10, 9, 0, tzinfo=ct)) is None
+
+
+def test_grain_tiles_carry_the_ticker_and_recent_settles_of_their_nearby_contract():
+    q = by_label(quotes.build_quotes(settles(), ETH, TODAY, FM))
+    assert q["Corn"]["ticker"] == "ZCZ6" and q["Soybeans"]["ticker"] == "ZSF7"        # Nov rolled off, so Jan 27
+    assert q["Corn"]["hist"]["2026-11-03"] == 436 and len(q["Corn"]["hist"]) == 5
+    assert q["Soy crush"]["crush_tickers"] == {"ZS": "ZSF7", "ZM": "ZMF7", "ZL": "ZLF7"} and "2026-11-03" in q["Soy crush"]["hist"]
+    assert "ticker" not in q["Chi Platts ethanol"]                                     # no intraday price for the ethanol proxy
+
+
+def test_delayed_price_replaces_the_settlement_and_the_change_is_against_the_prior_session():
+    tiles = quotes.build_quotes(settles(), ETH, TODAY, FM)
+    snaps = quotes.parse_snapshots([snap("ZCZ6", 440.5), snap("ZSF7", 1025.0), snap("ZMF7", 306.0), snap("ZLF7", 54.0)])
+    q = by_label(quotes.overlay_delayed(tiles, snaps))
+    assert q["Corn"]["value"] == 440.5 and q["Corn"]["change"] == pytest.approx(4.5) and q["Corn"]["delayed"]    # vs 11-03's 436
+    board = lambda zs, zm, zl: 0.022 * zm + 0.11 * zl - zs / 100.0        # noqa: E731
+    assert q["Soy crush"]["value"] == pytest.approx(board(1025, 306, 54))
+    assert q["Soy crush"]["change"] == pytest.approx(board(1025, 306, 54) - board(1020, 304, 53))
+    assert "delayed" not in q["Chi Platts ethanol"] and "delayed" not in q["SRW wheat"]   # no snapshot: stays on its settlement
+    assert q["SRW wheat"]["value"] == 545
+
+
+def test_crush_is_left_on_its_settlement_unless_all_three_legs_have_a_delayed_price():
+    tiles = quotes.build_quotes(settles(), ETH, TODAY, FM)
+    q = by_label(quotes.overlay_delayed(tiles, quotes.parse_snapshots([snap("ZSF7", 1025.0), snap("ZMF7", 306.0)])))
+    assert "delayed" not in q["Soy crush"]
+
+
+def test_a_tile_with_no_usable_reference_settle_stays_on_its_settlement():
+    tiles = quotes.build_quotes(settles(), ETH, TODAY, FM)
+    late = snap("ZCZ6", 440.5, ts=datetime(2026, 12, 20, 10, 0, tzinfo=quotes.CT))      # nothing in the series within 4 days
+    q = by_label(quotes.overlay_delayed(tiles, quotes.parse_snapshots([late])))
+    assert "delayed" not in q["Corn"] and q["Corn"]["value"] == 436
+
+
+def test_delayed_footnote_says_so_and_marks_the_settle_tiles():
+    tiles = quotes.build_quotes(settles(), ETH, TODAY, FM)
+    snaps = quotes.parse_snapshots([snap("ZCZ6", 440.5)])
+    block, note = quotes.strip_html(quotes.overlay_delayed(tiles, snaps))
+    assert "delayed at least 10 minutes" in note and "10:15 AM CT" in note and "prior settlement" in note
+    assert "· settle" in block                                                            # tiles with no delayed price are marked
+    _, plain = quotes.strip_html(tiles)
+    assert "Settlement prices as of" in plain                                             # no delayed tile: the old wording
+
+
+def test_livestock_tiles_carry_ticker_and_settles_too():
+    q = by_label(quotes.build_livestock_quotes(livestock(), FEEDER, CORN_TILE, TODAY))
+    assert q["Live cattle"]["ticker"] == "LEZ6" and q["Feeder cattle"]["ticker"] == "GFX6" and q["Lean hogs"]["ticker"] == "HEZ6"
+    assert q["Live cattle"]["hist"]["2026-11-03"] == 233.25

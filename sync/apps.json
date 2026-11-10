@@ -145,6 +145,20 @@
     ]
    }
   },
+  "global_crops": {
+   "repo": "JSA-Dashboards/canada-crop-conditions",
+   "branch": "main",
+   "private": true,
+   "prefix_modules": "gcc_",
+   "replace": {
+    "theme.py": [
+     [
+      "    _plotly()\n    titles.apply()\n",
+      "    # Portal: no process-wide patches. _plotly() rewrites the shared plotly_white template and titles.apply() wraps\n    # st.title / st.header / st.subheader and go.Figure.update_layout for EVERY app in this process, for good.\n"
+     ]
+    ]
+   }
+  },
   "crop_progress": {
    "repo": "JSA-Dashboards/crop-progress-dashboard",
    "branch": "main"

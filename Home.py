@@ -179,6 +179,10 @@ LIVE_DASHBOARDS = [
     {"title": "Crop Conditions & Yield Model", "category": "Supply & Demand", "client_only": True,
      "desc": "NASS weekly crop conditions, HRW weighted index, analog yield model.",
      "page": "apps/crop_conditions/app.py", "url_path": "crop-conditions"},
+    # The world crop-conditions app (canada-crop-conditions: Canada, Mexico, France, Brazil, Argentina, South Africa). Kolten 2026-11-10.
+    {"title": "Global Crop Conditions & Progress", "category": "Supply & Demand",
+     "desc": "Satellite vegetation, official condition and progress reports and yield models for Canada, Mexico, France, Brazil, Argentina and South Africa.",
+     "page": "apps/global_crops/app.py", "url_path": "global-crop-conditions"},
     {"title": "Crop Progress", "category": "Supply & Demand",
      "desc": "NASS weekly crop progress by state: planted, emerged, harvested and more vs last week, last year and the 5-year average.",
      "page": "apps/crop_progress/app.py", "url_path": "crop-progress"},
@@ -301,7 +305,7 @@ CLIENT_PAGES = {
     # Futures, Options & Spreads
     "cost-of-carry", "grain-seasonal-spreads", "cftc-cot", "risk-analyzer",
     # Supply & Demand
-    "domestic-production", "crop-conditions", "crop-progress", "yield-observations", "eia-energy", "wasde",
+    "domestic-production", "crop-conditions", "global-crop-conditions", "crop-progress", "yield-observations", "eia-energy", "wasde",
     # Grain Flows
     "major-exporters", "rail-shipments", "vessel-lineup", "china-soybeans",
     # Livestock

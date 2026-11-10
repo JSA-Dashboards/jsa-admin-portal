@@ -155,6 +155,21 @@ What `CLIENT` (in `Home.py`) changes:
   create right even when the table exists, so the whole tab failed. Fixed in the source repo (basis-tracker-streamlit `fed8211`: read first, create only if the
   read fails, return an empty set if even that is refused) and synced (`c311c05`). Anything else a client page reads through an `_ensure_*` / `CREATE ... IF NOT
   EXISTS` first will break the same way: when a client tile errors with "insufficient privileges", look for DDL in the read path before touching the grants.
+- **The strips show DELAYED prices, not settlements (2026-11-10, Kolten: "make the quote tiles the 10 min delay after all").** `quotes.with_delayed` lays Massive
+  `/snapshot` last-trade prices (one batch call, cached 60 s for everyone) over the settlement tiles, and the footnote gives the time of the last trade. Rules that
+  matter: (1) a snapshot is used ONLY when Massive labels it `DELAYED` (a real-time feed would be ignored: redistributing real-time CME data to clients is a licence matter);
+  (2) the change is against the prior SESSION's settlement taken from our own settlement series (`prior_settle` / `trade_date`: CME's trade date rolls at 5 PM CT), NOT the
+  snapshot's `previous_settlement`, which Massive rolls to the settle just posted once the day's settlement is out (Dec corn on 11-10 read 449.0 = that day's settle, so
+  a +9.75 day showed -1.0); (3) the ethanol proxy and the Feeder Cattle Index have no intraday price and are marked "settle" / "CME cash index"; the soy crush is rebuilt from
+  three delayed legs; (4) any failure leaves the settlement tiles. The ticker is under `details.ticker` in a snapshot row. The 10-minute figure is the feed's own DELAYED label: not
+  yet measured against a live session (the market was closed when this was built): check a last-trade time against the clock while the market is open. **CME licensing is
+  still unchecked** (see Still open): delayed data shown to clients is the kind of thing its terms cover.
+- **Global Crop Conditions & Progress (2026-11-10, both portals, Supply & Demand).** A mirror of `JSA-Dashboards/canada-crop-conditions` (PRIVATE repo; its code and ~18 MB of
+  data are now in this public repo, Kolten approved): the world crop-conditions app with a Country switch (Canada, Mexico, France, Brazil, Argentina, South Africa). `sync/apps.json`
+  `global_crops` uses `prefix_modules: "gcc_"` (its siblings are `model`, `charts`, `theme`, `geo`, `production`, ...) and one `replace` that turns off `theme.apply`'s
+  `_plotly()` and `titles.apply()`: they rewrite the shared `plotly_white` template and wrap `st.title` / `st.header` / `go.Figure.update_layout` for EVERY app in the process, for good.
+  The cost is that its headings are not auto title-cased and its charts use the stock template. It reads only its bundled CSVs (no secrets, no Snowflake). All six country views were run
+  headless without an exception. Data refreshes when the droplet job pushes to that repo, then `apply global_crops`.
 - **Keep-alive:** the client URL is in `sync/keep_alive_apps.txt` (20 apps, all up at the 11-09 check).
 - **Still open:** CME's terms for showing settlements to clients were not checked.
 - Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.
