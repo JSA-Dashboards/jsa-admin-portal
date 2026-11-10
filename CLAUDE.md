@@ -11,6 +11,11 @@ dashboard in that repo, then run `python sync/sync_apps.py apply <name>`.** Edit
 made inside `apps/` are overwritten by the next sync. This replaced hand-copying,
 which left 13 of 16 bundled apps behind their source by October 2026.
 
+**`apply` with no name syncs EVERY app to its repo's latest commit**, so it also deploys other people's pending pushes (a
+logo-only sync on 2026-11-09 dragged in ~1,800 lines: rail shipments, the letter, draw model, scrapers). Read
+`git diff --stat -- . ':!*.sync.json'` before committing a sync, and sync just the app you changed when that is all that was
+asked. A peer session may be mid-sync in the same checkout (uncommitted `apps/` edits that are not yours): leave them.
+
 - `status` shows drift per app, `plan <name>` the files and any NEW secrets the
   app now reads, `diff <name>` the diff. `check` finds module-name collisions and
   cwd-relative paths (no network). `python sync/smoke.py` loads every page once in
