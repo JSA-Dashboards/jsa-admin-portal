@@ -150,6 +150,11 @@ What `CLIENT` (in `Home.py`) changes:
   instantly (the Massive fetch alone takes ~13 s); at most one warm-up per 13 minutes per app process, whoever visits. The strip
   shows shimmer placeholder tiles on a session's first paint (`placeholder_html`) and the real one replaces them only once the
   prices are fetched (`fetch` then `render`: opening a container inside an st.empty slot clears the slot at once).
+- **A read path must never run DDL (found 2026-11-10, Trends blank for clients).** The client app's Snowflake role is SELECT-only, and the Basis Tracker's
+  `get_index_excludes()` ran `CREATE TABLE IF NOT EXISTS` before every read (the Trends tab's outlier list); Snowflake refuses that statement for a role with no
+  create right even when the table exists, so the whole tab failed. Fixed in the source repo (basis-tracker-streamlit `fed8211`: read first, create only if the
+  read fails, return an empty set if even that is refused) and synced (`c311c05`). Anything else a client page reads through an `_ensure_*` / `CREATE ... IF NOT
+  EXISTS` first will break the same way: when a client tile errors with "insufficient privileges", look for DDL in the read path before touching the grants.
 - **Keep-alive:** the client URL is in `sync/keep_alive_apps.txt` (20 apps, all up at the 11-09 check).
 - **Still open:** CME's terms for showing settlements to clients were not checked.
 - Adding an app: add its tile, decide client or staff (test enforces it), and make sure it has a read-only mode.
