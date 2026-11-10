@@ -42,6 +42,7 @@ def _fresh_modules() -> None:
 
 _fresh_modules()
 import dp_snapshot_buttons as _snap
+import data_asof as _asof
 
 # ── Constants ────────────────────────────────────────────────────────────────
 # This dashboard reads NASS data from a shared, scheduled-pull cache (see
@@ -1837,6 +1838,15 @@ st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 with st.spinner("Fetching USDA NASS data..."):
     nat_df  = load_national(commodity, year_range[0], year_range[1])
     snap_df = load_state_snapshot(commodity, map_year)
+
+# ── Data as of ───────────────────────────────────────────────────────────────
+# Which USDA report the numbers come from (read from the cached data) and when our copy was last refreshed.
+try:
+    _asof_mp = next((m for k, m in COMMODITIES[commodity].items() if k.startswith("Production")), None)
+    _asof.render(_fetch(_broad_metric_params(_asof_mp, "NATIONAL")) if _asof_mp else pd.DataFrame(),
+                 commodity, THIS_YEAR, TXT_SEC, BORDER)
+except Exception:
+    pass
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 tab_nat, tab_state, tab_asdc, tab_acreage, tab_stocks, tab_revisions, tab_wasde, tab_storage_cap, tab_storage_vs_prod = st.tabs([
