@@ -3,14 +3,17 @@
 * NASS vintage: read from the data itself. The cached national pull carries every report period NASS has published for a crop year
   (YEAR - NOV FORECAST, YEAR - SEP FORECAST, YEAR - JUN ACREAGE, ...); the newest one for the current year is the report the latest
   numbers come from. Before the first forecast of a year it falls back to the last Annual Summary.
+* WASDE: the newest release in USDA's ESMIS catalogue (the public release index for the WASDE publication, no key needed). It is the
+  latest WASDE published, which is also the day NASS's Crop Production report comes out, so the NASS numbers above belong to it.
 * Refresh time: the newest successful pull of this dashboard's lists in the shared cache (usda-nass-etl runs 6:30 am and 3:00 pm
   Central on weekdays and weekends alike; the 3:00 pm run catches same-day USDA releases).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
+import requests
 import streamlit as st
 
 from nass_cache_client import _sf_connect, _use_sf, cache_freshness
@@ -31,6 +34,7 @@ REPORTS = [
 _ORDER = {p: i for i, (p, _) in enumerate(REPORTS)}
 _NAME = dict(REPORTS)
 _CENTRAL = None
+ESMIS_WASDE = "https://esmis.nal.usda.gov/api/v1/release/findByPubId/1659"
 
 
 def central():
@@ -93,12 +97,36 @@ def cache_refreshed(dashboards: tuple = ("domestic-production-dashboard", "asd-c
         return None
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _wasde_release_raw() -> date:
+    """Raises on any failure, so a failed lookup is not cached for the hour."""
+    r = requests.get(ESMIS_WASDE, params={"page": 0}, timeout=15, headers={"User-Agent": "JSA-dashboard"})
+    r.raise_for_status()
+    today = datetime.now(timezone.utc).date()
+    days = []
+    for it in r.json().get("results", []):
+        d = datetime.fromisoformat(str(it["release_datetime"]).replace("+0000", "+00:00")).date()
+        if d <= today:                                       # the index can list releases that are scheduled but not out yet
+            days.append(d)
+    if not days:
+        raise ValueError("no WASDE release found")
+    return max(days)
+
+
+def wasde_release():
+    """Date of the newest WASDE published, or None when the index cannot be reached."""
+    try:
+        return _wasde_release_raw()
+    except Exception:
+        return None
+
+
 def fmt_moment(dt: datetime) -> str:
     local = dt.astimezone(central())
     return f"{local:%b} {local.day}, {local.hour % 12 or 12}:{local:%M} {'am' if local.hour < 12 else 'pm'} CT"
 
 
-def line(df: pd.DataFrame, commodity: str, this_year: int, refreshed: datetime | None) -> str:
+def line(df: pd.DataFrame, commodity: str, this_year: int, refreshed: datetime | None, wasde: date | None = None) -> str:
     """The text of the strip (HTML-safe: only the labels are bold)."""
     parts = []
     v = nass_vintage(df, this_year)
@@ -106,13 +134,15 @@ def line(df: pd.DataFrame, commodity: str, this_year: int, refreshed: datetime |
         name, year, released = v
         when = f", released {released:%b} {released.day}" if released else ""
         parts.append(f"<b>USDA NASS</b>: {name}, {year} {commodity.lower()}{when}")
+    if wasde:
+        parts.append(f"<b>Latest WASDE</b>: {wasde:%B} {wasde.year}, released {wasde:%b} {wasde.day}")
     if refreshed:
         parts.append(f"<b>Our copy refreshed</b> {fmt_moment(refreshed)}")
     return "  &middot;  ".join(parts)
 
 
 def render(df: pd.DataFrame, commodity: str, this_year: int, color: str, border: str) -> None:
-    text = line(df, commodity, this_year, cache_refreshed())
+    text = line(df, commodity, this_year, cache_refreshed(), wasde_release())
     if text:
         st.markdown(
             f"<div style='margin:2px 0 10px;padding:6px 12px;border:1px solid {border};border-radius:6px;"
