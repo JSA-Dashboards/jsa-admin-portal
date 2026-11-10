@@ -1,16 +1,18 @@
 {
  "branch": "master",
- "commit": "9992453145af8f4261de4f8a5cfcdd5cc2841977",
+ "commit": "760065e9faa7d326c0379f7863d83a82a3e55d57",
  "files": {
-  "acreage_tab.py": "d39f7c6d1b314e4d979a3228902c0800c472fc60a7a11499b53dde0c13b0af4a",
-  "app.py": "aec2c4a6314894c5c0090615303dff7c0798eaa1a1f1144f1844ff966cc29508",
-  "asd_county_tab.py": "2faad88f2ecd77896258d8d0368b0df84ad68898a9e33b873e5b908fe8d81b94",
+  "acreage_tab.py": "63ed91488ae607ec4632bba75c3385dc016e1799ccf23b6a38476ddcc4879600",
+  "app.py": "22a7601c06114354fa978dc12d482c9383d1c3cd239b33968e233a7b95ed930b",
+  "asd_county_tab.py": "41bb008911804a23a3bdadd6d1eea338f9a12786b251585063c4c224a36fb1e3",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/jsa_50th_logo.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "data/acreage_crp.json": "abae30024b0562654e7560425b88f381066f1019dd237d0bde1b7a1988acf333",
   "data/acreage_prevent_plant.csv": "be84d6a03add417c5b47a98db1e0cfc6ba2cd09c041c0b505a707e5efb356992",
   "data/wheat/county_class_prior.csv": "2a3bf0bd68ab66b741671e22384931fcecfc4e246cf2819980e0fd7098d54a80",
-  "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65"
+  "dp_snapshot_buttons.py": "d07fd43d5445d7e361a0d0125311e2fc5cc146183b553f7af6daa6f1b33755e3",
+  "nass_cache_client.py": "fdfb6925f360dbc927ab3bcad2503e9f7d7a9d2425139c9e4217036828240e65",
+  "usda_baseline.py": "cd3be4b2c69ea93b9beff46b8ef9a4791fa9c79aae107c2c77877241dc891066"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/domestic-production-dashboard",

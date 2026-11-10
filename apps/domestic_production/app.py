@@ -7,7 +7,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 import requests
 import base64
+import contextlib
 import pathlib
+import re
 import sys
 from datetime import date
 from io import BytesIO
@@ -39,6 +41,7 @@ def _fresh_modules() -> None:
 
 
 _fresh_modules()
+import dp_snapshot_buttons as _snap
 
 # ── Constants ────────────────────────────────────────────────────────────────
 # This dashboard reads NASS data from a shared, scheduled-pull cache (see
@@ -1503,6 +1506,73 @@ def _base_layout(fig, title="", height=390):
     ))
     return fig
 
+
+# ── Copy / PNG buttons on every chart, map and table ───────────────────────────────────────────────
+# dp_snapshot_buttons.py is the shared snapshot component (identical to grain-seasonal-dashboard/snapshot_buttons.py): Copy puts the
+# image on the clipboard, PNG saves it. Charts and maps are Plotly's own picture of the live figure, so the title must live in the
+# figure; tables are laid out off-screen with their title on top. Each helper makes sure a title exists.
+_SNAP_SITES = {}
+
+
+def _snap_slug(text) -> str:
+    plain = re.sub(r"<[^>]+>", " ", str(text))
+    return re.sub(r"[^A-Za-z0-9]+", "_", plain).strip("_")[:90] or "chart"
+
+
+def _snap_key(prefix: str, label="") -> str:
+    """A key that is the same on every rerun and different for every chart or table: the line that called the helper, how many times
+    that line has run in this script run (loops), and the title. A bare counter repeated keys across tabs, and Streamlit keeps the
+    other tabs' elements on the page, so a button could find another tab's chart."""
+    line = sys._getframe(2).f_lineno
+    n = _SNAP_SITES[line] = _SNAP_SITES.get(line, 0) + 1
+    return f"{prefix}{line}_{n}_{_snap_slug(label)[:32]}"
+
+
+def _snap_title(name, prefix) -> str:
+    return f"{commodity} — {name}" if prefix else str(name)
+
+
+def _chart_x(fig, name=None, prefix=True, container=None, **kw):
+    """st.plotly_chart plus Copy / PNG buttons (inside `container` when given). A figure without a title gets
+    '<commodity> — <name>'; with prefix=True (charts driven by the commodity selector) the commodity is added to a title that
+    lacks it, so a saved image says which crop it is. Charts with their own commodity (WASDE, storage) pass prefix=False."""
+    cur = (fig.layout.title.text or "").strip() if fig.layout.title is not None else ""
+    if not cur:
+        cur = _snap_title(name or "Chart", prefix)
+        fig.update_layout(title=dict(text=cur, font=dict(size=14, color=TXT, family="'EB Garamond', serif")),
+                          margin_t=max(48, fig.layout.margin.t or 0))
+    elif prefix and str(commodity).lower() not in cur.lower():
+        cur = f"{commodity} — {cur}"
+        fig.update_layout(title_text=cur)
+    kw.setdefault("use_container_width", True)
+    if "key" not in kw:
+        kw["key"] = _snap_key("cx", cur)
+    key = kw["key"]
+    with (container if container is not None else contextlib.nullcontext()):
+        event = st.plotly_chart(fig, **kw)
+        _snap.chart_buttons(key, _snap_slug(cur), key=key)
+    return event
+
+
+def _table_x(html, name, prefix=True, **_):
+    """An HTML table (st.markdown) plus Copy / PNG buttons; the saved image has the title above the table."""
+    st.markdown(html, unsafe_allow_html=True)
+    title = _snap_title(name, prefix)
+    card = (f"<div style=\"font-family:'EB Garamond',serif;font-size:18px;font-weight:600;color:{TXT};margin:0 0 8px\">"
+            f"{title}</div>" + html)
+    _snap.card_buttons(card, "", 1100, _snap_slug(title), key=_snap_key("tx", title))
+
+
+def _df_x(df, name, prefix=True, **kw):
+    """st.dataframe (a DataFrame or a Styler) plus Copy / PNG buttons, with the title in the saved image."""
+    st.dataframe(df, **kw)
+    base = getattr(df, "data", df)
+    if df is None or getattr(base, "empty", False):
+        return
+    title = _snap_title(name, prefix)
+    _snap.table_buttons(df if hasattr(df, "hide") else df.style, _snap_slug(title), key=_snap_key("dx", title), title=title)
+
+
 # ── FAS PSD loaders ──────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def _psd_get(path: str) -> list:
@@ -1860,7 +1930,7 @@ with tab_nat:
             ))
             fig.update_yaxes(tickformat=_ytick(metric))
             _base_layout(fig, title=metric)
-            panels[idx % 4].plotly_chart(fig, use_container_width=True)
+            _chart_x(fig, metric, container=panels[idx % 4])
 
         # ── Production vs Harvested Acres dual-axis ───────────────────────────────
         prod_label = [m for m in metric_list if "Production" in m]
@@ -1900,7 +1970,7 @@ with tab_nat:
                             tickformat=",.0f", gridcolor="rgba(0,0,0,0)",
                             tickfont=dict(color=AMBER), title_font=dict(color=AMBER)),
             )
-            st.plotly_chart(fig_dual, use_container_width=True)
+            _chart_x(fig_dual, "Harvested acres and production")
 
         # ── Yield trend with 5-yr rolling avg ────────────────────────────────────
         yield_label = [m for m in metric_list if "Yield" in m]
@@ -1925,7 +1995,7 @@ with tab_nat:
             ))
             _base_layout(fig_yield, height=380)
             fig_yield.update_yaxes(tickformat=".1f", title=yield_label[0], title_font=dict(color=GRAY))
-            st.plotly_chart(fig_yield, use_container_width=True)
+            _chart_x(fig_yield, "Yield")
 
         # ── Total Supply (Sep 1 Stocks + Production) ─────────────────────────
         if commodity in STOCKS_META and prod_label:
@@ -1992,7 +2062,7 @@ with tab_nat:
                     yaxis=dict(tickformat=",.0f", gridcolor=GRID_CLR, linecolor=BORDER,
                                tickfont=dict(color=TXT_SEC)),
                 )
-                st.plotly_chart(fig_ts, use_container_width=True)
+                _chart_x(fig_ts, "Total supply: production plus stocks")
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 2 — STATE LEVEL
@@ -2366,8 +2436,9 @@ with tab_state:
                 ))
 
                 # Map is the filter — click a state to select it
-                map_event = st.plotly_chart(
+                map_event = _chart_x(
                     fig_map,
+                    name=f"{map_metric} by state",
                     use_container_width=True,
                     on_select="rerun",
                     key=f"map_{commodity}_{map_year}_{map_metric}_{map_view}_{comp_year}_{_rp_cur_lbl}_{_rp_prev_lbl}",
@@ -2466,7 +2537,7 @@ with tab_state:
                 _base_layout(fig_bar, title=bar_title, height=400)
                 fig_bar.update_yaxes(tickformat=bar_ytick)
                 fig_bar.update_layout(showlegend=False)
-                st.plotly_chart(fig_bar, use_container_width=True)
+                _chart_x(fig_bar, "State comparison")
 
                 # ── 10-Year State Comparison Table ────────────────────────────────
                 tbl_unit_lbl = _tbl_unit(map_metric)
@@ -2835,7 +2906,7 @@ with tab_state:
                             f"</tr>"
                         )
 
-                    st.markdown(
+                    _table_x(
                         f"<div style='position:relative;border-radius:8px;border:1px solid {BORDER};"
                         f"margin-bottom:12px;'>"
                         f"<div style='overflow-x:auto;'>"
@@ -2843,7 +2914,7 @@ with tab_state:
                         f"{thead_html}<tbody>{tbody_html}</tbody></table></div>"
                         f"<img src='{LOGO_COLOR}' style='position:absolute;bottom:8px;right:10px;"
                         f"height:44px;opacity:0.12;pointer-events:none;z-index:1;' /></div>",
-                        unsafe_allow_html=True,
+                        name=f"{map_metric} by state", prefix=True,
                     )
                     _render_export_buttons(
                         tbl_rows, tbl_years_list,
@@ -2900,7 +2971,7 @@ with tab_state:
                         ))
                         _base_layout(fig_st, title=f"{selected_name} — {map_metric}", height=380)
                         fig_st.update_yaxes(tickformat=_ytick(map_metric))
-                        col_l.plotly_chart(fig_st, use_container_width=True)
+                        _chart_x(fig_st, "History", container=col_l)
 
                         # State vs US
                         fig_vs = go.Figure()
@@ -2919,7 +2990,7 @@ with tab_state:
                         ))
                         _base_layout(fig_vs, title=f"{selected_name} vs. U.S. — {map_metric}", height=380)
                         fig_vs.update_yaxes(tickformat=_ytick(map_metric))
-                        col_r.plotly_chart(fig_vs, use_container_width=True)
+                        _chart_x(fig_vs, "vs U.S.", container=col_r)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 3b — ASD & COUNTY LEVEL
@@ -2934,6 +3005,10 @@ with tab_asdc:
         except ImportError as _e:
             st.error(f"The ASD & County Level tab needs a package this app does not have yet ({_e}). Add geopandas and shapely to requirements.txt.")
         else:
+            # the tab is generated (change it in rma-production-map); it draws every chart through _chart and every table through
+            # _table, which this dashboard replaces so each gets Copy / PNG buttons with its title
+            asd_county_tab._chart = lambda fig, **kw: _chart_x(fig, name=kw.get("key") or "ASD and county chart", prefix=False, **kw)
+            asd_county_tab._table = lambda df=None, title="", **kw: _df_x(df, title or "ASD and county table", prefix=False, **kw)
             asd_county_tab.render()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -3216,7 +3291,7 @@ with tab_stocks:
                 ))
 
                 # Click-to-select state
-                sk_event = st.plotly_chart(
+                sk_event = _chart_x(
                     fig_sk, use_container_width=True, on_select="rerun",
                     key=f"sk_map_{commodity}_{sk_quarter}_{stocks_year}_{sk_storage}",
                     config={"scrollZoom": False, "displayModeBar": False},
@@ -3333,7 +3408,7 @@ with tab_stocks:
                     fig_skbar.update_yaxes(tickformat=bar_ytick, ticksuffix=bar_ysuffix)
                     fig_skbar.update_layout(showlegend=False)
 
-                st.plotly_chart(fig_skbar, use_container_width=True)
+                _chart_x(fig_skbar, "Stocks by state")
 
                 # ── State comparison table ────────────────────────────────────────
                 if sk_mode == "Disappearance":
@@ -3656,7 +3731,7 @@ with tab_stocks:
                             f"<td style='{td_pct}'>{pct_str}</td></tr>"
                         )
 
-                    st.markdown(
+                    _table_x(
                         f"<div style='position:relative;border-radius:8px;border:1px solid {BORDER};"
                         f"margin-bottom:12px;'>"
                         f"<div style='overflow-x:auto;'>"
@@ -3664,7 +3739,7 @@ with tab_stocks:
                         f"{sk_thead}<tbody>{sk_tbody}</tbody></table></div>"
                         f"<img src='{LOGO_COLOR}' style='position:absolute;bottom:8px;right:10px;"
                         f"height:44px;opacity:0.12;pointer-events:none;z-index:1;' /></div>",
-                        unsafe_allow_html=True,
+                        name="Quarterly grain stocks by state", prefix=True,
                     )
                     _render_export_buttons(
                         sk_rows, sk_years,
@@ -3739,7 +3814,7 @@ with tab_stocks:
                         ))
                         _base_layout(fig_skt, title=f"{sk_selected_name} — {sk_quarter} {storage_lbl} Stocks{hist_sfx}", height=380)
                         fig_skt.update_yaxes(tickformat=h_ytick, ticksuffix=h_ysuffix)
-                        col_l.plotly_chart(fig_skt, use_container_width=True)
+                        _chart_x(fig_skt, "Stocks history", container=col_l)
 
                         fig_skv = go.Figure()
                         fig_skv.add_trace(go.Scatter(
@@ -3756,7 +3831,7 @@ with tab_stocks:
                         ))
                         _base_layout(fig_skv, title=f"{sk_selected_name} vs. U.S. — {sk_quarter} {storage_lbl} Stocks{hist_sfx}", height=380)
                         fig_skv.update_yaxes(tickformat=h_ytick, ticksuffix=h_ysuffix)
-                        col_r.plotly_chart(fig_skv, use_container_width=True)
+                        _chart_x(fig_skv, "Stocks vs U.S.", container=col_r)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 5 — REVISION TRACKER
@@ -3899,7 +3974,7 @@ with tab_revisions:
                         ),
                         hovermode="x unified",
                     )
-                    st.plotly_chart(fig_rev, use_container_width=True)
+                    _chart_x(fig_rev, "Revision tracker")
 
                     # ── Trend callout ─────────────────────────────────────────────
                     if len(present_lbls) >= 2 and "Final" in present_lbls:
@@ -4031,7 +4106,7 @@ with tab_revisions:
                             _base_layout(fig_col, title=_col_title, height=390)
                             fig_col.update_yaxes(tickformat=_yt, ticksuffix=_ys)
                             fig_col.update_layout(showlegend=False)
-                            st.plotly_chart(fig_col, use_container_width=True)
+                            _chart_x(fig_col, "Revisions by report")
                         else:
                             st.info(
                                 f"No years with data for both **{_from_lbl}** and **{_to_lbl}**. "
@@ -4322,11 +4397,11 @@ with tab_wasde:
                         + (f"<td></td>" if _show_chg else "")
                         + "</tr>"
                     )
-                st.markdown(
+                _table_x(
                     f"<div style='overflow-x:auto;border-radius:8px;border:1px solid {BORDER};margin-bottom:16px'>"
                     f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif'>"
                     f"{_rnk_head}<tbody>{_rnk_body}</tbody></table></div>",
-                    unsafe_allow_html=True,
+                    name=f"{_w_comm} {_w_cat}: top {_rnk_topn} ({_rnk_yr}, {_rnk_ul})", prefix=False,
                 )
                 if _rnk_view == "Δ LR":
                     st.caption("⚠️ Country-level Δ LR requires monthly WASDE snapshots. See S&D Table for US Δ LR detail.")
@@ -4346,7 +4421,7 @@ with tab_wasde:
                 fig_rnk.update_xaxes(tickformat=",.1f", title=_rnk_ul)
                 fig_rnk.update_yaxes(autorange="reversed")
                 fig_rnk.update_layout(showlegend=False)
-                st.plotly_chart(fig_rnk, use_container_width=True)
+                _chart_x(fig_rnk, "Top states", prefix=False)
 
         # ══════════════════════════════════════════════════════════════════════════
         # 3 — Supply & Demand Table
@@ -4512,11 +4587,11 @@ with tab_wasde:
                     )
                 _sd_body += "</tr>"
 
-                st.markdown(
+                _table_x(
                     f"<div style='overflow-x:auto;border-radius:8px;border:1px solid {BORDER};margin-bottom:18px'>"
                     f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif'>"
                     f"{_sd_head}<tbody>{_sd_body}</tbody></table></div>",
-                    unsafe_allow_html=True,
+                    name=f"{_w_comm}: supply and demand", prefix=False,
                 )
                 if _sd_view == "Δ LR":
                     if _sd_lr_data:
@@ -4560,7 +4635,7 @@ with tab_wasde:
                                 side="right", showgrid=False),
                     legend=dict(orientation="h", y=-0.18, x=0),
                 )
-                _col_l.plotly_chart(fig_su2, use_container_width=True)
+                _chart_x(fig_su2, "Supply and demand", prefix=False, container=_col_l)
 
                 _su_clrs2 = ["#4ade80" if (v or 99) < 15 else AMBER if (v or 99) < 20 else "#f87171"
                              for v in _su_hist2]
@@ -4572,7 +4647,7 @@ with tab_wasde:
                 _base_layout(fig_ratio2, title=f"{_sd_ctry_sel} {_w_comm} — S/U Ratio (%)", height=380)
                 fig_ratio2.update_yaxes(ticksuffix="%", tickformat=".1f")
                 fig_ratio2.update_layout(showlegend=False)
-                _col_r.plotly_chart(fig_ratio2, use_container_width=True)
+                _chart_x(fig_ratio2, "S/U ratio", prefix=False, container=_col_r)
 
         # ══════════════════════════════════════════════════════════════════════════
         # 4 — Time Series Chart
@@ -4656,7 +4731,7 @@ with tab_wasde:
             fig_ts.update_layout(legend=dict(orientation="h", y=-0.15, x=0), hovermode="x unified")
             if _ts_view == "Δ LR":
                 st.caption("⚠️ Δ LR time series uses current FAS PSD data — historical monthly snapshots not available for trend view.")
-            st.plotly_chart(fig_ts, use_container_width=True)
+            _chart_x(fig_ts, "WASDE history", prefix=False)
 
         # ══════════════════════════════════════════════════════════════════════════
         # 5 — World Map
@@ -4753,7 +4828,7 @@ with tab_wasde:
                         ),
                         margin=dict(l=0, r=0, t=40, b=0), height=480,
                     )
-                    st.plotly_chart(fig_map, use_container_width=True)
+                    _chart_x(fig_map, "Map", prefix=False)
                 else:
                     st.info("No country-level data available for this commodity/category.")
 
@@ -4812,7 +4887,7 @@ with tab_wasde:
                     legend=dict(font=dict(color=TXT, size=11), bgcolor="rgba(0,0,0,0)"),
                     margin=dict(t=60, b=20), height=480,
                 )
-                st.plotly_chart(fig_pie, use_container_width=True)
+                _chart_x(fig_pie, "Mix", prefix=False)
 
         # ══════════════════════════════════════════════════════════════════════════
         # 7 — Bar Chart
@@ -4878,7 +4953,7 @@ with tab_wasde:
                 fig_bar2.update_xaxes(tickformat=",.1f", title=_bar2_ul)
                 fig_bar2.update_yaxes(autorange="reversed")
                 fig_bar2.update_layout(showlegend=False)
-                st.plotly_chart(fig_bar2, use_container_width=True)
+                _chart_x(fig_bar2, "Ranking", prefix=False)
 
         # ══════════════════════════════════════════════════════════════════════════
         # 8 — WASDE Revision History
@@ -5031,11 +5106,11 @@ with tab_wasde:
                 _htbody += f"<td style='{_su_val_td}'>{_su_str}</td>"
             _htbody += "</tr>"
 
-            st.markdown(
+            _table_x(
                 f"<div style='overflow-x:auto;border-radius:8px;border:1px solid {BORDER};margin-bottom:12px'>"
                 f"<table style='border-collapse:collapse;font-family:Open Sans,sans-serif;width:100%'>"
                 f"{_hthead}<tbody>{_htbody}</tbody></table></div>",
-                unsafe_allow_html=True,
+                name=f"{_w_comm}: WASDE revision history", prefix=False,
             )
             if _excel_data:
                 st.markdown(
@@ -5086,7 +5161,7 @@ with tab_wasde:
                 fig_multi.add_hline(y=_lvl, line_dash="dot", line_color=_lclr, line_width=1,
                                     annotation_text=_llbl, annotation_font_color=_lclr,
                                     annotation_position="top right")
-            st.plotly_chart(fig_multi, use_container_width=True)
+            _chart_x(fig_multi, "Stocks-to-use", prefix=False)
 
             _sum_rows = ""
             for _cn, _cc_su in PSD_SU_COMMODITIES:
@@ -5113,13 +5188,13 @@ with tab_wasde:
                 f"<th style='{_WTHD}'>YoY Change</th>"
                 f"</tr></thead>"
             )
-            st.markdown(
+            _table_x(
                 f"<div style='overflow-x:auto;border-radius:8px;border:1px solid {BORDER};"
                 f"margin-bottom:12px;margin-top:8px'>"
                 f"<table style='border-collapse:collapse;width:50%;font-family:Open Sans,sans-serif;"
                 f"background:{CARD_BG}'>"
                 f"{_sum_th}<tbody>{_sum_rows}</tbody></table></div>",
-                unsafe_allow_html=True,
+                name=f"{'US' if _scope == 'US' else 'World'} stocks-to-use summary", prefix=False,
             )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -5194,7 +5269,7 @@ with tab_storage_cap:
                                              font=dict(color=TXT, size=11),
                                              bgcolor="rgba(0,0,0,0)"))
             fig_sc.update_xaxes(ticksuffix="B bu")
-            st.plotly_chart(fig_sc, use_container_width=True)
+            _chart_x(fig_sc, "Grain storage capacity by state", prefix=False)
 
             # ── National trend lines ──────────────────────────────────────────
             st.markdown(
@@ -5230,7 +5305,7 @@ with tab_storage_cap:
                                                    xanchor="center",
                                                    font=dict(color=TXT, size=11),
                                                    bgcolor="rgba(0,0,0,0)"))
-            st.plotly_chart(fig_sc_trend, use_container_width=True)
+            _chart_x(fig_sc_trend, "National grain storage capacity", prefix=False)
 
             # ── State table ───────────────────────────────────────────────────
             st.markdown(
@@ -5247,7 +5322,7 @@ with tab_storage_cap:
             _sc_tbl = _sc_tbl[["state_abbr","Off-Farm (M Bu)","On-Farm (M Bu)",
                                 "Total (M Bu)","% Off-Farm"]].rename(
                 columns={"state_abbr": "State"})
-            st.dataframe(_sc_tbl, use_container_width=True, hide_index=True)
+            _df_x(_sc_tbl, "Grain storage capacity by state", prefix=False, use_container_width=True, hide_index=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 8 — STORAGE vs PRODUCTION
@@ -5394,7 +5469,7 @@ with tab_storage_vs_prod:
                                               font=dict(color=TXT, size=11),
                                               bgcolor="rgba(0,0,0,0)"))
             fig_svc.update_yaxes(ticksuffix="M")
-            st.plotly_chart(fig_svc, use_container_width=True)
+            _chart_x(fig_svc, "Grain supply vs storage by state", prefix=False)
 
             # ── Historical trend ───────────────────────────────────────────────
             st.markdown(
@@ -5442,7 +5517,7 @@ with tab_storage_vs_prod:
                                                font=dict(color=TXT, size=11),
                                                bgcolor="rgba(0,0,0,0)"))
             fig_hist.update_yaxes(ticksuffix="M")
-            st.plotly_chart(fig_hist, use_container_width=True)
+            _chart_x(fig_hist, "National grain supply vs storage capacity", prefix=False)
 
             # ── State detail table ─────────────────────────────────────────────
             st.markdown(
@@ -5477,8 +5552,9 @@ with tab_storage_vs_prod:
                           "Oats (M)", "Supply (M)", "Storage (M)", "Surplus (M)",
                           "Ratio", "Ratio Prev"]
             _disp_cols = [c for c in _disp_cols if c in _svc_tbl.columns]
-            st.dataframe(
+            _df_x(
                 _svc_tbl[_disp_cols].rename(columns={"state_abbr": "State"}),
+                "Grain supply vs storage by state", prefix=False,
                 use_container_width=True, hide_index=True,
             )
 

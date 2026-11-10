@@ -13,6 +13,7 @@ Differences from the RMA tab:
   * CRP comes from data/acreage_crp.json (USDA FSA CRPHistoryState86-25), million acres by state and year.
 """
 import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -21,6 +22,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import usda_baseline as ub
+import dp_snapshot_buttons as _snap
 from nass_cache_client import _cache_key, _sf_connect, _use_sf, fetch_cached
 
 HERE = Path(__file__).parent
@@ -81,6 +84,54 @@ _ACR_PARAMS: dict = {
 
 _ACR_PP_CROPS = ("Corn","Soybeans","Wheat","Cotton","Sorghum","Rice","Peanuts","SugarBeets","DryBeans","Barley","Oats","Sunflowers","Canola")
 
+
+
+def _render_baseline_html(first_proj_year: int = 2026) -> str:
+    """USDA's long-term baseline acreage (usda_baseline.py) as its own table: planted and harvested acres of the eight major crops, CRP and the total, one row per crop year, in million acres.
+    Styled apart from the history table (slate headers) so a projection is never read as a survey number."""
+    HDR1, HDR2, UNIT = "#475569", "#334155", "#eef2f6"
+    BASE_BG, PROJ_BG, PROJ_BG2 = "#f1f5f9", "#ffffff", "#f8fafc"
+    W = "white"
+    short = {"Corn": "Corn", "Sorghum": "Sorg", "Barley": "Barley", "Oats": "Oats", "Wheat": "Wheat", "Rice": "Rice", "Upland cotton": "Upl.<br>Cotton", "Soybeans": "Soy"}
+
+    def _th(text, bg, rowspan=1, colspan=1):
+        rs = f' rowspan="{rowspan}"' if rowspan > 1 else ""
+        cs = f' colspan="{colspan}"' if colspan > 1 else ""
+        return (f'<th{rs}{cs} style="background:{bg};color:{W};padding:4px 6px;text-align:center;font-size:0.72rem;'
+                f'border:1px solid #cbd5e1;white-space:nowrap;">{text}</th>')
+
+    def _td(text, bg, bold=False, align="right", fg=TEXT):
+        b = "font-weight:600;" if bold else ""
+        return (f'<td style="background:{bg};color:{fg};{b}padding:3px 7px;text-align:{align};font-size:0.72rem;'
+                f'border:1px solid #dde4ec;white-space:nowrap;">{text}</td>')
+
+    n = len(ub.CROPS)
+    h1 = (_th("Crop<br>Year", HDR1, rowspan=3) + _th("Planted acreage, eight major crops", HDR2, colspan=n + 1) + _th("CRP", HDR2, colspan=2)
+          + _th("Harvested acreage, eight major crops", HDR2, colspan=n + 1))
+    h2 = ("".join(_th(short[c], HDR1) for c in ub.CROPS) + _th("Total", HDR1) + _th("CRP*", HDR1) + _th("Planted<br>+ CRP", HDR1)
+          + "".join(_th(short[c], HDR1) for c in ub.CROPS) + _th("Total", HDR1))
+    h3 = "".join(_td("mil ac", UNIT, align="center", fg=MUTED) for _ in range(2 * (n + 1) + 2))
+    body = ""
+    for i, r in enumerate(ub.rows()):
+        proj = r["year"] >= first_proj_year
+        bg = (PROJ_BG2 if i % 2 else PROJ_BG) if proj else BASE_BG
+        lab = f"{str(r['year'])[2:]}-{str(r['year'] + 1)[2:]}" + ("" if proj else " (base)")
+        cells = _td(lab, bg, bold=True, align="center")
+        cells += "".join(_td(f"{r['planted'][c]:.1f}", bg) for c in ub.CROPS) + _td(f"{r['total']:.1f}", bg, bold=True)
+        cells += _td(f"{r['crp']:.1f}", bg) + _td(f"{r['total_crp']:.1f}", bg, bold=True)
+        cells += "".join(_td(f"{r['harvested'][c]:.1f}", bg) for c in ub.CROPS) + _td(f"{r['harv_total']:.1f}", bg, bold=True)
+        body += f"<tr>{cells}</tr>"
+    return f"""
+<div style="overflow-x:auto;">
+<p style="font-size:0.9rem;font-weight:700;color:{TEXT};margin:0 0 4px 0;text-align:center;">
+  USDA Baseline: US Acreage Projections, 2025-2036</p>
+<p style="font-size:0.72rem;color:{MUTED};margin:0 0 8px 0;text-align:center;">
+  National, million acres &nbsp;|&nbsp; projections completed October 2026 &nbsp;|&nbsp; 25-26 is the base year</p>
+<table style="border-collapse:collapse;width:100%;font-family:sans-serif;">
+<thead><tr>{h1}</tr><tr>{h2}</tr><tr>{h3}</tr></thead><tbody>{body}</tbody>
+</table>
+<p style="font-size:0.7rem;color:{MUTED};margin:4px 0 0 0;">* CRP = Conservation Reserve Program, an assumption of the baseline. Crop years are the calendar planting year.</p>
+</div>"""
 
 
 def _render_acreage_html(rows: list, years: list,
@@ -331,8 +382,12 @@ def _rma_prevent_plant() -> pd.DataFrame:
 
 
 # ── tab ───────────────────────────────────────────────────────────────────────
+def _slug(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(text)).strip("_") or "national"
+
+
 def render():
-    ac1, ac2, _ = st.columns([1.5, 2, 1.5])
+    ac1, ac2, ac3 = st.columns([1.5, 2, 2])
     with ac1:
         states = ["National"] + sorted(ABBR_TO_NAME.keys())
         state = st.selectbox(
@@ -341,6 +396,11 @@ def render():
         )
     with ac2:
         n_yrs = st.radio("Years shown", [10, 15, 20], horizontal=True, key="acr_n_yrs", index=1)
+    with ac3:
+        show_bl = st.toggle(
+            "Show USDA baseline projections", value=True, key="acr_baseline", disabled=(state != "National"),
+            help="USDA's long-term baseline acreage to 2036, shown apart from the history below and as dashed lines on the trend chart. National only: the baseline has no state detail.")
+    show_bl = bool(show_bl) and state == "National"
 
     state_abbr = "" if state == "National" else state
     end_yr = date.today().year
@@ -421,8 +481,10 @@ def render():
     else:
         tbl_mul, tbl_unit = 1_000_000.0, "ac"
 
-    st.markdown(_render_acreage_html(acr_rows, cal_yrs, tbl_title, scope_lbl, unit_mul=tbl_mul, unit_lbl=tbl_unit),
-                unsafe_allow_html=True)
+    table_html = _render_acreage_html(acr_rows, cal_yrs, tbl_title, scope_lbl, unit_mul=tbl_mul, unit_lbl=tbl_unit)
+    st.markdown(table_html, unsafe_allow_html=True)
+    # the table prints its own title (US Major Field Crops Area Planted, the scope, the years), so the snapshot has it
+    _snap.card_buttons(table_html, "", 1500, f"Acreage_Summary_{_slug(scope_lbl)}", key="acr_table")
     st.markdown(
         f"<p style='font-size:0.72rem;color:{MUTED};margin-top:8px;'>"
         "Planted acres: USDA NASS QuickStats (shared cache). "
@@ -431,6 +493,28 @@ def render():
         "</p>",
         unsafe_allow_html=True,
     )
+
+    # USDA baseline: forward-looking projections, apart from the history above
+    if show_bl:
+        st.markdown(
+            f"<div style='margin-top:28px;border-top:3px solid #475569;padding-top:10px;'>"
+            f"<div class='jsa-section-hdr'>USDA Baseline: forward-looking projections</div>"
+            f"<p style='color:{MUTED};font-size:0.78rem;margin:0 0 10px 0;'>"
+            "These are not survey numbers. They are USDA's long-term projections of planted and harvested acres, made with its macroeconomic and policy "
+            "assumptions, and are not a forecast of any single year.</p></div>",
+            unsafe_allow_html=True,
+        )
+        bl_html = _render_baseline_html()
+        st.markdown(bl_html, unsafe_allow_html=True)
+        _snap.card_buttons(bl_html, "", 1500, "USDA_Baseline_Acreage_2025_2036", key="acr_baseline_table")
+        st.markdown(
+            f"<p style='font-size:0.72rem;color:{MUTED};margin-top:8px;'>Source: {ub.SOURCE} "
+            "The baseline's cotton is upland cotton only and its total is the eight crops shown (it has no sunflower, canola or hay), "
+            "so those columns are not the same as the history table's.</p>",
+            unsafe_allow_html=True,
+        )
+    elif state != "National":
+        st.caption("The USDA baseline projections are national only; choose National to show them.")
 
     st.markdown(
         f"<div style='margin-top:28px;'><div class='jsa-section-hdr'>Planted Acres Trend</div>"
@@ -460,12 +544,25 @@ def render():
                 marker=dict(color=cc, size=5, line=dict(color="#ffffff", width=1)),
                 hovertemplate=f"<b>{lbl}</b><br>%{{x}}: %{{y:.2f}}M ac<extra></extra>",
             ))
+            if show_bl and chart_cols[lbl] in ub.CHART_MATCH:          # USDA baseline: dashed, from the last year of history on
+                bl = ub.series(ub.CHART_MATCH[chart_cols[lbl]])
+                last_hist = max((y for y, v in zip(cal_yrs, ys) if v is not None), default=end_yr)
+                bl_yrs = [y for y in ub.YEARS if y >= last_hist]
+                fig.add_trace(go.Scatter(
+                    x=[_mkt_yr(y) for y in bl_yrs], y=[bl[y] for y in bl_yrs], mode="lines+markers", name=f"{lbl} (USDA baseline)",
+                    line=dict(color=cc, width=2, dash="dash"), marker=dict(color="#ffffff", size=6, line=dict(color=cc, width=1.5)),
+                    hovertemplate=f"<b>{lbl}, USDA baseline projection</b><br>%{{x}}: %{{y:.2f}}M ac<extra></extra>",
+                ))
         fig.update_layout(
+            title=dict(text=f"Planted Acres Trend: {scope_lbl}", font=dict(size=14, color=TEXT)),
             yaxis_title="Million Acres", xaxis_title="Marketing Year", hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11), bgcolor="rgba(0,0,0,0)"),
-            height=440, margin=dict(l=60, r=20, t=56, b=80), plot_bgcolor=PANEL, paper_bgcolor="rgba(0,0,0,0)",
+            height=440, margin=dict(l=60, r=20, t=80, b=80), plot_bgcolor=PANEL, paper_bgcolor="rgba(0,0,0,0)",
             font=dict(color=TEXT, family="sans-serif", size=12),
             xaxis=dict(tickangle=-45, showgrid=False, linecolor=BORDER, tickfont=dict(size=10), zeroline=False),
             yaxis=dict(gridcolor=BORDER, gridwidth=1, zeroline=False, tickfont=dict(size=10)),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="acr_trend")
+        _snap.chart_buttons("acr_trend", f"Planted_Acres_Trend_{_slug(scope_lbl)}", key="acr_trend")
+        if show_bl and any(chart_cols[c] in ub.CHART_MATCH for c in sel):
+            st.caption("Dashed lines are the USDA baseline projections (national, from the last year of history on). Series without a matching baseline definition are not projected.")
