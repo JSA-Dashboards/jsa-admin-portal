@@ -28,6 +28,8 @@ except Exception:
     NASS_API_KEY = ""
 NASS_API_KEY  = NASS_API_KEY or os.environ.get("NASS_API_KEY", "")
 NASS_BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+_NASS_TTL_FRESH = 900
+_NASS_TTL_HIST = 21600
 NASS_YEARS             = list(range(2026, 2014, -1))   # 2026 → 2015
 _NASS_BENCHMARK_YEAR   = 2023   # most-complete county year — used for % reporting KPI
 STOCKS_CROPS   = ["Corn", "Soybeans", "Wheat", "Sorghum"]
@@ -243,7 +245,7 @@ def _wc_class_param(params: dict, crop: str, cache_ver, county: bool) -> None:
     elif county:
         params.pop("class_desc", None)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def _wc_state_pct_raw(year: int, series: str, cache_ver: str) -> dict:
     """{state: percent} of one wheat sub-class from NASS 'PCT BY TYPE' (best reference period per state).
     Raises on a failed call so the failure is not cached; NASS answers 400 when the series does not exist."""
@@ -480,7 +482,7 @@ def _nass_json(url: str, timeout: int = 45) -> dict:
                 raise
         time.sleep(2 * (i + 1))
 
-@st.cache_data
+@st.cache_data(ttl=_NASS_TTL_HIST)
 def _load_nass_stat_raw(crop: str, year: int, stat_type: str,
                    cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
     """Generic NASS county-level loader for any stat type.
@@ -560,7 +562,7 @@ def load_nass_stat(crop: str, year: int, stat_type: str,
                                             crop, year, stat_type, ["Value"], cache_ver),
                                  crop, stat_type, ["Value"]), crop, year, stat_type, ["Value"])
 
-@st.cache_data
+@st.cache_data(ttl=_NASS_TTL_HIST)
 def _load_nass_state_raw(crop: str, year: int, stat_type: str,
                     cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
     """Query NASS at STATE level for official state-reported totals.
@@ -655,7 +657,7 @@ def load_nass_county(crop: str, year: int = 2025,
         _NASS_COUNTY_ERR[(crop, year)] = f"{type(e).__name__}: {e}"
         return pd.DataFrame(columns=["State", "County", "fips", "Production"])
 
-@st.cache_data
+@st.cache_data(ttl=_NASS_TTL_HIST)
 def _load_nass_county_cached(crop: str, year: int = 2025,
                              cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
     """Load county-level production data.  Kept as a standalone function
@@ -738,7 +740,7 @@ def _load_county_raw_for_est_raw(crop: str, state: str, year: int,
         return df
     return df[df["State"] == state].reset_index(drop=True)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def _county_raw_all_states(crop: str, year: int, stat_type: str, cache_ver: str) -> pd.DataFrame:
     """County rows INCLUDING the OTHER COUNTIES catch-all for any stat type, every state in one response (that is the
     shape the ETL caches; it is also one call instead of one per state). Used only for the estimation pipeline.
@@ -791,7 +793,7 @@ def _load_county_raw_for_est(crop: str, state: str, year: int,
                                             crop, year, stat_type, ["Value_num"], cache_ver),
                                  crop, stat_type, ["Value_num"]), crop, year, stat_type, ["Value_num"])
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def _build_hist_shares(crop: str, state: str, stat_type: str,
                        history_years: tuple, cache_ver: str) -> pd.DataFrame:
     """Olympic-average historical share (county_val / state_total) per county.
@@ -871,7 +873,7 @@ def get_completed_county_data(crop: str, state: str, year: int,
         return _wc_completed_class(state, year, lab, cache_ver)
     return _get_completed_county_data(crop, state, year, stat_type, cache_ver)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def _get_completed_county_data(crop: str, state: str, year: int,
                                stat_type: str, cache_ver: str) -> pd.DataFrame:
     """
@@ -965,7 +967,7 @@ def _get_completed_county_data(crop: str, state: str, year: int,
         missing[["fips","County","District","DistrictCode","Value","is_estimated"]],
     ], ignore_index=True)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def load_grain_stocks(crop: str, year: int, reference_period: str,
                       cache_ver: str) -> pd.DataFrame:
     """
@@ -1463,7 +1465,7 @@ def _nass_view_cfg(metric: str, change_view: str) -> dict:
     }
     return _abs_cfgs[metric]
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def load_nass_state_pct_harvested(crop: str, year: int,
                                    cache_ver: str) -> pd.DataFrame:
     """State-level % harvested = harvested / planted × 100. Returns [State, Value]."""
@@ -1489,7 +1491,7 @@ def _load_state_for_stat(crop: str, year: int, stat_type: str,
     return load_nass_state(crop, year, stat_type, cache_ver)
 
 FORECAST_YEAR = 2026
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def _load_nass_state_forecast_raw(crop: str, stat_type: str, cache_ver: str) -> pd.DataFrame:
     """State-level planted/harvested for FORECAST_YEAR — accepts any reference period."""
     params = {
@@ -1560,7 +1562,7 @@ def _default_yield_sources(crop: str, state: str, cache_ver: str) -> dict:
             break
     return out
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def _county_avg_shares(crop: str, state: str, stat_type: str, years: tuple,
                        cache_ver: str) -> pd.DataFrame:
     """Draw Territory's county basis: each county's average over `years` as a share of the
@@ -1596,7 +1598,7 @@ def _county_avg_shares(crop: str, state: str, stat_type: str, years: tuple,
     g["share"] = g["avg"] / tot
     return g[cols]
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def get_forecast_county_data(crop: str, state: str, yield_est: float,
                              cache_ver: str) -> tuple:
     """
@@ -1651,7 +1653,7 @@ def get_forecast_county_data(crop: str, state: str, yield_est: float,
     }
     return out, state_totals
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def get_asd_forecast_data(crop: str, state: str, yield_est: float,
                            cache_ver: str) -> tuple:
     """
@@ -2551,7 +2553,7 @@ def build_nass_asd_ranking_chart(state_county_v, fips_map, fips_lk,
     )
     return fig
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def cached_nass_county_fig(state: str, crop: str, year: int,
                             metric: str, change_view: str,
                             comp_year: int, cache_ver: str,

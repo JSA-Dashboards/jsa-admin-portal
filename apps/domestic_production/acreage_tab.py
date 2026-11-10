@@ -12,6 +12,7 @@ Differences from the RMA tab:
     workbook cut down to state x year (the workbook itself is not shipped). NASS QuickStats has no prevent-plant series.
   * CRP comes from data/acreage_crp.json (USDA FSA CRPHistoryState86-25), million acres by state and year.
 """
+import base64
 import json
 import re
 from datetime import date
@@ -86,7 +87,14 @@ _ACR_PP_CROPS = ("Corn","Soybeans","Wheat","Cotton","Sorghum","Rice","Peanuts","
 
 
 
-def _render_baseline_html(first_proj_year: int = 2026) -> str:
+@st.cache_data(show_spinner=False)
+def _logo_uri() -> str:
+    """The JSA 50-year logo as a data URI, for the watermark behind the tables (the one the ASD & County tab uses)."""
+    p = HERE / "assets" / "50 Year logo JSA.png"
+    return "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode() if p.exists() else ""
+
+
+def _render_baseline_html(first_proj_year: int = 2026, logo_src: str = "") -> str:
     """USDA's long-term baseline acreage (usda_baseline.py) as its own table: planted and harvested acres of the eight major crops, CRP and the total, one row per crop year, in million acres.
     Styled apart from the history table (slate headers) so a projection is never read as a survey number."""
     HDR1, HDR2, UNIT = "#475569", "#334155", "#eef2f6"
@@ -121,23 +129,27 @@ def _render_baseline_html(first_proj_year: int = 2026) -> str:
         cells += _td(f"{r['crp']:.1f}", bg) + _td(f"{r['total_crp']:.1f}", bg, bold=True)
         cells += "".join(_td(f"{r['harvested'][c]:.1f}", bg) for c in ub.CROPS) + _td(f"{r['harv_total']:.1f}", bg, bold=True)
         body += f"<tr>{cells}</tr>"
+    title_c = "#5e7164"
+    logo_html = (f'<img src="{logo_src}" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);height:60%;max-width:50%;object-fit:contain;'
+                 f'opacity:0.12;pointer-events:none;z-index:1;" />' if logo_src else "")
     return f"""
+<div style="font-size:15px;font-weight:600;color:{title_c};margin:0 0 2px 0;text-align:left;font-family:sans-serif;">
+  USDA Baseline: US Acreage Projections, 2025-2036</div>
+<div style="font-size:0.72rem;color:{MUTED};margin:0 0 8px 0;text-align:left;font-family:sans-serif;">
+  National, million acres &nbsp;|&nbsp; projections completed October 2026 &nbsp;|&nbsp; 25-26 is the base year</div>
+<div style="position:relative;">
 <div style="overflow-x:auto;">
-<p style="font-size:0.9rem;font-weight:700;color:{TEXT};margin:0 0 4px 0;text-align:center;">
-  USDA Baseline: US Acreage Projections, 2025-2036</p>
-<p style="font-size:0.72rem;color:{MUTED};margin:0 0 8px 0;text-align:center;">
-  National, million acres &nbsp;|&nbsp; projections completed October 2026 &nbsp;|&nbsp; 25-26 is the base year</p>
 <table style="border-collapse:collapse;width:100%;font-family:sans-serif;">
 <thead><tr>{h1}</tr><tr>{h2}</tr><tr>{h3}</tr></thead><tbody>{body}</tbody>
 </table>
-<p style="font-size:0.7rem;color:{MUTED};margin:4px 0 0 0;">* CRP = Conservation Reserve Program, an assumption of the baseline. Crop years are the calendar planting year.</p>
-</div>"""
+</div>{logo_html}</div>
+<p style="font-size:0.7rem;color:{MUTED};margin:4px 0 0 0;">* CRP = Conservation Reserve Program, an assumption of the baseline. Crop years are the calendar planting year.</p>"""
 
 
 def _render_acreage_html(rows: list, years: list,
                           title: str, scope_label: str,
                           unit_mul: float = 1.0,
-                          unit_lbl: str = "mil ac") -> str:
+                          unit_lbl: str = "mil ac", logo_src: str = "") -> str:
     """
     Build PRX-style HTML table.
     rows: list of {col_key: value_or_None} dicts, one per year (oldest→newest).
@@ -289,18 +301,22 @@ def _render_acreage_html(rows: list, years: list,
     tbody += "</tbody>"
 
     scope_note = f" — {scope_label}" if scope_label and scope_label != "National" else ""
+    title_c = "#5e7164"
+    logo_html = (f'<img src="{logo_src}" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);height:60%;max-width:50%;object-fit:contain;'
+                 f'opacity:0.12;pointer-events:none;z-index:1;" />' if logo_src else "")
     html = f"""
+<div style="font-size:15px;font-weight:600;color:{title_c};margin:0 0 2px 0;text-align:left;font-family:sans-serif;">
+  US Major Field Crops Area Planted{scope_note}</div>
+<div style="font-size:0.72rem;color:{MUT};margin:0 0 8px 0;text-align:left;font-family:sans-serif;">
+  {title} &nbsp;|&nbsp; {unit_lbl}</div>
+<div style="position:relative;">
 <div style="overflow-x:auto;">
-<p style="font-size:0.9rem;font-weight:700;color:{TXT};margin:0 0 4px 0;text-align:center;">
-  US Major Field Crops Area Planted{scope_note}</p>
-<p style="font-size:0.72rem;color:{MUT};margin:0 0 8px 0;text-align:center;">
-  {title} &nbsp;|&nbsp; {unit_lbl}</p>
 <table style="border-collapse:collapse;width:100%;font-family:sans-serif;">
 {thead}{tbody}
 </table>
+</div>{logo_html}</div>
 <p style="font-size:0.7rem;color:{MUT};margin:4px 0 0 0;">
-  * CRP = Conservation Reserve Program (FSA). Prevent Plant from USDA RMA. Values in {unit_lbl}.</p>
-</div>"""
+  * CRP = Conservation Reserve Program (FSA). Prevent Plant from USDA RMA. Values in {unit_lbl}.</p>"""
     return html
 
 
@@ -481,7 +497,7 @@ def render():
     else:
         tbl_mul, tbl_unit = 1_000_000.0, "ac"
 
-    table_html = _render_acreage_html(acr_rows, cal_yrs, tbl_title, scope_lbl, unit_mul=tbl_mul, unit_lbl=tbl_unit)
+    table_html = _render_acreage_html(acr_rows, cal_yrs, tbl_title, scope_lbl, unit_mul=tbl_mul, unit_lbl=tbl_unit, logo_src=_logo_uri())
     st.markdown(table_html, unsafe_allow_html=True)
     # the table prints its own title (US Major Field Crops Area Planted, the scope, the years), so the snapshot has it
     _snap.card_buttons(table_html, "", 1500, f"Acreage_Summary_{_slug(scope_lbl)}", key="acr_table")
@@ -504,7 +520,7 @@ def render():
             "assumptions, and are not a forecast of any single year.</p></div>",
             unsafe_allow_html=True,
         )
-        bl_html = _render_baseline_html()
+        bl_html = _render_baseline_html(logo_src=_logo_uri())
         st.markdown(bl_html, unsafe_allow_html=True)
         _snap.card_buttons(bl_html, "", 1500, "USDA_Baseline_Acreage_2025_2036", key="acr_baseline_table")
         st.markdown(

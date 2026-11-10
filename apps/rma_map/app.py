@@ -62,6 +62,11 @@ except Exception:
     NASS_API_KEY = ""
 NASS_API_KEY  = NASS_API_KEY or os.environ.get("NASS_API_KEY", "")
 NASS_BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+# How long the NASS tab keeps what it read from the cache (usda-nass-etl refreshes it 6:30 am and 3:00 pm Central, and the report-day
+# numbers land at the 3:00 pm run). Without a limit the tab held its first reading until the app restarted. Forecast-year pulls and
+# everything built from them expire quickly; final-year history, which only a NASS revision changes, expires slowly.
+_NASS_TTL_FRESH = 900
+_NASS_TTL_HIST = 21600
 
 # ── EIA API ────────────────────────────────────────────────────────────────────
 try:
@@ -1030,7 +1035,7 @@ def _wc_class_param(params: dict, crop: str, cache_ver, county: bool) -> None:
         params.pop("class_desc", None)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def _wc_state_pct_raw(year: int, series: str, cache_ver: str) -> dict:
     """{state: percent} of one wheat sub-class from NASS 'PCT BY TYPE' (best reference period per state).
     Raises on a failed call so the failure is not cached; NASS answers 400 when the series does not exist."""
@@ -1284,7 +1289,7 @@ def _nass_json(url: str, timeout: int = 45) -> dict:
 
 
 # ── NASS Data ─────────────────────────────────────────────────────────────────
-@st.cache_data
+@st.cache_data(ttl=_NASS_TTL_HIST)
 def _load_nass_stat_raw(crop: str, year: int, stat_type: str,
                    cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
     """Generic NASS county-level loader for any stat type.
@@ -1365,7 +1370,7 @@ def load_nass_stat(crop: str, year: int, stat_type: str,
                                             crop, year, stat_type, ["Value"], cache_ver),
                                  crop, stat_type, ["Value"]), crop, year, stat_type, ["Value"])
 
-@st.cache_data
+@st.cache_data(ttl=_NASS_TTL_HIST)
 def _load_nass_state_raw(crop: str, year: int, stat_type: str,
                     cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
     """Query NASS at STATE level for official state-reported totals.
@@ -1547,7 +1552,7 @@ def load_nass_county(crop: str, year: int = 2025,
         return pd.DataFrame(columns=["State", "County", "fips", "Production"])
 
 
-@st.cache_data
+@st.cache_data(ttl=_NASS_TTL_HIST)
 def _load_nass_county_cached(crop: str, year: int = 2025,
                              cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
     """Load county-level production data.  Kept as a standalone function
@@ -1636,7 +1641,7 @@ def _load_county_raw_for_est_raw(crop: str, state: str, year: int,
     return df[df["State"] == state].reset_index(drop=True)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def _county_raw_all_states(crop: str, year: int, stat_type: str, cache_ver: str) -> pd.DataFrame:
     """County rows INCLUDING the OTHER COUNTIES catch-all for any stat type, every state in one response (that is the
     shape the ETL caches; it is also one call instead of one per state). Used only for the estimation pipeline.
@@ -1690,7 +1695,7 @@ def _load_county_raw_for_est(crop: str, state: str, year: int,
                                             crop, year, stat_type, ["Value_num"], cache_ver),
                                  crop, stat_type, ["Value_num"]), crop, year, stat_type, ["Value_num"])
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def _build_hist_shares(crop: str, state: str, stat_type: str,
                        history_years: tuple, cache_ver: str) -> pd.DataFrame:
     """Olympic-average historical share (county_val / state_total) per county.
@@ -1795,7 +1800,7 @@ def get_completed_county_data(crop: str, state: str, year: int,
     return _get_completed_county_data(crop, state, year, stat_type, cache_ver)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def _get_completed_county_data(crop: str, state: str, year: int,
                                stat_type: str, cache_ver: str) -> pd.DataFrame:
     """
@@ -1900,7 +1905,7 @@ def get_completed_county_production(crop: str, state: str, year: int,
 
 
 # ── Grain Stocks loader ───────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_HIST, show_spinner=False)
 def load_grain_stocks(crop: str, year: int, reference_period: str,
                       cache_ver: str) -> pd.DataFrame:
     """
@@ -2467,7 +2472,7 @@ def _nass_view_cfg(metric: str, change_view: str) -> dict:
     return _abs_cfgs[metric]
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def load_nass_state_pct_harvested(crop: str, year: int,
                                    cache_ver: str) -> pd.DataFrame:
     """State-level % harvested = harvested / planted × 100. Returns [State, Value]."""
@@ -2498,7 +2503,7 @@ def _load_state_for_stat(crop: str, year: int, stat_type: str,
 FORECAST_YEAR = 2026
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def _load_nass_state_forecast_raw(crop: str, stat_type: str, cache_ver: str) -> pd.DataFrame:
     """State-level planted/harvested for FORECAST_YEAR — accepts any reference period."""
     params = {
@@ -2571,7 +2576,7 @@ def _default_yield_sources(crop: str, state: str, cache_ver: str) -> dict:
     return out
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def _county_avg_shares(crop: str, state: str, stat_type: str, years: tuple,
                        cache_ver: str) -> pd.DataFrame:
     """Draw Territory's county basis: each county's average over `years` as a share of the
@@ -2607,7 +2612,7 @@ def _county_avg_shares(crop: str, state: str, stat_type: str, years: tuple,
     g["share"] = g["avg"] / tot
     return g[cols]
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def get_forecast_county_data(crop: str, state: str, yield_est: float,
                              cache_ver: str) -> tuple:
     """
@@ -2662,7 +2667,7 @@ def get_forecast_county_data(crop: str, state: str, yield_est: float,
     }
     return out, state_totals
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def get_asd_forecast_data(crop: str, state: str, yield_est: float,
                            cache_ver: str) -> tuple:
     """
@@ -3001,7 +3006,7 @@ def load_echo_aquaculture(cache_ver: str = _CACHE_VERSION) -> pd.DataFrame:
 def _render_acreage_html(rows: list, years: list,
                           title: str, scope_label: str,
                           unit_mul: float = 1.0,
-                          unit_lbl: str = "mil ac") -> str:
+                          unit_lbl: str = "mil ac", logo_src: str = "") -> str:
     """
     Build PRX-style HTML table.
     rows: list of {col_key: value_or_None} dicts, one per year (oldest→newest).
@@ -3153,22 +3158,26 @@ def _render_acreage_html(rows: list, years: list,
     tbody += "</tbody>"
 
     scope_note = f" — {scope_label}" if scope_label and scope_label != "National" else ""
+    title_c = ACCENT
+    logo_html = (f'<img src="{logo_src}" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);height:60%;max-width:50%;object-fit:contain;'
+                 f'opacity:0.12;pointer-events:none;z-index:1;" />' if logo_src else "")
     html = f"""
+<div style="font-size:15px;font-weight:600;color:{title_c};margin:0 0 2px 0;text-align:left;font-family:sans-serif;">
+  US Major Field Crops Area Planted{scope_note}</div>
+<div style="font-size:0.72rem;color:{MUT};margin:0 0 8px 0;text-align:left;font-family:sans-serif;">
+  {title} &nbsp;|&nbsp; {unit_lbl}</div>
+<div style="position:relative;">
 <div style="overflow-x:auto;">
-<p style="font-size:0.9rem;font-weight:700;color:{TXT};margin:0 0 4px 0;text-align:center;">
-  US Major Field Crops Area Planted{scope_note}</p>
-<p style="font-size:0.72rem;color:{MUT};margin:0 0 8px 0;text-align:center;">
-  {title} &nbsp;|&nbsp; {unit_lbl}</p>
 <table style="border-collapse:collapse;width:100%;font-family:sans-serif;">
 {thead}{tbody}
 </table>
+</div>{logo_html}</div>
 <p style="font-size:0.7rem;color:{MUT};margin:4px 0 0 0;">
-  * CRP = Conservation Reserve Program (FSA). Prevent Plant from USDA RMA. Values in {unit_lbl}.</p>
-</div>"""
+  * CRP = Conservation Reserve Program (FSA). Prevent Plant from USDA RMA. Values in {unit_lbl}.</p>"""
     return html
 
 
-def _render_baseline_html(first_proj_year: int = 2026) -> str:
+def _render_baseline_html(first_proj_year: int = 2026, logo_src: str = "") -> str:
     """USDA's long-term baseline acreage (usda_baseline.py) as its own table: planted and harvested acres of the eight major crops, CRP and the total, one row per crop year, in million acres.
     Styled apart from the history table (slate headers) so a projection is never read as a survey number."""
     HDR1, HDR2, UNIT = "#475569", "#334155", "#eef2f6"
@@ -3203,17 +3212,21 @@ def _render_baseline_html(first_proj_year: int = 2026) -> str:
         cells += _td(f"{r['crp']:.1f}", bg) + _td(f"{r['total_crp']:.1f}", bg, bold=True)
         cells += "".join(_td(f"{r['harvested'][c]:.1f}", bg) for c in ub.CROPS) + _td(f"{r['harv_total']:.1f}", bg, bold=True)
         body += f"<tr>{cells}</tr>"
+    title_c = ACCENT
+    logo_html = (f'<img src="{logo_src}" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);height:60%;max-width:50%;object-fit:contain;'
+                 f'opacity:0.12;pointer-events:none;z-index:1;" />' if logo_src else "")
     return f"""
+<div style="font-size:15px;font-weight:600;color:{title_c};margin:0 0 2px 0;text-align:left;font-family:sans-serif;">
+  USDA Baseline: US Acreage Projections, 2025-2036</div>
+<div style="font-size:0.72rem;color:{MUTED};margin:0 0 8px 0;text-align:left;font-family:sans-serif;">
+  National, million acres &nbsp;|&nbsp; projections completed October 2026 &nbsp;|&nbsp; 25-26 is the base year</div>
+<div style="position:relative;">
 <div style="overflow-x:auto;">
-<p style="font-size:0.9rem;font-weight:700;color:{TEXT};margin:0 0 4px 0;text-align:center;">
-  USDA Baseline: US Acreage Projections, 2025-2036</p>
-<p style="font-size:0.72rem;color:{MUTED};margin:0 0 8px 0;text-align:center;">
-  National, million acres &nbsp;|&nbsp; projections completed October 2026 &nbsp;|&nbsp; 25-26 is the base year</p>
 <table style="border-collapse:collapse;width:100%;font-family:sans-serif;">
 <thead><tr>{h1}</tr><tr>{h2}</tr><tr>{h3}</tr></thead><tbody>{body}</tbody>
 </table>
-<p style="font-size:0.7rem;color:{MUTED};margin:4px 0 0 0;">* CRP = Conservation Reserve Program, an assumption of the baseline. Crop years are the calendar planting year.</p>
-</div>"""
+</div>{logo_html}</div>
+<p style="font-size:0.7rem;color:{MUTED};margin:4px 0 0 0;">* CRP = Conservation Reserve Program, an assumption of the baseline. Crop years are the calendar planting year.</p>"""
 
 
 def _state_pct_change(cur_df: pd.DataFrame, cmp_df: pd.DataFrame) -> pd.DataFrame:
@@ -4272,7 +4285,7 @@ def build_nass_asd_ranking_chart(state_county_v, fips_map, fips_lk,
 # Cache key = hashable args only.  _geo / _centroids / _logo / _fips_lk are
 # excluded (underscore prefix) so large objects aren't hashed into the key.
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=_NASS_TTL_FRESH, show_spinner=False)
 def cached_nass_county_fig(state: str, crop: str, year: int,
                             metric: str, change_view: str,
                             comp_year: int, cache_ver: str,
@@ -6777,7 +6790,7 @@ def main():
 
             _html = _render_acreage_html(
                 _acr_rows, _acr_cal_yrs, _tbl_title, _scope_lbl,
-                unit_mul=_tbl_mul, unit_lbl=_tbl_unit,
+                unit_mul=_tbl_mul, unit_lbl=_tbl_unit, logo_src=logo_50yr,
             )
             st.markdown(_html, unsafe_allow_html=True)
 
@@ -6801,7 +6814,7 @@ def main():
                     "assumptions, and are not a forecast of any single year.</p></div>",
                     unsafe_allow_html=True,
                 )
-                st.markdown(_render_baseline_html(), unsafe_allow_html=True)
+                st.markdown(_render_baseline_html(logo_src=logo_50yr), unsafe_allow_html=True)
                 st.markdown(
                     f"<p style='font-size:0.72rem;color:{MUTED};margin-top:8px;'>Source: {ub.SOURCE} "
                     "The baseline's cotton is upland cotton only and its total is the eight crops shown (it has no sunflower, canola or hay), "
