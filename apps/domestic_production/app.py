@@ -626,9 +626,11 @@ def _table_to_excel(rows: list, years: list, chg_label: str, title: str,
         records.append(rec)
     df = pd.DataFrame(records)
     buf = BytesIO()
+    # Excel sheet names are at most 31 characters and cannot hold \ / ? * [ ] : (a yield title like "Corn Yield (Bu/Ac) 2026" has a slash)
+    sheet = re.sub(r"[\[\]:*?/\\]", "-", str(title)).strip("'")[:31] or "Table"
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=title[:31])
-        ws = writer.sheets[title[:31]]
+        df.to_excel(writer, index=False, sheet_name=sheet)
+        ws = writer.sheets[sheet]
         for col in ws.columns:
             max_len = max((len(str(c.value)) if c.value is not None else 0) for c in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 20)
