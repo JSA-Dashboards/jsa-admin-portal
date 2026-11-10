@@ -232,6 +232,8 @@
     "setup_poller_auth.py",
     "fetch_southport_email.py",
     "convert_southport.py",
+    "weekly_email.py",
+    "data_age_check.py",
     "update_data.*"
    ],
    "replace": {

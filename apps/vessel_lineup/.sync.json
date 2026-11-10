@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "ddae0a97af3a04d31e98c68ef9c65f8ffddfbad9",
+ "commit": "573ba69eb57170463effa42ad9c61564c351d8bb",
  "files": {
   "app.py": "203263cd877efe05048a0ed3a7a5f5ac5439fa78ad47f89e1629967548d8f0c2",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
@@ -28,7 +28,7 @@
   "fact_model/ocean_argentina.py": "adb21c78f1588fd40985dd7fe7a35dc0674af1222bd823cbb31a1400b318fbce",
   "fact_model/store.py": "395bf807cb153e4357b44be455888c1f10c07490c76822f2d4bc29adc7e8eed7",
   "fact_model/summary.py": "0471dc76cd1f5634be3f774ec3a3f03771b06887c152c6f11e9c404645f55d67",
-  "vl_argentina_poller.py": "3999048464bf7aececce022251fd6ef361ae6a705f14853ce1210521b12d1406",
+  "vl_argentina_poller.py": "64df07f32ca1e8d85a2ae38213d5802c9e97d96d99a92ace6ad88208ed459419",
   "vl_backfill_aps.py": "7e4bb479d5b69bf55f04230d3bfeedbe407984f66779e236423f47531901d479",
   "vl_backfill_argentina.py": "fb92781f2130a6731e77eb87059e7224c98d71213fe5ca39800d2c0f44f677e1",
   "vl_backfill_history.py": "08b351a7107fdf1989aaab2e42fd3867bbc3d67329094d7af71a5eccf0c6dffa",
@@ -36,9 +36,9 @@
   "vl_brazil_lineup_import.py": "1a6ffd20b28c5af95e090b8fb6f32498fa45775cda6aa86677035b81651a99ce",
   "vl_brazil_parser.py": "9418f1bdd00d382835c8ceab48bee2f19fa03c21c70cd8ade87071bbcb194bd8",
   "vl_build_facts.py": "ec2dcf039d6951216654b24fafcd59fb90994a83e037134c0b7dfcbd491f3709",
-  "vl_copy_tools.py": "47249661f2a4853608f7f519ba80831bfdfdd2313ad0a5b80ef76e964d6c37f2",
+  "vl_copy_tools.py": "16e260658fa842a260e1e78d82f8d83f3989e75f2e5f2104b0a6467e5bc9a770",
   "vl_data_sync.py": "e61099fe4eb0c7031503c55241ef0b9cbaa2c2a7635a4d8b6982920bc1500933",
-  "vl_overview.py": "62126df106f9d52eadac57d1e46ddc1316bfa552d52aa4f1437435e56861c712",
+  "vl_overview.py": "dd0e622e3397551857eb506187dda7a70eaf3940b382cd4b32e209199eb4550b",
   "vl_refresh_combo_shares.py": "a5c8c047fca5cc5249ac1e216809bdbce97c06e00c9b0313c33414bc67060c2d",
   "vl_refresh_facts.py": "8c529631376dc5943edb7a65dc4380ae54433751c8afa3dc2604141af6a82dc4",
   "vl_refresh_great_lakes.py": "c21d9f36769e9d06fc3df0b0071ea50daa2d391cb3eac9d62bcdc4efda8bd88b",
