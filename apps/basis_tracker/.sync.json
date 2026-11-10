@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "aaabd5cbdeabc9152443f7888fb513980473f203",
+ "commit": "fed82113659953530feff91152cae6e9f1f88216",
  "files": {
   "app.py": "10a69a4ada8df2695cc7da93b80bd9c57dfa455a478ee21a11933e8da9cc1d22",
   "assets/50 Year logo JSA.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
@@ -32,7 +32,7 @@
   "bt_cihedging_scraper.py": "6c182dd2d17c494db656b08bdfa5877ee40084d8c76aedfa556a3d6ce5c24f31",
   "bt_client_report.py": "bb7e1f83f29c5df74a5e36e3065f471f764ed7b771e19b743f552acf0f86d018",
   "bt_cpi_scraper.py": "386e087ad2fb691f16d205e056b7e4541b99aec62c902a15e9ca8e64815e3e93",
-  "bt_database.py": "77d246481ec4de24932bf088517e7544e82fbfeaa6a27e3e918bc68453623fc5",
+  "bt_database.py": "a0c22e3f720cc27b2500e5f70fd1ddf7933a2a129952d60969bbed5a7efc01c4",
   "bt_delivery_period.py": "2786db029e276605ea04789f4dc2c700a08ef836c4fbc29d53755686d3c13ebf",
   "bt_dj_ocr.py": "f2788e502b9c876cc9b5eddcecf556c6bbda3d4ab7e7d7adf59d88fa26ba532e",
   "bt_dj_run.py": "09bb647098729c27eecc40088c06f60015b0dd0ef39721589c44638de7163b00",
