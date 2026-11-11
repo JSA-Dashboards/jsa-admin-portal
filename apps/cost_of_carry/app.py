@@ -807,6 +807,14 @@ def first_notice_day(expiration: date) -> date:
     return (first_of_delivery_month - pd.offsets.BDay(1)).date()
 
 
+def last_trade_day(year: int, month: int) -> date:
+    """CBOT grain and oilseed last trading day: the business day before the 15th of the
+    contract month. It reproduces the final session of every archived corn/soybean contract
+    2008-2021 and every expiration Massive lists today, so a prior-year leg gets its real
+    expiry rather than the current contract's day-of-month."""
+    return vsr_tracker.prev_business_day(date(year, month, 15))
+
+
 MATRIX_ROTATION_BDAYS = 5
 
 
@@ -894,7 +902,7 @@ def load_deep_seasonal_histories(near: str, far: str, product_code: str, api_key
                 series = archive.get((product_code, letter, year))
                 if series is not None and len(series):
                     hist[key] = series
-                    expiries[key] = date(year, base_expiry.month, min(base_expiry.day, 28))
+                    expiries[key] = last_trade_day(year, base_expiry.month)
 
     if live_tickers:
         fetched = get_settlement_histories(list(live_tickers), api_key)
@@ -904,7 +912,9 @@ def load_deep_seasonal_histories(near: str, far: str, product_code: str, api_key
                 hist[key] = series
                 letter, year = key.split("_")[0][len(product_code):], int(key.rsplit("_", 1)[1])
                 base_expiry = near_expiry if letter == near_letter else far_expiry
-                expiries[key] = date(year, base_expiry.month, min(base_expiry.day, 28))
+                # The current contract keeps the feed's own expiry; prior years use the rule.
+                expiries[key] = (base_expiry if year == base_expiry.year
+                                 else last_trade_day(year, base_expiry.month))
 
     return hist, expiries
 
