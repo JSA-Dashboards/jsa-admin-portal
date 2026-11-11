@@ -343,7 +343,7 @@ def plotly_config(filename: str) -> dict:
 
 def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None, styler=None):
     """Copy and PNG, both of the same snapshot image — the styled table when `styler` is
-    given (colours, formats, watermark and the derived-spreads note beside it), otherwise
+    given (colours, formats, watermark and the derived-spreads note along its bottom), otherwise
     the chart. Drawn in the browser, so Cloud's fragile kaleido never comes into it."""
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
@@ -364,7 +364,7 @@ DERIVED_SPREADS_NOTE = (
     "Spreads are **derived** — calculated from each leg's settlement, not exchange-traded "
     "instruments — and may differ from quoted spread markets."
 )
-# Beside the table inside a copied/downloaded image, so a pasted screenshot carries it.
+# Along the bottom of the table inside a copied/downloaded image, so a pasted screenshot carries it.
 SNAPSHOT_NOTE_HTML = (
     "<b>Spreads are derived</b><br><br>Calculated from each leg's settlement — not "
     "exchange-traded instruments — and may differ from quoted spread markets."

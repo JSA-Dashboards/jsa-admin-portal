@@ -1,8 +1,8 @@
 {
  "branch": "main",
- "commit": "8a5f91f6a122c5485c1b2e6f2db4708265d045e6",
+ "commit": "e68cc62adf881d2520fce83d45995c8f46cbc4e3",
  "files": {
-  "app.py": "28ce67495a7173e2a6d49a0a6f8df80ea426bbd14121918a6598bcea0cee1702",
+  "app.py": "e2ad11ce6bb24282224746dd24038a5964d02c44008092234f19221b81f4080e",
   "assets/jsa_favicon.png": "a0729609eb012c14b0d9b4d47c8cec8354d9eab3ce7c94847fde35d4cc03b190",
   "assets/logo-50yr.png": "11593824007e3fb71f048b21bb91b12f800e01f64c678e63d4db08bf67c2333a",
   "assets/logo-full.png": "3767cc8df9b2efae4f2b4b82f5380d0720cb9d504c1eb369cca3db5a1affee3a",
@@ -12,7 +12,7 @@
   "coc_massive_api.py": "dc87262f3ddc236d8427dea6f49025f10128bdff5e236bfa78d13b8a1ebd8ee7",
   "coc_seasonal_pattern.py": "002be561a8f64f2e0fb14494267f047b7e49fc6fa54fe2f29fdfe70ffb1d60d9",
   "coc_settlement_archive.py": "679bf7f66c38c1bdb13ead8bd20c9fff96eab57bb32185f08bd0c569600463fe",
-  "coc_snapshot_copy.py": "c19ba1ea7d698aeee48ed7546253c313661185f94c3782244e7435992500ed72",
+  "coc_snapshot_copy.py": "610e07f28f89a3686cd02da3308d72ba7c163e8bea01eb2cbca097e3794a27ba",
   "coc_snowflake_db.py": "9746b6add9d78234ee8475669abb8c72ebbb7baff5c4c8b373216fd1dcb8f199",
   "coc_stocks_use.py": "5f6f96f3a9af81fdfcd1bc59ab6443f702d1c9644db7b39a9b803cbc3f4e172a",
   "coc_storage_rates.py": "2953ec8971b19fad286e515a674edf2e08150ca64962a2f152a289fd4ead7a1e",

@@ -25,9 +25,6 @@ import streamlit as st
 PLOTLY_UMD = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"
 HTML2CANVAS_ESM = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm"
 CHART_WIDTH = 1400
-# Below this table height the side note would set the image's height, leaving a tall
-# column of text beside a short table; such tables get the note underneath instead.
-NOTE_SIDE_MIN_HEIGHT = 260
 
 _HTML = """
 <div class="jsa-snap-row">
@@ -55,7 +52,6 @@ _JS = f"""
 const PLOTLY_UMD = "{PLOTLY_UMD}";
 const HTML2CANVAS_ESM = "{HTML2CANVAS_ESM}";
 const CHART_WIDTH = {CHART_WIDTH};
-const NOTE_SIDE_MIN_HEIGHT = {NOTE_SIDE_MIN_HEIGHT};
 
 function dataUrlToBlob(url) {{
   return fetch(url).then((r) => r.blob());
@@ -139,25 +135,16 @@ async function tableBlob(html, watermark, note) {{
   host.appendChild(body);
   document.body.appendChild(host);
 
-  // The image travels further than the page does, so the disclaimer rides inside it.
-  // Beside the table only where the table is tall enough to carry it without stretching
-  // the picture; otherwise as a line underneath, which never changes the image's width.
+  // The image travels further than the page does, so the disclaimer rides inside it, as
+  // one flowing line along the bottom of the table (never widening the picture).
   if (note) {{
-    const tall = wrap.getBoundingClientRect().height >= NOTE_SIDE_MIN_HEIGHT;
-    const side = document.createElement("div");
-    if (tall) {{
-      side.style.cssText = "width:210px;flex:0 0 210px;font-size:11px;line-height:1.45;" +
-        "color:#6b7280;border-left:1px solid #e6e9ef;padding:2px 0 0 14px;";
-      side.innerHTML = note;
-      body.appendChild(side);
-    }} else {{
-      side.style.cssText = "max-width:" + Math.max(wrap.scrollWidth, 320) + "px;" +
-        "font-size:11px;line-height:1.45;color:#6b7280;" +
-        "border-top:1px solid #e6e9ef;margin-top:10px;padding-top:8px;";
-      // One flowing line, so the footer stays a couple of rows tall at most.
-      side.innerHTML = note.split("<br><br>").join(" ").split("<br>").join(" ");
-      host.appendChild(side);
-    }}
+    const foot = document.createElement("div");
+    foot.style.cssText = "max-width:" + Math.max(wrap.scrollWidth, 320) + "px;" +
+      "font-size:11px;line-height:1.45;color:#6b7280;" +
+      "border-top:1px solid #e6e9ef;margin-top:10px;padding-top:8px;";
+    foot.innerHTML = note.split("<br><br>").join(" ").split("<br>").join(" ");
+    foot.querySelectorAll("b").forEach((b) => {{ b.style.marginRight = "6px"; }});
+    host.appendChild(foot);
   }}
   try {{
     if (watermark) {{
@@ -240,7 +227,7 @@ def copy_chart_button(fig, filename: str, key: str):
 def copy_table_button(styler: "pd.io.formats.style.Styler", filename: str, key: str,
                       watermark_uri: str | None = None, note: str | None = None):
     """Copy / PNG buttons for a table, snapshotting the Styler's HTML (colours and
-    formats). `note` is HTML placed in a column to the right of the table inside the
+    formats). `note` is HTML written as a line along the bottom of the table inside the
     image, so a disclaimer travels with a pasted screenshot."""
     html = styler.hide(axis="index").to_html()
     _COMPONENT(key=f"snap_{key}", width=BUTTONS_WIDTH,
