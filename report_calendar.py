@@ -27,6 +27,8 @@ WHERE THE DATES COME FROM
               The Daily is published at 8:30 AM ET. Crop reports are tagged grain AND international, so they also show on the Grain card.
   Brazil      CONAB's own calendar PDF, typed (CONAB_*): the monthly grain surveys, the crop-monitoring bulletins and the Monday 7 PM Brasilia
               crop-progress release. Tagged grain AND international.
+  China       the State Council's holiday notices (typed from the Xinhua texts: CHINA_HOLIDAYS / CHINA_MAKEUP_WORKDAYS), tagged holiday; a holiday that
+              runs several days is ONE event with a span.
   Argentina   NOT included: the Buenos Aires Grain Exchange sits behind a Cloudflare challenge and Rosario's site shows no release calendar,
               so there is no official date to show. (The tab says so.)
 Times are shown in Central.
@@ -340,16 +342,16 @@ def holiday_events(today: date) -> list[dict]:
                 closed_dates.add(obs)
             out.append({"when": _noon(obs), "title": f"{name}{tag}", "short": name, "source": "US federal holiday", "tags": frozenset({H}),
                         "note": "Federal agencies (USDA, BLS, EIA, CFTC) are closed and may move releases. CME: " + cme_text,
-                        "notime": True, "closed": closed})
+                        "notime": True, "closed": closed, **({"cme_alert": cme_text} if closed else {})})
     for d in gf:
         if start <= d <= end:
             out.append({"when": _noon(d), "title": "Good Friday", "short": "Good Friday", "source": "CME", "tags": frozenset({H}),
-                        "note": "Not a federal holiday. CME: " + closed_note(d), "notime": True, "closed": True})
+                        "note": "Not a federal holiday. CME: " + closed_note(d), "notime": True, "closed": True, "cme_alert": closed_note(d)})
             closed_dates.add(d)
     for d, name, kind, text in D.CME_HOLIDAY_HOURS:
         if kind == "early" and start <= d <= end:
             out.append({"when": _noon(d), "title": f"CME early close: {name}", "short": "CME early close", "source": "CME", "tags": frozenset({H}),
-                        "note": text, "notime": True, "closed": False})
+                        "note": text, "notime": True, "closed": False, "cme_alert": text, "early": True})
     return out
 
 
@@ -471,6 +473,28 @@ def conab_events(today: date) -> list[dict]:
     return out
 
 
+def china_events(today: date) -> list[dict]:
+    """China's public holidays (one event each, with a span) and the make-up working days, from last month on. Typed from the State Council notices."""
+    start = today - timedelta(days=45)
+    out = []
+    for name, a, b in D.CHINA_HOLIDAYS:
+        if b < start:
+            continue
+        days = (b - a).days + 1
+        rng = f"{a:%b} {a.day}" + (f" - {b:%b} {b.day}" if b != a else "")
+        out.append({"when": _noon(a), "span_end": b, "title": f"China: {name} holiday", "short": f"China {name.split(' ')[0]}", "source": "China State Council",
+                    "tags": frozenset({H}), "china": True, "notime": True, "closed": False,
+                    "note": (f"{rng} ({days} day{'s' if days > 1 else ''}). Public holiday: offices are closed and mainland markets, including the Dalian "
+                             "and Zhengzhou futures exchanges, are normally closed. Check the exchange's own notice for the days around it.")})
+    for d, name in D.CHINA_MAKEUP_WORKDAYS:
+        if d >= start:
+            out.append({"when": _noon(d), "title": f"China: make-up workday ({name})", "short": "China workday", "source": "China State Council",
+                        "tags": frozenset({H}), "china": True, "notime": True, "closed": False,
+                        "note": "A weekend day worked to make up for the holiday. Offices and businesses are open; mainland exchanges normally stay closed on weekends, "
+                                "make-up days included."})
+    return out
+
+
 def sort_events(events: list[dict]) -> list[dict]:
     return sorted(events, key=lambda e: (e["when"], e["title"]))
 
@@ -488,9 +512,22 @@ def with_any_tag(events: list[dict], tags: set | frozenset) -> list[dict]:
     return [e for e in events if e["tags"] & set(tags)]
 
 
+def _first(e: dict) -> date:
+    return e["when"].date()
+
+
+def _last(e: dict) -> date:
+    return e.get("span_end") or e["when"].date()
+
+
+def covers(e: dict, d: date) -> bool:
+    """Whether the event is on day `d` (a multi-day holiday is on every day from its first to its last)."""
+    return _first(e) <= d <= _last(e)
+
+
 def between(events: list[dict], start: date, end: date) -> list[dict]:
-    """Events dated start..end inclusive (Central dates)."""
-    return [e for e in events if start <= e["when"].date() <= end]
+    """Events on any day of start..end inclusive (Central dates); a multi-day holiday counts when it overlaps."""
+    return [e for e in events if _first(e) <= end and _last(e) >= start]
 
 
 def week_of(today: date) -> tuple[date, date, bool]:
@@ -610,7 +647,7 @@ def load_all(today: date) -> tuple[list[dict], list[str]]:
         events += parse_statcan(sc, today)
     else:
         notes.append("Statistics Canada's release schedule could not be read just now, so its dates are missing.")
-    events += export_sales_events(today) + export_inspections_events(today) + holiday_events(today) + conab_events(today)
+    events += export_sales_events(today) + export_inspections_events(today) + holiday_events(today) + conab_events(today) + china_events(today)
     return sort_events(events), notes
 
 
@@ -633,7 +670,12 @@ CSS = """
 .jsa-rc-chip.eco em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#9a6a12; margin-left:0.4rem; }
 .jsa-rc-chip.hol { border-color:#c9d3e0; background:#f1f5fa; }
 .jsa-rc-chip.closed { border-color:#e6b5b5; background:#fdf0f0; }
-.jsa-rc-chip.hol em, .jsa-rc-chip.closed em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#8a4b4b; margin-left:0.4rem; }
+.jsa-rc-chip.cme { border-color:#d9534f; background:#fdecec; box-shadow:0 0 0 1px #d9534f33; }
+.jsa-rc-chip.cme em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#b02a2a; margin-left:0.4rem; }
+.jsa-rc-alert { background:#fdecec; border:1px solid #e3a3a1; border-left:4px solid #d9534f; border-radius:6px; padding:0.4rem 0.7rem; margin:0 0 0.5rem; font-size:0.82rem; color:#5b1f1f; line-height:1.45; }
+.jsa-rc-alert b { color:#b02a2a; letter-spacing:0.04em; text-transform:uppercase; font-size:0.68rem; display:block; margin-bottom:0.1rem; }
+.jsa-rc-alert div + div { margin-top:0.2rem; }
+.jsa-rc-chip.hol em, .jsa-rc-chip.closed em, .jsa-rc-chip.cme em.x { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#8a4b4b; margin-left:0.4rem; }
 .jsa-rc-chip.intl { border-color:#b9d3e3; background:#eef6fb; }
 .jsa-rc-chip.intl em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#2d6a8f; margin-left:0.4rem; }
 .jsa-rc-none { color:#8a9a90; font-size:0.84rem; padding:0.2rem 0; }
@@ -650,6 +692,7 @@ CSS = """
 .jsa-rc-month .e.hol { background:#e6edf6; }
 .jsa-rc-month .e.intl { background:#dcecf6; }
 .jsa-rc-month .e.closed { background:#fbe3e3; }
+.jsa-rc-month .e.cme { background:#f8caca; font-weight:600; color:#7a1f1f; }
 .jsa-rc-month .more { color:#8a9a90; margin-top:2px; display:block; }
 @media (max-width: 700px) { .jsa-rc-day { flex-direction:column; gap:0.15rem; } .jsa-rc-month td { height:4rem; } }
 </style>
@@ -665,9 +708,11 @@ def chip_html(e: dict) -> str:
     eco, hol, intl = E in e["tags"], H in e["tags"], I in e["tags"]
     tip = html.escape((e["note"] + " · " if e["note"] else "") + e["source"])
     when = "" if e.get("notime") else f'<i>{_clock(e["when"])}</i>'
-    kind = " eco" if eco else (" closed" if e.get("closed") else " hol") if hol else " intl" if intl else ""
+    kind = " eco" if eco else (" cme" if e.get("cme_alert") else " hol") if hol else " intl" if intl else ""
+    label = ("ECON" if eco else "CME CLOSED" if e.get("closed") and e.get("cme_alert") else "CME HOURS" if e.get("cme_alert")
+             else "CHINA" if e.get("china") else "HOLIDAY" if hol else "INTL" if intl else "")
     return (f'<span class="jsa-rc-chip{kind}" title="{tip}">{when}<b>{html.escape(e["title"])}</b>'
-            + ('<em>ECON</em>' if eco else '<em>HOLIDAY</em>' if hol else '<em>INTL</em>' if intl else "") + "</span>")
+            + (f"<em>{label}</em>" if label else "") + "</span>")
 
 
 def week_html(events: list[dict], today: date, label: str, warn: str | None = None) -> str:
@@ -676,13 +721,18 @@ def week_html(events: list[dict], today: date, label: str, warn: str | None = No
     wk = between(events, start, end)
     head = f"{'Next week' if nxt else 'This week'}'s reports<span>{start:%b} {start.day} – {end.day if end.month == start.month else end.strftime('%b ') + str(end.day)}</span>"
     head = f'<div class="jsa-rc-head">{html.escape(label)} · {head}</div>'
+    alerts = [e for e in wk if e.get("cme_alert")]
+    banner = ""
+    if alerts:
+        lines = "".join(f'<div>{_first(e):%a %b} {_first(e).day} &middot; {html.escape(e["title"])}: {html.escape(e["cme_alert"])}</div>' for e in alerts)
+        banner = f'<div class="jsa-rc-alert"><b>CME holiday hours this week</b>{lines}</div>'
     if not wk:
         body = '<div class="jsa-rc-none">No reports are scheduled this week.</div>'
     else:
         rows = []
         for i in range(7):
             d = start + timedelta(days=i)
-            day = [e for e in wk if e["when"].date() == d]
+            day = [e for e in wk if max(_first(e), start) == d]
             if not day:
                 continue
             is_today = d == today
@@ -693,7 +743,7 @@ def week_html(events: list[dict], today: date, label: str, warn: str | None = No
     foot = ('<div class="jsa-rc-foot">Times are Central. USDA dates from NASS and the WASDE schedule; economic reports from BLS (CPI, PPI) and EIA. '
             "Dates can change: check the agency before you rely on one."
             + (f' <span class="jsa-rc-warn">{html.escape(warn)}</span>' if warn else "") + "</div>")
-    return f'<div class="jsa-rc">{head}{body}{foot}</div>'
+    return f'<div class="jsa-rc">{head}{banner}{body}{foot}</div>'
 
 
 def month_html(events: list[dict], year: int, month: int, today: date, max_per_day: int = 4) -> str:
@@ -702,9 +752,9 @@ def month_html(events: list[dict], year: int, month: int, today: date, max_per_d
     for wk in cal.monthdatescalendar(year, month):
         cells = []
         for d in wk:
-            day = [e for e in events if e["when"].date() == d]
+            day = [e for e in events if covers(e, d)]
             cls = ("out " if d.month != month else "") + ("today" if d == today else "")
-            items = "".join(f'<span class="e{" eco" if E in e["tags"] else (" closed" if e.get("closed") else " hol") if H in e["tags"] else " intl" if I in e["tags"] else ""}" title="{html.escape(("" if e.get("notime") else _clock(e["when"]) + " ") + e["title"])}">'
+            items = "".join(f'<span class="e{" eco" if E in e["tags"] else (" cme" if e.get("cme_alert") else " hol") if H in e["tags"] else " intl" if I in e["tags"] else ""}" title="{html.escape(("" if e.get("notime") else _clock(e["when"]) + " ") + e["title"])}">'
                             f'{html.escape(e.get("short") or e["title"].split(":")[0])}</span>' for e in day[:max_per_day])
             more = f'<span class="more">+{len(day) - max_per_day} more</span>' if len(day) > max_per_day else ""
             cells.append(f'<td class="{cls.strip()}"><span class="n">{d.day}</span>{items}{more}</td>')
@@ -714,7 +764,8 @@ def month_html(events: list[dict], year: int, month: int, today: date, max_per_d
 
 def list_rows(events: list[dict]) -> list[dict]:
     """Rows for a table: Date, Time (CT), Report, Source, Notes."""
-    return [{"Date": e["when"].strftime("%a %b ") + str(e["when"].day), "Time (CT)": "all day" if e.get("notime") else _clock(e["when"]),
+    return [{"Date": e["when"].strftime("%a %b ") + str(e["when"].day) + (f" - {_last(e):%b} {_last(e).day}" if _last(e) != _first(e) else ""),
+             "Time (CT)": "all day" if e.get("notime") else _clock(e["when"]),
              "Report": e["title"],
              "Type": "Holiday" if H in e["tags"] else "Economic" if E in e["tags"] else
              "International" + (" grain" if G in e["tags"] else " livestock" if L in e["tags"] else "") if I in e["tags"] else
@@ -745,7 +796,7 @@ def _events(today: date):
     note = "Some live release calendars (NASS, EIA, CFTC, Statistics Canada) could not be read just now, so those reports are missing."
     def offline():
         return sort_events(wasde_events() + bls_events() + export_sales_events(today) + export_inspections_events(today)
-                           + holiday_events(today) + conab_events(today))
+                           + holiday_events(today) + conab_events(today) + china_events(today))
 
     if _time.time() < _fail_until:
         return offline(), [note]
@@ -802,7 +853,7 @@ def render_tab() -> None:
         picked = st.selectbox("Month", months, index=1, format_func=lambda ym: f"{calendar.month_name[ym[1]]} {ym[0]}",
                               key="rc_month", label_visibility="collapsed")
     st.markdown(month_html(scoped, picked[0], picked[1], today), unsafe_allow_html=True)
-    month_events = [e for e in scoped if (e["when"].year, e["when"].month) == picked]
+    month_events = between(scoped, date(picked[0], picked[1], 1), date(picked[0], picked[1], calendar.monthrange(*picked)[1]))
     st.markdown(f"##### {calendar.month_name[picked[1]]} {picked[0]}: {len(month_events)} reports")
     if not shown:
         st.caption("Switch at least one of Grain, Livestock, Economic, Holidays or International on to see entries.")

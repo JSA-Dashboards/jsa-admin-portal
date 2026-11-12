@@ -257,3 +257,44 @@ def test_international_crop_reports_reach_the_grain_card_and_have_their_own_swit
     assert {e["title"] for e in rc.with_any_tag(ev, {"international"})} == {e["title"] for e in ev}
     rows = rc.list_rows([e for e in ev if e["title"] == "StatCan: Canada CPI"])
     assert rows[0]["Type"] == "International"
+
+
+# -- China holidays and the CME banner ------------------------------------------------------
+def test_china_holidays_follow_the_state_council_notices():
+    ev = rc.china_events(date(2026, 11, 12))
+    hol = {e["title"]: e for e in ev if e["title"].endswith("holiday")}
+    spring = [e for e in ev if e["title"] == "China: Spring Festival holiday"][0]
+    assert spring["when"].date() == date(2027, 2, 5) and spring["span_end"] == date(2027, 2, 13) and "9 days" in spring["note"]
+    nat = [e for e in ev if e["title"] == "China: National Day holiday" and e["when"].year == 2027][0]
+    assert (nat["when"].date(), nat["span_end"]) == (date(2027, 10, 1), date(2027, 10, 7))
+    assert {(e["when"].date(), e["span_end"]) for e in ev if "Dragon Boat" in e["title"]} == {(date(2027, 6, 9), date(2027, 6, 9))}   # one day in 2027
+    work = {e["when"].date() for e in ev if "make-up workday" in e["title"] and e["when"].year == 2027}
+    assert work == {date(2027, 1, 31), date(2027, 2, 14), date(2027, 5, 8), date(2027, 9, 26), date(2027, 10, 9)}               # from last month on
+    assert all(rc.H in e["tags"] and e["china"] and e["notime"] for e in ev)
+    for name, a, b in D.CHINA_HOLIDAYS:
+        assert a <= b and a.weekday() in range(7)
+    assert all(d.weekday() >= 5 or n == "New Year's Day" for d, n in D.CHINA_MAKEUP_WORKDAYS)      # a make-up day is a weekend day (Jan 4 2026 is a Sunday)
+
+
+def test_multi_day_holidays_show_on_every_day_and_in_any_overlapping_week():
+    ev = rc.china_events(date(2027, 1, 20))
+    spring = [e for e in ev if "Spring Festival holiday" in e["title"]]
+    assert rc.between(spring, date(2027, 2, 8), date(2027, 2, 14)) == spring          # a week that starts mid-holiday
+    assert rc.between(spring, date(2027, 2, 14), date(2027, 2, 20)) == []
+    assert all(rc.covers(spring[0], date(2027, 2, 5) + timedelta(days=i)) for i in range(9)) and not rc.covers(spring[0], date(2027, 2, 14))
+    card = rc.week_html(rc.for_scope(spring, "grain"), date(2027, 2, 10), "Grain")
+    assert card.count("Spring Festival holiday") == 1 and "Mon Feb 8" in card and "CHINA" in card      # listed once, on the week's first covered day
+    grid = rc.month_html(spring, 2027, 2, date(2027, 2, 10))
+    assert grid.count("China Spring") == 9
+
+
+def test_this_weeks_card_highlights_cme_closures_and_early_closes_with_the_hours():
+    ev = rc.sort_events(rc.holiday_events(date(2026, 11, 23)) + rc.wasde_events())
+    card = rc.week_html(rc.for_scope(ev, "grain"), date(2026, 11, 24), "Grain")
+    assert "CME holiday hours this week" in card and "jsa-rc-alert" in card
+    assert "Thanksgiving Day: Grain and livestock futures are closed" in card
+    assert "Fri Nov 27" in card and "8:30 AM - 12:05 PM CT" in card and "CME CLOSED" in card and "CME HOURS" in card
+    quiet = rc.week_html(rc.for_scope(ev, "grain"), date(2026, 11, 10), "Grain")          # Veterans Day week: CME trades, so no banner
+    assert "jsa-rc-alert" not in quiet and "CME holiday hours" not in quiet.split("</style>")[-1]
+    monday = rc.week_html(rc.for_scope(rc.holiday_events(date(2027, 1, 12)), "livestock"), date(2027, 1, 19), "Livestock")
+    assert "7:00 PM CT" in monday                                                           # the MLK Monday wording (grain evening session)

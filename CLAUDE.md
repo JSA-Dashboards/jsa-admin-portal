@@ -209,7 +209,7 @@ now in the client app's process. `test_client_portal.py` pins the client-only se
 Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, the economic reports (CPI, PPI) mixed into both, then (same day) EIA
 under Economic, the weekly export inspections / export sales / CFTC report, federal holidays and CME grain holidays with their effect on trading hours. Answers when asked: ONE "Reports Calendar" tab,
 BOTH portals. `report_calendar.py` (the portal's own, not a mirror) + `report_schedule_data.py` + `test_report_calendar.py` (35 checks); `Home.py` has a third home-page tab and a card at the top of the
-Grain and Livestock tabs (`render_week`). The tab has five on/off pills (Grain, Livestock, Economic, Holidays, International, all on); an event shows when any of its tags is on.
+Grain and Livestock tabs (`render_week`). The tab has five on/off pills (Grain, Livestock, Economic, Holidays [federal, CME, China], International, all on); an event shows when any of its tags is on.
 
 - **Tags and scopes.** grain / livestock / economic / holiday / international. A card or scope shows its own plus every economic AND holiday event. WASDE, Agricultural Prices, Export Sales and the CFTC report are tagged for both; Export
   Inspections grain only; CPI, PPI and EIA economic; federal holidays and CME closures holiday. Times are shown in Central; events with no known hour (EIA STEO / PSM, holidays) show date only.
@@ -229,6 +229,13 @@ Grain and Livestock tabs (`render_week`). The tab has five on/off pills (Grain, 
   7:00 PM CT for the next trade date (livestock reopens next morning); Independence Day 2027 (Mon Jul 5) has NO evening session, so grains resume Tue 8:30 AM CT; Good Friday, Juneteenth (Fri Jun 18 2027), Christmas (Fri Dec 24 2027) and
   New Year's Day (Fri Jan 1 2027) are closed days; New Year's Day 2028 falls on a Saturday so Fri Dec 31 2027 trades normally. CME says holiday hours are finalized about two weeks ahead and can change. 2028 closures fall
   back to a generic "CME has not published the hours" note.
+- **China holidays (Kolten 2026-11-12).** The State Council General Office's holiday notices (2026 on 2025-11-04, 2027 on 2026-11-05; the full texts are on news.cn and answer a script), typed in `CHINA_HOLIDAYS` /
+  `CHINA_MAKEUP_WORKDAYS`: New Year's Day, Spring Festival (9 days: Feb 15-23 2026, Feb 5-13 2027), Qingming, Labour Day, Dragon Boat (1 day in 2027: Jun 9), Mid-Autumn (Sep 15 2027), National Day (Oct 1-7), and the weekend
+  make-up working days. Tagged holiday (so they show in every scope and under the Holidays pill) with a CHINA chip. A holiday is ONE event with `span_end`: `between()` counts it in any overlapping week, the week card lists it once on the
+  week's first covered day, the month grid shows it on every day. The "mainland exchanges (Dalian, Zhengzhou) are normally closed, also on make-up weekend days" wording is the usual practice, not part of the State Council notice:
+  the exchanges publish their own notices. A 2028 notice normally appears in November 2027: refresh then.
+- **CME hours are highlighted on the week card (Kolten 2026-11-12).** Any event with `cme_alert` (a CME closure, an early close, the Monday-holiday evening-session wording, Independence Day's no-evening-session) puts a red
+  "CME holiday hours this week" banner at the top of the card with the hours, and its chip reads CME CLOSED / CME HOURS (red, in the month grid too). Holidays with no CME effect (Veterans Day, Columbus Day) get no banner.
 - **International (Kolten 2026-11-12: "build the international").** Canada: Statistics Canada's own JSON behind its release calendar (`schedule-key_indicators-eng.json`, scriptable, looks ahead to ~March 2027): crop reports
   (areas, production, stocks, model-based), Farm income, Canadian CPI (international only, NOT mixed into the US economic list), livestock titles if they appear; 8:30 AM ET. Brazil: CONAB's calendar PDF typed in `report_schedule_data.py`
   (grain surveys Oct 15 - Jan 14, monitoring bulletins, and its statement that crop progress comes out every Monday 7 PM Brasilia time); refresh when CONAB issues the 2027 calendar. International crop reports are tagged grain AND

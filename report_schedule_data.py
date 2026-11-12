@@ -101,3 +101,30 @@ CONAB_MONITORING = [date(2026, 11, 26), date(2026, 12, 17)]
 CONAB_PROGRESS_WEEKDAY = 0                 # Monday
 CONAB_PROGRESS_TIME_BRT = (19, 0)
 CONAB_LAST_DATE = date(2027, 1, 14)        # the last date the calendar above reaches (for the "needs refreshing" warning)
+
+
+# CHINA public holidays, from the State Council General Office's notices ("Guo Ban Fa Ming Dian": 2026 on 2025-11-04, 2027 on 2026-11-05), read from
+# the full texts Xinhua carries (news.cn/politics/20251104/... and /20261105/...) on 2026-11-12. (name, first day, last day). The make-up working
+# days (a weekend day worked in exchange for the holiday) follow. A 2028 notice normally appears in November 2027: refresh this then.
+CHINA_HOLIDAYS = [
+    ("New Year's Day", date(2026, 1, 1), date(2026, 1, 3)),
+    ("Spring Festival", date(2026, 2, 15), date(2026, 2, 23)),
+    ("Qingming Festival", date(2026, 4, 4), date(2026, 4, 6)),
+    ("Labour Day", date(2026, 5, 1), date(2026, 5, 5)),
+    ("Dragon Boat Festival", date(2026, 6, 19), date(2026, 6, 21)),
+    ("Mid-Autumn Festival", date(2026, 9, 25), date(2026, 9, 27)),
+    ("National Day", date(2026, 10, 1), date(2026, 10, 7)),
+    ("New Year's Day", date(2027, 1, 1), date(2027, 1, 3)),
+    ("Spring Festival", date(2027, 2, 5), date(2027, 2, 13)),
+    ("Qingming Festival", date(2027, 4, 3), date(2027, 4, 5)),
+    ("Labour Day", date(2027, 5, 1), date(2027, 5, 5)),
+    ("Dragon Boat Festival", date(2027, 6, 9), date(2027, 6, 9)),
+    ("Mid-Autumn Festival", date(2027, 9, 15), date(2027, 9, 15)),
+    ("National Day", date(2027, 10, 1), date(2027, 10, 7)),
+]
+CHINA_MAKEUP_WORKDAYS = [      # (date, the holiday it makes up for)
+    (date(2026, 1, 4), "New Year's Day"), (date(2026, 2, 14), "Spring Festival"), (date(2026, 2, 28), "Spring Festival"),
+    (date(2026, 5, 9), "Labour Day"), (date(2026, 9, 20), "National Day"), (date(2026, 10, 10), "National Day"),
+    (date(2027, 1, 31), "Spring Festival"), (date(2027, 2, 14), "Spring Festival"), (date(2027, 5, 8), "Labour Day"),
+    (date(2027, 9, 26), "National Day"), (date(2027, 10, 9), "National Day"),
+]
