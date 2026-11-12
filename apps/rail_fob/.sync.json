@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "f2504d13d254fe545819cb0d011a03b1a25ab6e4",
+ "commit": "c8cee734cc6b05a77fd09c9c08ac342b415c2ebc",
  "files": {
-  "app.py": "5226e06df8279120cfdf140dac51c54293c67a07af94b3ece476f675a98db435",
+  "app.py": "e805045465c8f1b6e5a61fe147a42330caead37327613ab1fc806a30f736be6c",
   "assets/bnsf_logo.svg": "bd80d9a840b51727b873ae7aaadbb3f1b2619e5db5612da2eb5a215d74a21c52",
   "assets/cn_logo.svg": "dc56e86ec24dbab2418861f2df0b42fe6bf5b72cd9fd02749ca528fc91332cfe",
   "assets/csx_logo.svg": "c92e5d154083088adc09b25f9b57fc430f632e90835a3c1bf7fa2301f95d3a39",
@@ -47,7 +47,7 @@
   "data/waterways.json": "7e2ea540b6e6cc64500fa89d1cb14b55c7d93ec8c4b03e6215c81d076398e7b8",
   "delivery_period.py": "2786db029e276605ea04789f4dc2c700a08ef836c4fbc29d53755686d3c13ebf",
   "environment.sis.yml": "dda4ce1a489478b7f8e33cd7ee1014b8dfc0e7a84843aea15a4ee3ad8d4c4eea",
-  "ethanol_index.py": "1cba492b2270f11db9b503c061e17447d6da3270ac6a4bbda797adf380a473b7",
+  "ethanol_index.py": "fa2f7cb18c070a69b6fdeca79957c32a301fb986c9d580d2f10f3408945b647a",
   "freight_data.py": "7c626093268649f521a0a46bce13ed8ba33c0c42244b971bf10f5b95b0060f6b",
   "net_carry.py": "2a8f249b2215f30d7f301bc4c83a39c38726f43106d49c2f288413f4ba8ef47f",
   "net_carry_chart.py": "a614a5b507caa1cdf141da4ac1cb0d16153962dfcc68c9e19c2ecb64c5c2b32f",
@@ -67,8 +67,8 @@
   "river_data.py": "b3ad643184f69c0fc861c7d1a633c0f00442173daca9382ac2d1652dcf1d93ca",
   "shipment_data.py": "05f8ce8edccea7c401b30943dd477a14dffd005d9300d9df4142ad89508e2b9d",
   "snowflake_setup.sql": "10e7e0e50fdddf1aa52d79a93e0bbd80f8aa9244a329fb7cff7a84958913e97f",
-  "state_level.py": "2557fd0c91072e84d897fb33dc6bd78f20bcbd5722bda117d95920644ff34eb1",
-  "up_spreads.py": "124cf74986453d200411dd8a750a5be201da63065e90fe91469df67d258b2543",
+  "state_level.py": "025201348ca3f298a8971ef8260653a0b1f0b4ee9e1fc3c1b42d7e3a41cc4699",
+  "up_spreads.py": "73db66567f8f246cc1e03a6ef791ab03964e0b06d1848b4ec88b0390c83281d4",
   "usda_cn.py": "0ab282a474ea1752019b5169238576f1f1f89320df8b8c6eaa232b0f55e5b836"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",

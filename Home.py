@@ -19,6 +19,7 @@ import streamlit as st
 
 import portal_view
 import quotes
+import report_calendar
 from shared.auth import require_admin_login, require_client_login
 from shared.fresh_modules import drop_changed_modules
 
@@ -521,13 +522,18 @@ def render_home():
 
     # Two overall tabs. Only the open one runs (on_change="rerun" + .open), so the
     # Livestock Portal's iframe isn't loaded on every visit to the grain tiles.
-    grain_tab, livestock_tab = st.tabs(["Grain Apps", "Livestock Apps"], on_change="rerun")
+    grain_tab, livestock_tab, calendar_tab = st.tabs(["Grain Apps", "Livestock Apps", "Reports Calendar"], on_change="rerun")
     if grain_tab.open:
         with grain_tab:
+            report_calendar.render_week("grain", "Grain")      # This Week's Reports, CPI / PPI mixed in
             _render_grain_tiles()
     if livestock_tab.open:
         with livestock_tab:
+            report_calendar.render_week("livestock", "Livestock")
             _render_livestock()
+    if calendar_tab.open:
+        with calendar_tab:
+            report_calendar.render_tab()
     if CLIENT:
         strip_kind = "livestock" if livestock_tab.open else "grain"
         strip_data = quotes.fetch(strip_kind)        # the slow part, while the placeholder is still showing

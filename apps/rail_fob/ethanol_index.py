@@ -27,12 +27,18 @@ WHERE l.rn = 1 AND r.basis_cents IS NOT NULL
 """
 
 
+def _is_corn(grain):
+    """Corn bids: 'Corn', 'Corn #2' ... and CHS's 'Yellow Corn' (the tracker's grain label varies by provider)."""
+    g = str(grain).lower()
+    return g.startswith("corn") or g.startswith("yellow corn")
+
+
 def state_index(rows):
     """{state: {(year, month): (average basis in cents, number of plants)}} from the SQL's rows: corn only, forward (non-spot) bids,
     a plant counted once per delivery month (its bids for the month are averaged first, so a plant with two bids doesn't weigh double)."""
     per_plant = {}
     for r in rows:
-        if not str(r["grain"]).lower().startswith("corn") or r.get("is_spot") or not r.get("state"):
+        if not _is_corn(r["grain"]) or r.get("is_spot") or not r.get("state"):
             continue
         ym = DP.canonical(r["delivery_month"], r["futures_symbol"])
         if not ym:
@@ -62,7 +68,7 @@ WITH latest AS (
   JOIN location_meta lm ON lm.provider = s.provider AND lm.location = s.location
   WHERE lm.facility_type IN ('Corn Processing', 'River Terminal') AND lm.state = %s AND s.timestamp >= %s
 )
-SELECT l.provider, l.location, lm.state, lm.facility_type, lm.delivery_zone, r.grain, r.delivery_month, r.futures_symbol, r.basis_cents, r.is_spot
+SELECT l.provider, l.location, lm.state, lm.facility_type, lm.delivery_zone, lm.lat, lm.lon, r.grain, r.delivery_month, r.futures_symbol, r.basis_cents, r.is_spot
 FROM latest l
 JOIN location_meta lm ON lm.provider = l.provider AND lm.location = l.location
 JOIN snapshot_rows r ON r.snapshot_id = l.id
@@ -75,7 +81,7 @@ def location_series(rows):
     averaged. facility_type is 'Corn Processing' (ethanol plants and corn processors) or 'River Terminal'."""
     per = {}
     for r in rows:
-        if not str(r["grain"]).lower().startswith("corn") or r.get("is_spot"):
+        if not _is_corn(r["grain"]) or r.get("is_spot"):
             continue
         ym = DP.canonical(r["delivery_month"], r["futures_symbol"])
         if ym:

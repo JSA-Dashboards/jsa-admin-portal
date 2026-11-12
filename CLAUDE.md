@@ -204,6 +204,24 @@ Field check page stays hidden) and with one `replace` that hides the 🔄 NASS r
 mirrored into this PUBLIC repo** (Kolten approved that on 11-10; before it was history only). The cost to watch is the one that took it off staff: a heavy first load,
 now in the client app's process. `test_client_portal.py` pins the client-only set to exactly `crop-conditions`.
 
+## Report calendar: "This Week's Reports" and the Reports Calendar tab (2026-11-12)
+
+Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, and the economic reports (monthly CPI, PPI)
+mixed into both. Answers when asked: ONE "Reports Calendar" tab (three on/off pills: Grain, Livestock, Economic, all on by default; an event shows when any of its tags is on, so WASDE stays while Grain or Livestock is on and CPI/PPI go with Economic alone), BOTH portals, official dates only (no "usual schedule" weekly staples).
+`report_calendar.py` (the portal's own, not a mirror) + `report_schedule_data.py` + `test_report_calendar.py`; `Home.py` has a third home-page tab and a card at the top of the Grain and
+Livestock tabs (`render_week`).
+
+- **Sources.** USDA NASS: its own .ics (`nass.usda.gov/Publications/Calendar/<year>/NassReleases<year>.ics`), read live for this year and next (next year 404s until NASS publishes it). Only the
+  reports a grain or livestock desk watches are kept (`GRAIN_NASS`, `LIVESTOCK_NASS`; ~45 of ~92 titles; HOLIDAY, hops, mushrooms and the like are dropped; add a title there to show it). **WASDE and CPI/PPI
+  are TYPED** in `report_schedule_data.py` because their sites refuse a script (usda.gov and bls.gov answer 403; ESMIS lists only published WASDEs): read from the agencies' own pages in a browser on 2026-11-12
+  (WASDE 2026 + 2027; CPI/PPI reference Oct 2026 - Nov 2027). **They must be refreshed by hand** (BLS adds 2028 in late 2027; USDA posts the next WASDE year in the autumn): the footnote turns amber under 60 days
+  from the end (`coverage_warning`).
+- **Scopes.** Tags grain / livestock / economic; a scope shows its own plus every economic one. WASDE and Agricultural Prices are tagged for both. Times are shown in Central (WASDE 12:00 ET = 11:00 CT; CPI/PPI 8:30 ET = 7:30 CT).
+- **"This week"** is Monday-Sunday; on a Saturday or Sunday it shows next week. A failed NASS read is NOT cached: the typed dates show at once with a note and NASS is not asked again for 5 minutes
+  (a good read is cached 6 hours for everyone). The Slaughter Weekly / Broiler Hatchery weekly rows make the livestock card busier than the grain one.
+- Checked live on 2026-11-12: grain week = Crop Progress Mon, CPI + Crop Production + WASDE Tue, PPI Fri; livestock week = CPI + WASDE Tue, Broiler Hatchery + Slaughter Weekly Thu, PPI + Turkey Hatchery Fri; the calendar tab month grid and list
+  render in the client build. Not done: the Livestock Portal (a separate Streamlit app) and Grain Seasonal's own historical Report Calendar tab are untouched.
+
 ## Risk Analyzer (`apps/risk_analyzer/`, added 2026-10-12)
 
 A synced mirror of `JSA-Dashboards/jsa-risk-analyzer`, tile under "Futures, Options & Spreads".

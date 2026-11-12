@@ -32,7 +32,10 @@ ORIGINS = [
     ("Sloan, IA", "IA", 3, None, "3c off Group 3"),
 ]
 # every other origin in these states: par to its state's base (a small discount isn't stated)
-GENERIC = {"IA": ("Interior IA", 0), "NE": ("Group 3", 0)}
+GENERIC = {"IA": ("Interior IA", 0), "NE": ("Group 3", 0),
+           "SD": ("Interior IA", 0),      # SD: par to Interior IA is an ASSUMPTION (Kolten asked for UP rows on the South Dakota State Level; no SD spread was stated)
+           "ND": ("Interior IA", 0),      # ND: same ASSUMPTION as SD (Kolten asked for UP rows on the North Dakota State Level; no ND spread was stated)
+           "KS": ("Group 3", 0)}      # KS: par to Group 3 is an ASSUMPTION (Kolten asked for UP rows on the Kansas State Level; no Kansas spread was stated)
 
 
 def spreads(g3, iia):
@@ -56,7 +59,7 @@ def origin_spreads():
 
 
 def generic_spreads(state):
-    """The par-to-base spreads for an unnamed origin in `state`, or None where there is no stated rule (MN, SD, ...)."""
+    """The par-to-base spreads for an unnamed origin in `state`, or None where there is no stated rule (MN, MI, ...)."""
     if state not in GENERIC:
         return None
     base, d = GENERIC[state]
