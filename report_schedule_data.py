@@ -61,6 +61,43 @@ COT_TIME_ET = (15, 30)
 # CME Globex regular day-session hours (Central) for the two product groups, read from CME's "Holiday and Trading Hours" page
 # (https://www.cmegroup.com/trading-hours.html, 403 to a script) on 2026-11-12 from an ordinary Wednesday:
 CME_NORMAL_HOURS = {"grains": "8:30 AM - 1:20 PM CT day session", "livestock": "8:30 AM - 1:05 PM CT"}
-# The one holiday whose hours CME had published for both groups when this was read: Thanksgiving 2026. Wed Nov 25 normal,
-# Thu Nov 26 closed, Fri Nov 27 opens 8:30 AM and closes 12:05 PM CT (grains and livestock alike).
-CME_THANKSGIVING_2026_EARLY_CLOSE = (date(2026, 11, 27), "8:30 AM - 12:05 PM CT")
+# CME holiday hours for the GRAINS and LIVESTOCK groups on Globex (Central time), read from CME's "Holiday and Trading Hours" page on
+# 2026-11-12 holiday by holiday (the page takes the date in its address, e.g. .../trading-hours.html#tradeDate=2027-01-18, and needs a reload to
+# read it; it answers a script with 403). CME says holiday hours are finalized about two weeks ahead and subject to change.
+# (date, name, kind, what happens).  kind: "closed" = no trading that trade date; "early" = trades but closes early.
+_EVENING = "Grains: no day session; the evening session opens 7:00 PM CT for the next trade date. Livestock: closed, reopens the next day 8:30 AM CT."
+CME_HOLIDAY_HOURS = [
+    (date(2026, 11, 26), "Thanksgiving Day", "closed", "Grain and livestock futures are closed. (Wed Nov 25 trades normal hours.)"),
+    (date(2026, 11, 27), "Day after Thanksgiving", "early", "Grains and livestock trade 8:30 AM - 12:05 PM CT, then close."),
+    (date(2026, 12, 24), "Christmas Eve", "early", "Grains and livestock trade 8:30 AM - 12:05 PM CT, then close (no afternoon session)."),
+    (date(2026, 12, 25), "Christmas Day", "closed", "Grain and livestock futures are closed."),
+    (date(2027, 1, 1), "New Year's Day", "closed", "Grain and livestock futures are closed. (Thu Dec 31 trades normal hours.)"),
+    (date(2027, 1, 18), "Martin Luther King Jr. Day", "closed", _EVENING),
+    (date(2027, 2, 15), "Presidents Day", "closed", _EVENING),
+    (date(2027, 3, 26), "Good Friday", "closed", "Grain and livestock futures are closed. (Thu Mar 25 trades normal hours.)"),
+    (date(2027, 5, 31), "Memorial Day", "closed", _EVENING),
+    (date(2027, 6, 18), "Juneteenth (observed)", "closed", "Grain and livestock futures are closed. (Thu Jun 17 trades normal hours.)"),
+    (date(2027, 7, 5), "Independence Day (observed)", "closed",
+     "Grains: closed with NO evening session, so trading resumes Tue Jul 6 at 8:30 AM CT. Livestock: closed, reopens Tue 8:30 AM CT."),
+    (date(2027, 9, 6), "Labor Day", "closed", _EVENING),
+    (date(2027, 11, 25), "Thanksgiving Day", "closed", "Grain and livestock futures are closed. (Wed Nov 24 trades normal hours.)"),
+    (date(2027, 11, 26), "Day after Thanksgiving", "early", "Grains and livestock trade 8:30 AM - 12:05 PM CT, then close."),
+    (date(2027, 12, 24), "Christmas Day (observed)", "closed", "Grain and livestock futures are closed. (Thu Dec 23 trades normal hours.)"),
+]
+# New Year's Day 2028 falls on a Saturday: CME grains and livestock trade a normal day on Fri Dec 31 2027 and the grain evening session reopens
+# Sunday 7:00 PM CT, so there is no closure to show.
+
+
+# CONAB (Brazil), "Acompanhamento da Safra Brasileira: calendario de divulgacao", the agency's own 1-page PDF
+# https://www.gov.br/conab/pt-br/assuntos/imagens/calendario-de-safras-e-prohort-2026.pdf (read 2026-11-12). It lists the dates of the whole
+# 2025/26 and 2026/27 grain surveys, the monthly crop monitoring ("Monitoramento Agricola", which "may change with the availability of spectral
+# data"), and says CONAB publishes crop progress every Monday at 19:00 (Brasilia time). It carries no time for the surveys themselves.
+# CONAB issues a new calendar each year: refresh this when the 2027 one appears.
+CONAB_GRAIN_SURVEYS = [
+    (date(2026, 10, 15), "1st survey, 2026/27 crop"), (date(2026, 11, 13), "2nd survey, 2026/27 crop"),
+    (date(2026, 12, 15), "3rd survey, 2026/27 crop"), (date(2027, 1, 14), "4th survey, 2026/27 crop"),
+]
+CONAB_MONITORING = [date(2026, 11, 26), date(2026, 12, 17)]
+CONAB_PROGRESS_WEEKDAY = 0                 # Monday
+CONAB_PROGRESS_TIME_BRT = (19, 0)
+CONAB_LAST_DATE = date(2027, 1, 14)        # the last date the calendar above reaches (for the "needs refreshing" warning)

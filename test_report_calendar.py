@@ -143,7 +143,20 @@ def test_good_friday_and_the_cme_closures():
     assert ev[date(2026, 11, 26)]["closed"] and ev[date(2026, 12, 25)]["closed"] and ev[date(2027, 3, 26)]["closed"]
     assert not ev[date(2026, 11, 11)]["closed"] and "trade normally" in ev[date(2026, 11, 11)]["note"]      # Veterans Day: CME trades
     assert ev[date(2026, 11, 27)]["title"].startswith("CME early close") and "12:05 PM CT" in ev[date(2026, 11, 27)]["note"]
+    assert ev[date(2026, 12, 24)]["title"] == "CME early close: Christmas Eve"
+    assert not ev[date(2027, 12, 31)]["closed"] and "Saturday" in ev[date(2027, 12, 31)]["note"]            # Jan 1 2028 is a Saturday: CME open
     assert all(rc.H in e["tags"] and e.get("notime") for e in ev.values())
+
+
+def test_cme_holiday_hours_cover_every_cme_closure_through_2027():
+    ev = rc.holiday_events(date(2026, 11, 12))
+    closed = {e["when"].date() for e in ev if e["closed"]}
+    typed = {d for d, _n, kind, _t in D.CME_HOLIDAY_HOURS if kind == "closed"}
+    assert closed <= typed | {date(2028, 1, 17), date(2028, 2, 21)}      # nothing in 2026-27 falls back to the "not published" wording
+    notes = {e["when"].date(): e["note"] for e in ev}
+    assert "7:00 PM CT" in notes[date(2027, 1, 18)] and "NO evening session" in notes[date(2027, 7, 5)]      # Independence Day differs from the other Mondays
+    assert "not published" not in " ".join(n for d, n in notes.items() if d < date(2028, 1, 1))
+    assert all(isinstance(t, str) and t for _d, _n, _k, t in D.CME_HOLIDAY_HOURS)
 
 
 def test_holidays_are_in_every_scope_and_have_their_own_switch():
@@ -200,3 +213,47 @@ def test_steo_and_psm_release_dates_come_from_their_page_headers():
     assert rc.parse_eia_release_dates(page) == [date(2026, 11, 10), date(2026, 12, 8)]
     ev = rc.eia_events({"steo": page}, date(2026, 11, 12))
     assert {e["when"].date() for e in ev} == {date(2026, 11, 10), date(2026, 12, 8)} and all(e["notime"] for e in ev)
+
+
+# -- international ---------------------------------------------------------------------
+STATCAN = [
+    {"date": "2026-12-04 00:00:01", "title": "Production of principal field crops", "description": "November 2026"},
+    {"date": "2026-12-04 00:00:02", "title": "Labour Force Survey", "description": "November 2026"},
+    {"date": "2026-11-24 00:00:01", "title": "Farm income", "description": "2025 (revised data)"},
+    {"date": "2026-12-14 00:00:01", "title": "Consumer Price Index", "description": "November 2026"},
+    {"date": "2027-02-05 00:00:01", "title": "Stocks of principal field crops", "description": "December 31, 2026"},
+    {"date": "2027-03-04 00:00:01", "title": "Hog statistics", "description": "x"},
+    {"date": "2026-08-01 00:00:01", "title": "Production of principal field crops", "description": "old"},
+    {"date": "bad", "title": "Retail trade"},
+]
+
+
+def test_statcan_keeps_crops_farm_income_cpi_and_livestock_and_tags_them():
+    ev = by_title(rc.parse_statcan(STATCAN, date(2026, 11, 12)))
+    assert set(ev) == {"StatCan: Production of principal field crops", "StatCan: Farm income", "StatCan: Canada CPI",
+                       "StatCan: Stocks of principal field crops", "StatCan: Hog statistics"}            # no Labour Force Survey, no old row
+    crop = ev["StatCan: Production of principal field crops"]
+    assert crop["tags"] == {"grain", "international"} and crop["when"].strftime("%H:%M") == "07:30"        # 8:30 AM ET
+    assert ev["StatCan: Canada CPI"]["tags"] == {"international"}                                          # not mixed into the US economic list
+    assert ev["StatCan: Hog statistics"]["tags"] == {"livestock", "international"}
+    assert crop["note"] == "November 2026"
+
+
+def test_conab_calendar_and_monday_progress_in_central_time():
+    ev = rc.conab_events(date(2026, 11, 12))
+    surveys = [e for e in ev if e["title"] == "CONAB: Grain crop survey"]
+    assert [e["when"].date() for e in surveys] == [date(2026, 10, 15), date(2026, 11, 13), date(2026, 12, 15), date(2027, 1, 14)]
+    assert all(e["notime"] and e["tags"] == {"grain", "international"} for e in surveys)
+    prog = [e for e in ev if e["title"] == "CONAB: Crop progress"]
+    assert all(e["when"].weekday() == 0 for e in prog) and next(e for e in prog if e["when"].date() == date(2026, 11, 16))["when"].strftime("%H:%M") == "16:00"    # 19:00 Brasilia = 16:00 CST
+    assert next(e for e in prog if e["when"].date() == date(2026, 10, 5))["when"].strftime("%H:%M") == "17:00"    # = 17:00 CDT
+    assert {e["when"].date() for e in ev if e["title"].endswith("bulletin")} == {date(2026, 11, 26), date(2026, 12, 17)}
+
+
+def test_international_crop_reports_reach_the_grain_card_and_have_their_own_switch():
+    ev = rc.parse_statcan(STATCAN, date(2026, 11, 12)) + rc.conab_events(date(2026, 11, 12))
+    assert any(e["title"].startswith("StatCan: Production") for e in rc.for_scope(ev, "grain"))
+    assert not any(e["title"] == "StatCan: Hog statistics" for e in rc.for_scope(ev, "grain"))
+    assert {e["title"] for e in rc.with_any_tag(ev, {"international"})} == {e["title"] for e in ev}
+    rows = rc.list_rows([e for e in ev if e["title"] == "StatCan: Canada CPI"])
+    assert rows[0]["Type"] == "International"

@@ -209,9 +209,9 @@ now in the client app's process. `test_client_portal.py` pins the client-only se
 Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, the economic reports (CPI, PPI) mixed into both, then (same day) EIA
 under Economic, the weekly export inspections / export sales / CFTC report, federal holidays and CME grain holidays with their effect on trading hours. Answers when asked: ONE "Reports Calendar" tab,
 BOTH portals. `report_calendar.py` (the portal's own, not a mirror) + `report_schedule_data.py` + `test_report_calendar.py` (35 checks); `Home.py` has a third home-page tab and a card at the top of the
-Grain and Livestock tabs (`render_week`). The tab has four on/off pills (Grain, Livestock, Economic, Holidays, all on); an event shows when any of its tags is on.
+Grain and Livestock tabs (`render_week`). The tab has five on/off pills (Grain, Livestock, Economic, Holidays, International, all on); an event shows when any of its tags is on.
 
-- **Tags and scopes.** grain / livestock / economic / holiday. A card or scope shows its own plus every economic AND holiday event. WASDE, Agricultural Prices, Export Sales and the CFTC report are tagged for both; Export
+- **Tags and scopes.** grain / livestock / economic / holiday / international. A card or scope shows its own plus every economic AND holiday event. WASDE, Agricultural Prices, Export Sales and the CFTC report are tagged for both; Export
   Inspections grain only; CPI, PPI and EIA economic; federal holidays and CME closures holiday. Times are shown in Central; events with no known hour (EIA STEO / PSM, holidays) show date only.
 - **Read live (scripts are allowed):** USDA NASS (its .ics; ~45 of ~92 titles kept in `GRAIN_NASS` / `LIVESTOCK_NASS`), EIA (four schedule pages: the Weekly Petroleum Status Report incl. ethanol, Wed 10:30 ET
   except the holiday-exception table; Natural Gas Storage, Thu 10:30 ET, same; STEO and Petroleum Supply Monthly = the page's "Release Date / Next Release Date" only, so one or two dates ahead),
@@ -223,12 +223,19 @@ Grain and Livestock tabs (`render_week`). The tab has four on/off pills (Grain, 
 - **Rule-based, flagged "Usual schedule" in the note (120 days ahead at most):** Export Sales after the typed dates = FAS's own rule (Thursday 8:30 ET; Friday when a federal holiday falls the previous Friday or Mon-Thu of that
   week; checked against FAS's Nov 13 and Nov 27); Export Inspections = Mondays 11:00 ET, Tuesday after a Monday holiday (USDA publishes no calendar for it).
 - **Holidays.** Federal holidays are computed from the statute with the observed rule (Sat -> Fri, Sun -> Mon); the 2026 list equals NASS's own HOLIDAY rows exactly (tested). CME grain and livestock futures are closed on those
-  less Columbus Day and Veterans Day (they trade), plus Good Friday; a New Year's Day on a Saturday closes nothing (2028: federal Dec 31 2027, CME open), the same rule as `grain_calendar.py` in the basis tracker. **CME hours detail is
-  only as complete as CME's own page: it publishes holiday hours about two weeks ahead and its date selector is awkward to script, so only Thanksgiving 2026 is typed (Wed Nov 25 normal, Thu closed, Fri Nov 27 8:30 AM - 12:05 PM CT, grains and
-  livestock alike). The other early closes are NOT shown until CME publishes them; the tab says so.** To add one: cmegroup.com/trading-hours.html, pick the holiday, read the Grains and Livestock rows, add an event in `holiday_events`.
+  less Columbus Day and Veterans Day (they trade), plus Good Friday; a New Year's Day on a Saturday closes nothing (2028: federal Dec 31 2027, CME open), the same rule as `grain_calendar.py` in the basis tracker. **CME holiday hours are typed from CME's own page for every holiday through 2027** (`CME_HOLIDAY_HOURS`, read 2026-11-12, Grains and Livestock groups): the page
+  takes the date in its address (`cmegroup.com/trading-hours.html#tradeDate=2027-01-18`) but only reads it on a full page LOAD (navigate, then reload; a hash change or a script click on the holiday chips does nothing).
+  What they say: Thanksgiving closed, the Friday after and Christmas Eve 2026 close 12:05 PM CT; the Monday holidays (MLK, Presidents, Memorial, Labor) close the day session but the GRAIN evening session still opens
+  7:00 PM CT for the next trade date (livestock reopens next morning); Independence Day 2027 (Mon Jul 5) has NO evening session, so grains resume Tue 8:30 AM CT; Good Friday, Juneteenth (Fri Jun 18 2027), Christmas (Fri Dec 24 2027) and
+  New Year's Day (Fri Jan 1 2027) are closed days; New Year's Day 2028 falls on a Saturday so Fri Dec 31 2027 trades normally. CME says holiday hours are finalized about two weeks ahead and can change. 2028 closures fall
+  back to a generic "CME has not published the hours" note.
+- **International (Kolten 2026-11-12: "build the international").** Canada: Statistics Canada's own JSON behind its release calendar (`schedule-key_indicators-eng.json`, scriptable, looks ahead to ~March 2027): crop reports
+  (areas, production, stocks, model-based), Farm income, Canadian CPI (international only, NOT mixed into the US economic list), livestock titles if they appear; 8:30 AM ET. Brazil: CONAB's calendar PDF typed in `report_schedule_data.py`
+  (grain surveys Oct 15 - Jan 14, monitoring bulletins, and its statement that crop progress comes out every Monday 7 PM Brasilia time); refresh when CONAB issues the 2027 calendar. International crop reports are tagged grain AND
+  international, so they also appear on the Grain card. **Argentina is NOT included: the Buenos Aires Grain Exchange (bolsadecereales.com) sits behind a Cloudflare challenge (not bypassed) and Rosario (bcr.com.ar) shows no release
+  calendar, so there is no official date to show; if Kolten pastes their schedules, add them to `report_schedule_data.py`.**
 - **"This week"** is Monday-Sunday (the week ahead on a weekend). A failed live read is NOT cached: the typed and rule-based events show at once with a note, and NASS / EIA / CFTC are not asked again for 5 minutes (a good
-  read is cached 6 hours for everyone). Not done: other countries (see the project note in memory: StatCan is scriptable, CONAB/BAGE/Rosario need a browser read), the Livestock Portal (separate app), Grain Seasonal's own
-  historical Report Calendar tab.
+  read is cached 6 hours for everyone). Not done: Argentina (above), the Livestock Portal (separate app), Grain Seasonal's own historical Report Calendar tab.
 
 ## Risk Analyzer (`apps/risk_analyzer/`, added 2026-10-12)
 

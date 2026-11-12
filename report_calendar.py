@@ -22,6 +22,13 @@ WHERE THE DATES COME FROM
   Holidays    US federal holidays from the statute (observed dates: Saturday -> Friday, Sunday -> Monday) and the days CME's grain and
               livestock futures are closed (the federal list less Columbus Day and Veterans Day, plus Good Friday). The extra hours detail
               (early closes) is typed only where CME has published it; CME confirms holiday hours about two weeks ahead.
+  Canada      Statistics Canada's own release-schedule JSON (the "key indicators" feed behind its calendar page: it answers a script and looks
+              ahead to about March 2027): the crop reports (areas, production, stocks, model-based estimates), Farm income and the Canadian CPI.
+              The Daily is published at 8:30 AM ET. Crop reports are tagged grain AND international, so they also show on the Grain card.
+  Brazil      CONAB's own calendar PDF, typed (CONAB_*): the monthly grain surveys, the crop-monitoring bulletins and the Monday 7 PM Brasilia
+              crop-progress release. Tagged grain AND international.
+  Argentina   NOT included: the Buenos Aires Grain Exchange sits behind a Cloudflare challenge and Rosario's site shows no release calendar,
+              so there is no official date to show. (The tab says so.)
 Times are shown in Central.
 
 TAGS. Every event carries a set of tags: "grain", "livestock", "economic". A scope shows the events tagged with it PLUS every
@@ -45,7 +52,7 @@ UTC = ZoneInfo("UTC")
 NASS_ICS_URL = "https://www.nass.usda.gov/Publications/Calendar/{year}/NassReleases{year}.ics"
 UA = "jsa-report-calendar"
 
-G, L, E, H = "grain", "livestock", "economic", "holiday"
+G, L, E, H, I = "grain", "livestock", "economic", "holiday", "international"
 BOTH = frozenset({G, L})
 
 # NASS .ics SUMMARY (spaces collapsed, "\," unescaped) -> (tags, title shown)
@@ -305,38 +312,44 @@ def _noon(d: date) -> datetime:
 
 
 def holiday_events(today: date) -> list[dict]:
-    """Federal holidays and CME grain / livestock closures from last month to the end of next year, all-day events tagged 'holiday'."""
-    out: list[dict] = []
+    """Federal holidays and CME grain / livestock closures and early closes from last month to the end of next year, all-day events tagged
+    'holiday'. CME's own holiday hours (report_schedule_data.CME_HOLIDAY_HOURS) are used wherever CME has published them; a closure
+    that is not in that table yet falls back to "closed" with a note that the hours are not published."""
     start, end = today - timedelta(days=45), date(today.year + 1, 12, 31)
-    seen_closed: set[date] = set()
+    cme = {d: (name, kind, text) for d, name, kind, text in D.CME_HOLIDAY_HOURS}
+    out: list[dict] = []
+    closed_dates: set[date] = set()
+
+    def closed_note(d: date) -> str:
+        return cme[d][2] if d in cme else "Grain and livestock futures are CLOSED (CME has not published the hours around this holiday yet)."
+
+    gf = [easter(y) - timedelta(days=2) for y in (today.year - 1, today.year, today.year + 1)]
     for y in range(today.year - 1, today.year + 3):
         for obs, name, actual in federal_holidays(y):
             if not (start <= obs <= end):
                 continue
             tag = f" (observed {obs:%a %b} {obs.day})" if obs != actual else ""
+            sat_new_year = name == "New Year's Day" and actual.weekday() == 5
             if name in CME_OPEN_FEDERAL:
-                cme = "CME grain and livestock futures trade normally."
-            elif name == "New Year's Day" and actual.weekday() == 5:
-                cme = "CME is open on the observed Friday (New Year's Day falls on a Saturday)."
+                cme_text, closed = "CME grain and livestock futures trade normally.", False
+            elif sat_new_year:
+                cme_text, closed = "CME grain and livestock futures trade normally on the observed Friday (New Year's Day falls on a Saturday).", False
             else:
-                cme = "CME grain and livestock futures are CLOSED."
-                seen_closed.add(obs)
-            if name == "New Year's Day" and actual.weekday() == 5:
-                cme = "CME is open on the observed Friday (New Year's Day falls on a Saturday)."
-                seen_closed.discard(obs)
-            out.append({"when": _noon(obs), "title": f"{name}{tag}", "short": name, "source": "US federal holiday",
-                        "tags": frozenset({H}), "note": "Federal agencies (USDA, BLS, EIA, CFTC) are closed and may move releases. " + cme,
-                        "notime": True, "closed": obs in seen_closed})
-    gf = easter(today.year).__sub__(timedelta(days=2)), easter(today.year + 1) - timedelta(days=2), easter(today.year - 1) - timedelta(days=2)
+                cme_text, closed = closed_note(obs), True
+            if closed:
+                closed_dates.add(obs)
+            out.append({"when": _noon(obs), "title": f"{name}{tag}", "short": name, "source": "US federal holiday", "tags": frozenset({H}),
+                        "note": "Federal agencies (USDA, BLS, EIA, CFTC) are closed and may move releases. CME: " + cme_text,
+                        "notime": True, "closed": closed})
     for d in gf:
         if start <= d <= end:
             out.append({"when": _noon(d), "title": "Good Friday", "short": "Good Friday", "source": "CME", "tags": frozenset({H}),
-                        "note": "Not a federal holiday. CME grain and livestock futures are CLOSED.", "notime": True, "closed": True})
-    d, hrs = D.CME_THANKSGIVING_2026_EARLY_CLOSE
-    if start <= d <= end:
-        out.append({"when": _noon(d), "title": "CME early close: day after Thanksgiving", "short": "CME early close", "source": "CME",
-                    "tags": frozenset({H}), "note": f"Grain and livestock futures trade {hrs} (CME's published holiday hours).", "notime": True,
-                    "closed": False})
+                        "note": "Not a federal holiday. CME: " + closed_note(d), "notime": True, "closed": True})
+            closed_dates.add(d)
+    for d, name, kind, text in D.CME_HOLIDAY_HOURS:
+        if kind == "early" and start <= d <= end:
+            out.append({"when": _noon(d), "title": f"CME early close: {name}", "short": "CME early close", "source": "CME", "tags": frozenset({H}),
+                        "note": text, "notime": True, "closed": False})
     return out
 
 
@@ -399,6 +412,62 @@ def parse_cot_schedule(html_text: str) -> list[dict]:
                     continue
                 out.append({"when": _et(d, D.COT_TIME_ET), "title": "CFTC: Commitments of Traders", "short": "CFTC COT", "source": "CFTC",
                             "tags": BOTH, "note": ("Delayed by a federal holiday. " if star else "") + "Positions as of the prior Tuesday"})
+    return out
+
+
+# -- international ---------------------------------------------------------------------------
+STATCAN_URL = "https://www150.statcan.gc.ca/n1/dai-quo/ssi/homepage/schedule-key_indicators-eng.json"
+STATCAN_ET = (8, 30)
+_STATCAN_CROP = {"Principal field crop areas", "Production of principal field crops", "Stocks of principal field crops",
+                 "Model-based principal field crop estimates"}
+_STATCAN_LIVESTOCK = re.compile(r"cattle|hog|livestock|poultry|dairy|red meat|milk|egg", re.I)
+
+
+def parse_statcan(items: list[dict], today: date) -> list[dict]:
+    """Statistics Canada release rows ({date, title, description}) -> the agriculture-relevant events from last month on: the crop reports
+    (grain + international), any livestock report (livestock + international), Farm income and the Canadian CPI (international only: it is
+    not mixed into the US economic list)."""
+    out = []
+    for r in items or []:
+        try:
+            d = date.fromisoformat(str(r["date"])[:10])
+            title = r["title"].strip()
+        except (KeyError, ValueError):
+            continue
+        if d < today - timedelta(days=45):
+            continue
+        if title in _STATCAN_CROP:
+            tags, short = frozenset({G, I}), "StatCan " + title.split(" ")[0].lower()
+        elif _STATCAN_LIVESTOCK.search(title):
+            tags, short = frozenset({L, I}), "StatCan " + title.lower()[:18]
+        elif title in ("Farm income", "Consumer Price Index"):
+            tags, short = frozenset({I}), "StatCan " + ("farm income" if title == "Farm income" else "CPI")
+        else:
+            continue
+        label = "Canada CPI" if title == "Consumer Price Index" else title
+        out.append({"when": _et(d, STATCAN_ET), "title": f"StatCan: {label}", "short": short, "source": "Statistics Canada", "tags": tags,
+                    "note": (r.get("description") or "").strip()})
+    return out
+
+
+def conab_events(today: date) -> list[dict]:
+    """CONAB's grain surveys and crop-monitoring bulletins (typed from its calendar PDF) and its Monday crop-progress release (the PDF's own
+    statement: every Monday 19:00 Brasilia time), 120 days ahead at most. The surveys have no time in the PDF, so they show the day only."""
+    out = []
+    for d, label in D.CONAB_GRAIN_SURVEYS:
+        out.append({"when": _noon(d), "title": "CONAB: Grain crop survey", "short": "CONAB survey", "source": "CONAB (Brazil)",
+                    "tags": frozenset({G, I}), "note": label, "notime": True})
+    for d in D.CONAB_MONITORING:
+        out.append({"when": _noon(d), "title": "CONAB: Crop monitoring bulletin", "short": "CONAB monitoring", "source": "CONAB (Brazil)",
+                    "tags": frozenset({G, I}), "note": "Monitoramento Agricola (may change with spectral data availability)", "notime": True})
+    brt = ZoneInfo("America/Sao_Paulo")
+    d = today - timedelta(days=45)
+    while d <= today + timedelta(days=120):
+        if d.weekday() == D.CONAB_PROGRESS_WEEKDAY:
+            when = datetime.combine(d, time(*D.CONAB_PROGRESS_TIME_BRT), tzinfo=brt).astimezone(CT)
+            out.append({"when": when, "title": "CONAB: Crop progress", "short": "CONAB progress", "source": "CONAB (Brazil)",
+                        "tags": frozenset({G, I}), "note": "Weekly, Mondays 7 PM Brasilia time (CONAB's calendar)"})
+        d += timedelta(days=1)
     return out
 
 
@@ -492,6 +561,15 @@ def fetch_eia_pages(timeout: int = 25) -> dict[str, str]:
     return {k: v for k, v in got if v}
 
 
+def fetch_statcan(timeout: int = 40) -> list[dict] | None:
+    import requests
+    try:
+        r = requests.get(STATCAN_URL, headers={"User-Agent": UA}, timeout=timeout)
+        return r.json() if r.status_code == 200 else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
 CFTC_URL = "https://www.cftc.gov/MarketReports/CommitmentsofTraders/ReleaseSchedule/index.htm"
 
 
@@ -527,7 +605,12 @@ def load_all(today: date) -> tuple[list[dict], list[str]]:
         events += [e for e in parse_cot_schedule(cot) if e["when"].date() >= today - timedelta(days=45)]
     else:
         notes.append("The CFTC release schedule could not be read just now, so Commitments of Traders dates are missing.")
-    events += export_sales_events(today) + export_inspections_events(today) + holiday_events(today)
+    sc = fetch_statcan()
+    if sc is not None:
+        events += parse_statcan(sc, today)
+    else:
+        notes.append("Statistics Canada's release schedule could not be read just now, so its dates are missing.")
+    events += export_sales_events(today) + export_inspections_events(today) + holiday_events(today) + conab_events(today)
     return sort_events(events), notes
 
 
@@ -551,6 +634,8 @@ CSS = """
 .jsa-rc-chip.hol { border-color:#c9d3e0; background:#f1f5fa; }
 .jsa-rc-chip.closed { border-color:#e6b5b5; background:#fdf0f0; }
 .jsa-rc-chip.hol em, .jsa-rc-chip.closed em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#8a4b4b; margin-left:0.4rem; }
+.jsa-rc-chip.intl { border-color:#b9d3e3; background:#eef6fb; }
+.jsa-rc-chip.intl em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#2d6a8f; margin-left:0.4rem; }
 .jsa-rc-none { color:#8a9a90; font-size:0.84rem; padding:0.2rem 0; }
 .jsa-rc-foot { font-size:0.7rem; color:#8a9a90; margin-top:0.35rem; }
 .jsa-rc-warn { color:#9a6a12; }
@@ -563,6 +648,7 @@ CSS = """
 .jsa-rc-month .e { display:block; margin-top:2px; padding:1px 4px; border-radius:4px; background:#eef3f0; color:#32373c; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .jsa-rc-month .e.eco { background:#fff1cf; }
 .jsa-rc-month .e.hol { background:#e6edf6; }
+.jsa-rc-month .e.intl { background:#dcecf6; }
 .jsa-rc-month .e.closed { background:#fbe3e3; }
 .jsa-rc-month .more { color:#8a9a90; margin-top:2px; display:block; }
 @media (max-width: 700px) { .jsa-rc-day { flex-direction:column; gap:0.15rem; } .jsa-rc-month td { height:4rem; } }
@@ -576,12 +662,12 @@ def _clock(when: datetime) -> str:
 
 
 def chip_html(e: dict) -> str:
-    eco, hol = E in e["tags"], H in e["tags"]
+    eco, hol, intl = E in e["tags"], H in e["tags"], I in e["tags"]
     tip = html.escape((e["note"] + " · " if e["note"] else "") + e["source"])
     when = "" if e.get("notime") else f'<i>{_clock(e["when"])}</i>'
-    kind = " eco" if eco else (" closed" if e.get("closed") else " hol") if hol else ""
+    kind = " eco" if eco else (" closed" if e.get("closed") else " hol") if hol else " intl" if intl else ""
     return (f'<span class="jsa-rc-chip{kind}" title="{tip}">{when}<b>{html.escape(e["title"])}</b>'
-            + ('<em>ECON</em>' if eco else '<em>HOLIDAY</em>' if hol else "") + "</span>")
+            + ('<em>ECON</em>' if eco else '<em>HOLIDAY</em>' if hol else '<em>INTL</em>' if intl else "") + "</span>")
 
 
 def week_html(events: list[dict], today: date, label: str, warn: str | None = None) -> str:
@@ -618,7 +704,7 @@ def month_html(events: list[dict], year: int, month: int, today: date, max_per_d
         for d in wk:
             day = [e for e in events if e["when"].date() == d]
             cls = ("out " if d.month != month else "") + ("today" if d == today else "")
-            items = "".join(f'<span class="e{" eco" if E in e["tags"] else (" closed" if e.get("closed") else " hol") if H in e["tags"] else ""}" title="{html.escape(("" if e.get("notime") else _clock(e["when"]) + " ") + e["title"])}">'
+            items = "".join(f'<span class="e{" eco" if E in e["tags"] else (" closed" if e.get("closed") else " hol") if H in e["tags"] else " intl" if I in e["tags"] else ""}" title="{html.escape(("" if e.get("notime") else _clock(e["when"]) + " ") + e["title"])}">'
                             f'{html.escape(e.get("short") or e["title"].split(":")[0])}</span>' for e in day[:max_per_day])
             more = f'<span class="more">+{len(day) - max_per_day} more</span>' if len(day) > max_per_day else ""
             cells.append(f'<td class="{cls.strip()}"><span class="n">{d.day}</span>{items}{more}</td>')
@@ -630,8 +716,9 @@ def list_rows(events: list[dict]) -> list[dict]:
     """Rows for a table: Date, Time (CT), Report, Source, Notes."""
     return [{"Date": e["when"].strftime("%a %b ") + str(e["when"].day), "Time (CT)": "all day" if e.get("notime") else _clock(e["when"]),
              "Report": e["title"],
-             "Type": "Holiday" if H in e["tags"] else "Economic" if E in e["tags"] else ("Grain + livestock" if e["tags"] >= BOTH else
-                                                                                      ("Grain" if G in e["tags"] else "Livestock")),
+             "Type": "Holiday" if H in e["tags"] else "Economic" if E in e["tags"] else
+             "International" + (" grain" if G in e["tags"] else " livestock" if L in e["tags"] else "") if I in e["tags"] else
+             ("Grain + livestock" if e["tags"] >= BOTH else ("Grain" if G in e["tags"] else "Livestock")),
              "Source": e["source"], "Notes": e["note"]} for e in events]
 
 
@@ -655,10 +742,10 @@ def _events(today: date):
             raise RuntimeError("; ".join(notes))          # an exception is never cached
         return events
 
-    note = "Some live release calendars (NASS, EIA, CFTC) could not be read just now, so those reports are missing."
+    note = "Some live release calendars (NASS, EIA, CFTC, Statistics Canada) could not be read just now, so those reports are missing."
     def offline():
         return sort_events(wasde_events() + bls_events() + export_sales_events(today) + export_inspections_events(today)
-                           + holiday_events(today))
+                           + holiday_events(today) + conab_events(today))
 
     if _time.time() < _fail_until:
         return offline(), [note]
@@ -699,10 +786,10 @@ def render_tab() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     c1, c2 = st.columns([3, 2])
     with c1:
-        shown = st.pills("Show", ["Grain", "Livestock", "Economic", "Holidays"], selection_mode="multi",
-                         default=["Grain", "Livestock", "Economic", "Holidays"], key="rc_types", label_visibility="collapsed",
-                         help="Turn grain, livestock, economic (CPI, PPI, EIA) reports and holidays (federal and CME) on or off.")
-    scoped = with_any_tag(events, {{"Grain": G, "Livestock": L, "Economic": E, "Holidays": H}[x] for x in (shown or [])})
+        shown = st.pills("Show", ["Grain", "Livestock", "Economic", "Holidays", "International"], selection_mode="multi",
+                         default=["Grain", "Livestock", "Economic", "Holidays", "International"], key="rc_types", label_visibility="collapsed",
+                         help="Turn grain, livestock, economic (CPI, PPI, EIA), holidays (federal and CME) and international (Canada, Brazil) entries on or off.")
+    scoped = with_any_tag(events, {{"Grain": G, "Livestock": L, "Economic": E, "Holidays": H, "International": I}[x] for x in (shown or [])})
     months = []
     y, m = today.year, today.month
     for _ in range(18):                       # last month through a year and a bit ahead
@@ -718,15 +805,18 @@ def render_tab() -> None:
     month_events = [e for e in scoped if (e["when"].year, e["when"].month) == picked]
     st.markdown(f"##### {calendar.month_name[picked[1]]} {picked[0]}: {len(month_events)} reports")
     if not shown:
-        st.caption("Switch at least one of Grain, Livestock, Economic or Holidays on to see entries.")
+        st.caption("Switch at least one of Grain, Livestock, Economic, Holidays or International on to see entries.")
     elif month_events:
         st.dataframe(pd.DataFrame(list_rows(month_events)), hide_index=True, width="stretch")
     else:
         st.caption("No reports on the calendar for this month yet.")
     warn = " ".join(notes) or coverage_warning(today)
     st.caption("CME Globex normal day-session hours: grains " + D.CME_NORMAL_HOURS["grains"] + ", livestock " + D.CME_NORMAL_HOURS["livestock"] + ". "
-               "On the days marked CLOSED neither trades; CME confirms holiday hours about two weeks ahead, so an early close that is not shown yet "
-               "is not yet published. Check cmegroup.com/trading-hours.html before a holiday.")
+               "Holiday closures and early closes are CME's published holiday hours (grains and livestock groups); CME can change them and finalizes "
+               "them about two weeks ahead, so check cmegroup.com/trading-hours.html before a holiday.")
+    st.caption("International: Statistics Canada (crop reports, farm income, CPI) and CONAB, Brazil (grain surveys, crop progress). "
+               "Argentina is not shown: the Buenos Aires Grain Exchange and Rosario publish no release calendar we can read. The Canadian and "
+               "Brazilian crop reports also appear on the Grain card.")
     st.caption("Times are Central. USDA NASS dates are read live from NASS's release calendar; WASDE dates are USDA's published schedule; "
                "CPI and PPI come from the Bureau of Labor Statistics and the energy reports from EIA (its weekly dates run to the end of the year it has published holiday changes for). Dates can change: check the agency before you rely on one."
                + (f" ⚠ {warn}" if warn else ""))
