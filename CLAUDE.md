@@ -206,21 +206,29 @@ now in the client app's process. `test_client_portal.py` pins the client-only se
 
 ## Report calendar: "This Week's Reports" and the Reports Calendar tab (2026-11-12)
 
-Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, and the economic reports (monthly CPI, PPI)
-mixed into both. Answers when asked: ONE "Reports Calendar" tab (three on/off pills: Grain, Livestock, Economic, all on by default; an event shows when any of its tags is on, so WASDE stays while Grain or Livestock is on and CPI/PPI go with Economic alone), BOTH portals, official dates only (no "usual schedule" weekly staples).
-`report_calendar.py` (the portal's own, not a mirror) + `report_schedule_data.py` + `test_report_calendar.py`; `Home.py` has a third home-page tab and a card at the top of the Grain and
-Livestock tabs (`render_week`).
+Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, the economic reports (CPI, PPI) mixed into both, then (same day) EIA
+under Economic, the weekly export inspections / export sales / CFTC report, federal holidays and CME grain holidays with their effect on trading hours. Answers when asked: ONE "Reports Calendar" tab,
+BOTH portals. `report_calendar.py` (the portal's own, not a mirror) + `report_schedule_data.py` + `test_report_calendar.py` (35 checks); `Home.py` has a third home-page tab and a card at the top of the
+Grain and Livestock tabs (`render_week`). The tab has four on/off pills (Grain, Livestock, Economic, Holidays, all on); an event shows when any of its tags is on.
 
-- **Sources.** USDA NASS: its own .ics (`nass.usda.gov/Publications/Calendar/<year>/NassReleases<year>.ics`), read live for this year and next (next year 404s until NASS publishes it). Only the
-  reports a grain or livestock desk watches are kept (`GRAIN_NASS`, `LIVESTOCK_NASS`; ~45 of ~92 titles; HOLIDAY, hops, mushrooms and the like are dropped; add a title there to show it). **WASDE and CPI/PPI
-  are TYPED** in `report_schedule_data.py` because their sites refuse a script (usda.gov and bls.gov answer 403; ESMIS lists only published WASDEs): read from the agencies' own pages in a browser on 2026-11-12
-  (WASDE 2026 + 2027; CPI/PPI reference Oct 2026 - Nov 2027). **They must be refreshed by hand** (BLS adds 2028 in late 2027; USDA posts the next WASDE year in the autumn): the footnote turns amber under 60 days
-  from the end (`coverage_warning`).
-- **Scopes.** Tags grain / livestock / economic; a scope shows its own plus every economic one. WASDE and Agricultural Prices are tagged for both. Times are shown in Central (WASDE 12:00 ET = 11:00 CT; CPI/PPI 8:30 ET = 7:30 CT).
-- **"This week"** is Monday-Sunday; on a Saturday or Sunday it shows next week. A failed NASS read is NOT cached: the typed dates show at once with a note and NASS is not asked again for 5 minutes
-  (a good read is cached 6 hours for everyone). The Slaughter Weekly / Broiler Hatchery weekly rows make the livestock card busier than the grain one.
-- Checked live on 2026-11-12: grain week = Crop Progress Mon, CPI + Crop Production + WASDE Tue, PPI Fri; livestock week = CPI + WASDE Tue, Broiler Hatchery + Slaughter Weekly Thu, PPI + Turkey Hatchery Fri; the calendar tab month grid and list
-  render in the client build. Not done: the Livestock Portal (a separate Streamlit app) and Grain Seasonal's own historical Report Calendar tab are untouched.
+- **Tags and scopes.** grain / livestock / economic / holiday. A card or scope shows its own plus every economic AND holiday event. WASDE, Agricultural Prices, Export Sales and the CFTC report are tagged for both; Export
+  Inspections grain only; CPI, PPI and EIA economic; federal holidays and CME closures holiday. Times are shown in Central; events with no known hour (EIA STEO / PSM, holidays) show date only.
+- **Read live (scripts are allowed):** USDA NASS (its .ics; ~45 of ~92 titles kept in `GRAIN_NASS` / `LIVESTOCK_NASS`), EIA (four schedule pages: the Weekly Petroleum Status Report incl. ethanol, Wed 10:30 ET
+  except the holiday-exception table; Natural Gas Storage, Thu 10:30 ET, same; STEO and Petroleum Supply Monthly = the page's "Release Date / Next Release Date" only, so one or two dates ahead),
+  CFTC Commitments of Traders (its release-schedule page, 3:30 PM ET, `*` = holiday delay). EIA's weekly dates are generated only to the end of the last year its exception table covers (`eia_weekly`: each exception
+  REPLACES the standard day nearest to it), because later holiday weeks would be guessed.
+- **TYPED in `report_schedule_data.py` (their sites answer a script with 403; read in a browser 2026-11-12; refresh by hand):** WASDE 2026 + 2027 (usda.gov), CPI and PPI reference Oct 2026 - Nov 2027 (bls.gov),
+  FAS Weekly Export Sales dates Nov 13 - Dec 31 2026 (fas.usda.gov/data/scheduled-reports lists only ~2 months), CME's normal day-session hours and the Thanksgiving 2026 early close (cmegroup.com). The footnote turns amber
+  under 60 days from the end of WASDE/CPI/PPI.
+- **Rule-based, flagged "Usual schedule" in the note (120 days ahead at most):** Export Sales after the typed dates = FAS's own rule (Thursday 8:30 ET; Friday when a federal holiday falls the previous Friday or Mon-Thu of that
+  week; checked against FAS's Nov 13 and Nov 27); Export Inspections = Mondays 11:00 ET, Tuesday after a Monday holiday (USDA publishes no calendar for it).
+- **Holidays.** Federal holidays are computed from the statute with the observed rule (Sat -> Fri, Sun -> Mon); the 2026 list equals NASS's own HOLIDAY rows exactly (tested). CME grain and livestock futures are closed on those
+  less Columbus Day and Veterans Day (they trade), plus Good Friday; a New Year's Day on a Saturday closes nothing (2028: federal Dec 31 2027, CME open), the same rule as `grain_calendar.py` in the basis tracker. **CME hours detail is
+  only as complete as CME's own page: it publishes holiday hours about two weeks ahead and its date selector is awkward to script, so only Thanksgiving 2026 is typed (Wed Nov 25 normal, Thu closed, Fri Nov 27 8:30 AM - 12:05 PM CT, grains and
+  livestock alike). The other early closes are NOT shown until CME publishes them; the tab says so.** To add one: cmegroup.com/trading-hours.html, pick the holiday, read the Grains and Livestock rows, add an event in `holiday_events`.
+- **"This week"** is Monday-Sunday (the week ahead on a weekend). A failed live read is NOT cached: the typed and rule-based events show at once with a note, and NASS / EIA / CFTC are not asked again for 5 minutes (a good
+  read is cached 6 hours for everyone). Not done: other countries (see the project note in memory: StatCan is scriptable, CONAB/BAGE/Rosario need a browser read), the Livestock Portal (separate app), Grain Seasonal's own
+  historical Report Calendar tab.
 
 ## Risk Analyzer (`apps/risk_analyzer/`, added 2026-10-12)
 

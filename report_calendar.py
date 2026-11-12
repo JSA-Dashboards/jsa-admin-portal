@@ -12,6 +12,16 @@ WHERE THE DATES COME FROM
               titles (hops, mushrooms, floriculture ...) and the HOLIDAY rows are dropped on purpose.
   WASDE       typed in report_schedule_data.py (USDA's own list; ESMIS only lists reports already published).
   CPI, PPI    typed in report_schedule_data.py (BLS's schedule; BLS answers a script with 403).
+  EIA         read live from EIA's own schedule pages (they answer a script), all tagged "economic": the Weekly Petroleum Status Report
+              (ethanol production and stocks are in it), the Weekly Natural Gas Storage Report, the Short-Term Energy Outlook and the
+              Petroleum Supply Monthly. See the EIA section below for how the weekly ones are built from their holiday-exception tables.
+  CFTC        the Commitments of Traders release schedule page (it answers a script), 3:30 PM ET, holiday delays marked there.
+  Export Sales  FAS's calendar, typed (EXPORT_SALES_OFFICIAL: it answers a script with 403) for the dates FAS has published; after those,
+              FAS's own holiday rule ("usual schedule" in the notes), looking ahead 120 days at most.
+  Export Inspections  Mondays 11:00 AM ET, Tuesday after a Monday holiday: the usual schedule (no calendar is published), 120 days at most.
+  Holidays    US federal holidays from the statute (observed dates: Saturday -> Friday, Sunday -> Monday) and the days CME's grain and
+              livestock futures are closed (the federal list less Columbus Day and Veterans Day, plus Good Friday). The extra hours detail
+              (early closes) is typed only where CME has published it; CME confirms holiday hours about two weeks ahead.
 Times are shown in Central.
 
 TAGS. Every event carries a set of tags: "grain", "livestock", "economic". A scope shows the events tagged with it PLUS every
@@ -35,7 +45,7 @@ UTC = ZoneInfo("UTC")
 NASS_ICS_URL = "https://www.nass.usda.gov/Publications/Calendar/{year}/NassReleases{year}.ics"
 UA = "jsa-report-calendar"
 
-G, L, E = "grain", "livestock", "economic"
+G, L, E, H = "grain", "livestock", "economic", "holiday"
 BOTH = frozenset({G, L})
 
 # NASS .ics SUMMARY (spaces collapsed, "\," unescaped) -> (tags, title shown)
@@ -97,6 +107,12 @@ NASS_BOTH = {"Agricultural Prices": (BOTH, "Agricultural Prices")}
 NASS_KEEP: dict[str, tuple[frozenset, str]] = {**GRAIN_NASS, **LIVESTOCK_NASS, **NASS_BOTH}
 
 
+EIA_WPSR_URL = "https://www.eia.gov/petroleum/supply/weekly/schedule.php"
+EIA_NGS_URL = "https://ir.eia.gov/ngs/schedule.html"
+EIA_STEO_URL = "https://www.eia.gov/outlooks/steo/release_schedule.php"
+EIA_PSM_URL = "https://www.eia.gov/petroleum/supply/monthly/"
+
+
 # -- parsing -----------------------------------------------------------------------------
 _EVENT = re.compile(r"BEGIN:VEVENT(.*?)END:VEVENT", re.S)
 _SUMMARY = re.compile(r"^SUMMARY:(.*)$", re.M)
@@ -145,15 +161,256 @@ def bls_events() -> list[dict]:
     return out
 
 
+# -- EIA ---------------------------------------------------------------------------------
+_MONTHS = {m: i for i, m in enumerate(["January", "February", "March", "April", "May", "June", "July", "August", "September",
+                                       "October", "November", "December"], 1)}
+_DATE = re.compile(r"(January|February|March|April|May|June|July|August|September|October|November|December) (\d{1,2}), (\d{4})")
+_TIME = re.compile(r"(\d{1,2}):(\d{2}) ?([ap])\.?m", re.I)
+
+
+def _plain(h: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"<script.*?</script>|<style.*?</style>", "", h, flags=re.S)))
+
+
+def _hm(txt: str) -> tuple[int, int] | None:
+    m = _TIME.search(txt)
+    if not m:
+        return None
+    h = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "p" else 0)
+    return h, int(m.group(2))
+
+
+def parse_eia_exceptions(html_text: str) -> list[tuple[date, tuple[int, int], str]]:
+    """The holiday-exception rows of an EIA weekly schedule page: (alternate release date, (hour, minute) ET, holiday). The
+    petroleum page also carries the data week's end date first; the alternate release date is the LAST date of a row."""
+    out = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, re.S):
+        cells = [_plain(c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)]
+        dates = [d for c in cells for d in _DATE.findall(c)]
+        times = [t for t in (_hm(c) for c in cells) if t]
+        if not dates or not times:
+            continue
+        mon, day, yr = dates[-1] if len(cells) < 5 else _DATE.findall(cells[1])[-1]
+        out.append((date(int(yr), _MONTHS[mon], int(day)), times[0], cells[-1]))
+    return out
+
+
+def eia_weekly(title: str, short: str, note: str, std_weekday: int, std_hm: tuple[int, int],
+               exceptions: list[tuple[date, tuple[int, int], str]], start: date, end: date) -> list[dict]:
+    """A weekly EIA report from start to end: every `std_weekday` at `std_hm` ET, except that each holiday exception REPLACES the
+    standard day nearest to its alternate date (within 4 days). EIA publishes the exceptions only for the year ahead, so the
+    caller stops `end` at the end of the last year its table covers: past that, holiday weeks would be guessed."""
+    std_days = {start + timedelta(days=i) for i in range((end - start).days + 1) if (start + timedelta(days=i)).weekday() == std_weekday}
+    moved: list[tuple[date, tuple[int, int]]] = []
+    for alt, hm, _holiday in sorted(exceptions):
+        near = sorted((abs(k), k) for k in range(-4, 5) if (alt + timedelta(days=k)) in std_days)
+        if near:
+            std_days.discard(alt + timedelta(days=near[0][1]))
+        if start <= alt <= end:
+            moved.append((alt, hm))
+    days = [(d, std_hm) for d in sorted(std_days)] + moved
+    return [{"when": _et(d, hm), "title": title, "short": short, "source": "EIA", "tags": frozenset({E}), "note": note}
+            for d, hm in sorted(days)]
+
+
+def parse_eia_release_dates(html_text: str) -> list[date]:
+    """'Release Date: Nov 10, 2026 | Next Release Date: Dec 8, 2026' style headers: every date after those labels."""
+    t = _plain(html_text)
+    out = []
+    for label in ("Release Date", "Next Release Date", "Next Release"):
+        for m in re.finditer(label + r":?\s*(?:&nbsp;)?\s*((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2}, \d{4})", t):
+            raw = m.group(1).replace(".", "")
+            for fmt in ("%B %d, %Y", "%b %d, %Y"):
+                try:
+                    out.append(datetime.strptime(raw, fmt).date())
+                    break
+                except ValueError:
+                    pass
+    return sorted(set(out))
+
+
+def eia_events(pages: dict[str, str], today: date) -> list[dict]:
+    """EIA's four reports from the text of its pages (keys 'wpsr', 'ngs', 'steo', 'psm'; a missing key is skipped)."""
+    out: list[dict] = []
+    start = today - timedelta(days=45)
+    if pages.get("wpsr"):
+        ex = parse_eia_exceptions(pages["wpsr"])
+        end = date(max((d.year for d, _, _ in ex), default=today.year), 12, 31)
+        out += eia_weekly("EIA: Weekly Petroleum Status Report", "EIA petroleum", "Includes ethanol production and stocks",
+                          2, (10, 30), [x for x in ex if x[0] >= start - timedelta(days=7)], start, end)
+    if pages.get("ngs"):
+        ex = parse_eia_exceptions(pages["ngs"])
+        end = date(max((d.year for d, _, _ in ex), default=today.year), 12, 31)
+        out += eia_weekly("EIA: Natural Gas Storage Report", "EIA gas storage", "Working gas in underground storage",
+                          3, (10, 30), [x for x in ex if x[0] >= start - timedelta(days=7)], start, end)
+    for key, title, short, note, hm in (("steo", "EIA: Short-Term Energy Outlook", "EIA STEO", "Monthly energy forecast", (12, 0)),
+                                        ("psm", "EIA: Petroleum Supply Monthly", "EIA PSM", "Monthly petroleum supply and disposition", (11, 30))):
+        if pages.get(key):
+            for d in parse_eia_release_dates(pages[key]):
+                if d >= start:
+                    out.append({"when": _et(d, hm), "title": title, "short": short, "source": "EIA", "tags": frozenset({E}), "note": note,
+                            "notime": True})          # EIA's page gives the day, not the hour
+    return out
+
+
+# -- holidays -----------------------------------------------------------------------------
+def _nth_weekday(y: int, m: int, wd: int, n: int) -> date:
+    first = date(y, m, 1)
+    return first + timedelta(days=(wd - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def _last_weekday(y: int, m: int, wd: int) -> date:
+    d = date(y, m, calendar.monthrange(y, m)[1])
+    while d.weekday() != wd:
+        d -= timedelta(days=1)
+    return d
+
+
+def _observed(d: date) -> date:
+    return d - timedelta(days=1) if d.weekday() == 5 else d + timedelta(days=1) if d.weekday() == 6 else d
+
+
+def easter(y: int) -> date:
+    """Western Easter (the anonymous Gregorian computus)."""
+    a, b, c = y % 19, y // 100, y % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return date(y, month, day + 1)
+
+
+def federal_holidays(year: int) -> list[tuple[date, str, date]]:
+    """[(observed date, name, actual date)] of the US federal holidays whose ACTUAL date is in `year` (Jan 1 of the next year can be
+    observed on Dec 31 of this one)."""
+    rows = [
+        (date(year, 1, 1), "New Year's Day"), (_nth_weekday(year, 1, 0, 3), "Martin Luther King Jr. Day"),
+        (_nth_weekday(year, 2, 0, 3), "Presidents Day"), (_last_weekday(year, 5, 0), "Memorial Day"),
+        (date(year, 6, 19), "Juneteenth"), (date(year, 7, 4), "Independence Day"), (_nth_weekday(year, 9, 0, 1), "Labor Day"),
+        (_nth_weekday(year, 10, 0, 2), "Columbus Day"), (date(year, 11, 11), "Veterans Day"),
+        (_nth_weekday(year, 11, 3, 4), "Thanksgiving Day"), (date(year, 12, 25), "Christmas Day"),
+    ]
+    return [(_observed(d), n, d) for d, n in rows]
+
+
+CME_OPEN_FEDERAL = {"Columbus Day", "Veterans Day"}      # US federal holidays on which CME grains and livestock trade as usual
+
+
+def _noon(d: date) -> datetime:
+    return datetime.combine(d, time(12, 0), tzinfo=CT)
+
+
+def holiday_events(today: date) -> list[dict]:
+    """Federal holidays and CME grain / livestock closures from last month to the end of next year, all-day events tagged 'holiday'."""
+    out: list[dict] = []
+    start, end = today - timedelta(days=45), date(today.year + 1, 12, 31)
+    seen_closed: set[date] = set()
+    for y in range(today.year - 1, today.year + 3):
+        for obs, name, actual in federal_holidays(y):
+            if not (start <= obs <= end):
+                continue
+            tag = f" (observed {obs:%a %b} {obs.day})" if obs != actual else ""
+            if name in CME_OPEN_FEDERAL:
+                cme = "CME grain and livestock futures trade normally."
+            elif name == "New Year's Day" and actual.weekday() == 5:
+                cme = "CME is open on the observed Friday (New Year's Day falls on a Saturday)."
+            else:
+                cme = "CME grain and livestock futures are CLOSED."
+                seen_closed.add(obs)
+            if name == "New Year's Day" and actual.weekday() == 5:
+                cme = "CME is open on the observed Friday (New Year's Day falls on a Saturday)."
+                seen_closed.discard(obs)
+            out.append({"when": _noon(obs), "title": f"{name}{tag}", "short": name, "source": "US federal holiday",
+                        "tags": frozenset({H}), "note": "Federal agencies (USDA, BLS, EIA, CFTC) are closed and may move releases. " + cme,
+                        "notime": True, "closed": obs in seen_closed})
+    gf = easter(today.year).__sub__(timedelta(days=2)), easter(today.year + 1) - timedelta(days=2), easter(today.year - 1) - timedelta(days=2)
+    for d in gf:
+        if start <= d <= end:
+            out.append({"when": _noon(d), "title": "Good Friday", "short": "Good Friday", "source": "CME", "tags": frozenset({H}),
+                        "note": "Not a federal holiday. CME grain and livestock futures are CLOSED.", "notime": True, "closed": True})
+    d, hrs = D.CME_THANKSGIVING_2026_EARLY_CLOSE
+    if start <= d <= end:
+        out.append({"when": _noon(d), "title": "CME early close: day after Thanksgiving", "short": "CME early close", "source": "CME",
+                    "tags": frozenset({H}), "note": f"Grain and livestock futures trade {hrs} (CME's published holiday hours).", "notime": True,
+                    "closed": False})
+    return out
+
+
+# -- weekly staples --------------------------------------------------------------------------
+def _holiday_dates(today: date) -> set[date]:
+    return {obs for y in range(today.year - 1, today.year + 3) for obs, _n, _a in federal_holidays(y)}
+
+
+def export_sales_events(today: date) -> list[dict]:
+    """FAS Weekly Export Sales, 8:30 AM ET: the dates FAS has published, then (120 days at most) its holiday rule: Thursday, but Friday when a
+    federal holiday falls the previous Friday or Monday-Thursday of that week."""
+    hol = _holiday_dates(today)
+    out = [{"when": _et(d, D.EXPORT_SALES_TIME_ET), "title": "Weekly Export Sales", "short": "Export Sales", "source": "USDA FAS",
+            "tags": BOTH, "note": "Sales through the prior Thursday"} for d in D.EXPORT_SALES_OFFICIAL]
+    last = max(D.EXPORT_SALES_OFFICIAL)
+    d = last + timedelta(days=1)
+    while d <= today + timedelta(days=120):
+        if d.weekday() == 3:
+            week = [d - timedelta(days=6)] + [d - timedelta(days=k) for k in (3, 2, 1, 0)]       # previous Friday, Mon-Thu
+            rel = d + timedelta(days=1) if any(w in hol for w in week) else d
+            out.append({"when": _et(rel, D.EXPORT_SALES_TIME_ET), "title": "Weekly Export Sales", "short": "Export Sales",
+                        "source": "USDA FAS", "tags": BOTH, "note": "Usual schedule: FAS has not published this date yet"})
+        d += timedelta(days=1)
+    return out
+
+
+def export_inspections_events(today: date) -> list[dict]:
+    """USDA Export Inspections, Mondays 11:00 AM ET (Tuesday after a Monday holiday): the usual schedule, 120 days at most."""
+    hol = _holiday_dates(today)
+    out, d = [], today - timedelta(days=45)
+    while d <= today + timedelta(days=120):
+        if d.weekday() == 0:
+            rel = d + timedelta(days=1) if d in hol else d
+            out.append({"when": _et(rel, D.EXPORT_INSPECTIONS_TIME_ET), "title": "Export Inspections", "short": "Export Inspections",
+                        "source": "USDA AMS", "tags": frozenset({G}), "note": "Usual schedule (no calendar is published)"})
+        d += timedelta(days=1)
+    return out
+
+
+_COT_MONTH = r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+
+
+def parse_cot_schedule(html_text: str) -> list[dict]:
+    """The CFTC Commitments of Traders release dates from its schedule page ('2026 Release Schedule  Month Dates  January 05* 09 16 ...';
+    a * marks a date delayed by a federal holiday), 3:30 PM ET."""
+    t = _plain(html_text).replace("&nbsp;", " ")
+    out = []
+    for hm in re.finditer(r"(20\d\d) Release Schedule", t):
+        year = int(hm.group(1))
+        seg = t[hm.end():]
+        stop = re.search(r"\*Delayed|RELATED LINKS|\d{4} Release Schedule", seg)
+        seg = seg[:stop.start()] if stop else seg[:2000]
+        parts = re.split(_COT_MONTH, seg)
+        for i in range(1, len(parts) - 1, 2):
+            month = _MONTHS[parts[i]]
+            for day, star in re.findall(r"\b(\d{1,2})(\*?)", parts[i + 1]):
+                try:
+                    d = date(year, month, int(day))
+                except ValueError:
+                    continue
+                out.append({"when": _et(d, D.COT_TIME_ET), "title": "CFTC: Commitments of Traders", "short": "CFTC COT", "source": "CFTC",
+                            "tags": BOTH, "note": ("Delayed by a federal holiday. " if star else "") + "Positions as of the prior Tuesday"})
+    return out
+
+
 def sort_events(events: list[dict]) -> list[dict]:
     return sorted(events, key=lambda e: (e["when"], e["title"]))
 
 
 def for_scope(events: list[dict], scope: str) -> list[dict]:
-    """scope: 'grain' | 'livestock' | 'all'. Economic reports are in every scope."""
+    """scope: 'grain' | 'livestock' | 'all'. Economic reports and holidays are in every scope."""
     if scope == "all":
         return list(events)
-    return [e for e in events if scope in e["tags"] or E in e["tags"]]
+    return [e for e in events if scope in e["tags"] or E in e["tags"] or H in e["tags"]]
 
 
 def with_any_tag(events: list[dict], tags: set | frozenset) -> list[dict]:
@@ -216,6 +473,37 @@ def fetch_nass_ics(year: int, timeout: int = 12) -> str | None:
     return None
 
 
+def fetch_eia_pages(timeout: int = 25) -> dict[str, str]:
+    """The text of EIA's schedule pages, by key; a page that cannot be read is simply absent. The four are asked side by side
+    (the petroleum one alone can take 8 seconds)."""
+    import requests
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(item):
+        key, url = item
+        try:
+            r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
+            return key, (r.text if r.status_code == 200 and len(r.text) > 2000 else None)
+        except requests.RequestException:
+            return key, None
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        got = list(ex.map(one, (("wpsr", EIA_WPSR_URL), ("ngs", EIA_NGS_URL), ("steo", EIA_STEO_URL), ("psm", EIA_PSM_URL))))
+    return {k: v for k, v in got if v}
+
+
+CFTC_URL = "https://www.cftc.gov/MarketReports/CommitmentsofTraders/ReleaseSchedule/index.htm"
+
+
+def fetch_cftc_page(timeout: int = 25) -> str | None:
+    import requests
+    try:
+        r = requests.get(CFTC_URL, headers={"User-Agent": UA}, timeout=timeout)
+        return r.text if r.status_code == 200 and len(r.text) > 2000 else None
+    except requests.RequestException:
+        return None
+
+
 def load_all(today: date) -> tuple[list[dict], list[str]]:
     """(every event, notes about what could not be read)."""
     notes: list[str] = []
@@ -230,6 +518,16 @@ def load_all(today: date) -> tuple[list[dict], list[str]]:
             notes.append("USDA NASS's release calendar could not be read just now, so NASS reports are missing.")
     if not got and not notes:
         notes.append("USDA NASS's release calendar could not be read just now, so NASS reports are missing.")
+    pages = fetch_eia_pages()
+    events += eia_events(pages, today)
+    if len(pages) < 4:
+        notes.append("Some of EIA's schedule pages could not be read just now, so some EIA reports are missing.")
+    cot = fetch_cftc_page()
+    if cot:
+        events += [e for e in parse_cot_schedule(cot) if e["when"].date() >= today - timedelta(days=45)]
+    else:
+        notes.append("The CFTC release schedule could not be read just now, so Commitments of Traders dates are missing.")
+    events += export_sales_events(today) + export_inspections_events(today) + holiday_events(today)
     return sort_events(events), notes
 
 
@@ -250,6 +548,9 @@ CSS = """
 .jsa-rc-chip i { font-style:normal; color:#8a9a90; margin-right:0.35rem; font-size:0.74rem; font-variant-numeric:tabular-nums; }
 .jsa-rc-chip.eco { border-color:#e3c27b; background:#fff8e8; }
 .jsa-rc-chip.eco em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#9a6a12; margin-left:0.4rem; }
+.jsa-rc-chip.hol { border-color:#c9d3e0; background:#f1f5fa; }
+.jsa-rc-chip.closed { border-color:#e6b5b5; background:#fdf0f0; }
+.jsa-rc-chip.hol em, .jsa-rc-chip.closed em { font-style:normal; font-size:0.6rem; font-weight:700; letter-spacing:0.07em; color:#8a4b4b; margin-left:0.4rem; }
 .jsa-rc-none { color:#8a9a90; font-size:0.84rem; padding:0.2rem 0; }
 .jsa-rc-foot { font-size:0.7rem; color:#8a9a90; margin-top:0.35rem; }
 .jsa-rc-warn { color:#9a6a12; }
@@ -261,6 +562,8 @@ CSS = """
 .jsa-rc-month .n { font-weight:700; color:#32373c; font-size:0.78rem; }
 .jsa-rc-month .e { display:block; margin-top:2px; padding:1px 4px; border-radius:4px; background:#eef3f0; color:#32373c; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .jsa-rc-month .e.eco { background:#fff1cf; }
+.jsa-rc-month .e.hol { background:#e6edf6; }
+.jsa-rc-month .e.closed { background:#fbe3e3; }
 .jsa-rc-month .more { color:#8a9a90; margin-top:2px; display:block; }
 @media (max-width: 700px) { .jsa-rc-day { flex-direction:column; gap:0.15rem; } .jsa-rc-month td { height:4rem; } }
 </style>
@@ -273,10 +576,12 @@ def _clock(when: datetime) -> str:
 
 
 def chip_html(e: dict) -> str:
-    eco = E in e["tags"]
+    eco, hol = E in e["tags"], H in e["tags"]
     tip = html.escape((e["note"] + " · " if e["note"] else "") + e["source"])
-    return (f'<span class="jsa-rc-chip{" eco" if eco else ""}" title="{tip}"><i>{_clock(e["when"])}</i><b>{html.escape(e["title"])}</b>'
-            + (f'<em>ECON</em>' if eco else "") + "</span>")
+    when = "" if e.get("notime") else f'<i>{_clock(e["when"])}</i>'
+    kind = " eco" if eco else (" closed" if e.get("closed") else " hol") if hol else ""
+    return (f'<span class="jsa-rc-chip{kind}" title="{tip}">{when}<b>{html.escape(e["title"])}</b>'
+            + ('<em>ECON</em>' if eco else '<em>HOLIDAY</em>' if hol else "") + "</span>")
 
 
 def week_html(events: list[dict], today: date, label: str, warn: str | None = None) -> str:
@@ -299,7 +604,7 @@ def week_html(events: list[dict], today: date, label: str, warn: str | None = No
                         + ("<small>Today</small>" if is_today else "") + "</div>"
                         f'<div class="jsa-rc-items">{"".join(chip_html(e) for e in day)}</div></div>')
         body = "".join(rows)
-    foot = ('<div class="jsa-rc-foot">Times are Central. USDA dates from NASS and the WASDE schedule; economic reports (CPI, PPI) from BLS. '
+    foot = ('<div class="jsa-rc-foot">Times are Central. USDA dates from NASS and the WASDE schedule; economic reports from BLS (CPI, PPI) and EIA. '
             "Dates can change: check the agency before you rely on one."
             + (f' <span class="jsa-rc-warn">{html.escape(warn)}</span>' if warn else "") + "</div>")
     return f'<div class="jsa-rc">{head}{body}{foot}</div>'
@@ -313,8 +618,8 @@ def month_html(events: list[dict], year: int, month: int, today: date, max_per_d
         for d in wk:
             day = [e for e in events if e["when"].date() == d]
             cls = ("out " if d.month != month else "") + ("today" if d == today else "")
-            items = "".join(f'<span class="e{" eco" if E in e["tags"] else ""}" title="{html.escape(_clock(e["when"]) + " " + e["title"])}">'
-                            f'{html.escape(e["title"].split(":")[0])}</span>' for e in day[:max_per_day])
+            items = "".join(f'<span class="e{" eco" if E in e["tags"] else (" closed" if e.get("closed") else " hol") if H in e["tags"] else ""}" title="{html.escape(("" if e.get("notime") else _clock(e["when"]) + " ") + e["title"])}">'
+                            f'{html.escape(e.get("short") or e["title"].split(":")[0])}</span>' for e in day[:max_per_day])
             more = f'<span class="more">+{len(day) - max_per_day} more</span>' if len(day) > max_per_day else ""
             cells.append(f'<td class="{cls.strip()}"><span class="n">{d.day}</span>{items}{more}</td>')
         rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -323,9 +628,10 @@ def month_html(events: list[dict], year: int, month: int, today: date, max_per_d
 
 def list_rows(events: list[dict]) -> list[dict]:
     """Rows for a table: Date, Time (CT), Report, Source, Notes."""
-    return [{"Date": e["when"].strftime("%a %b ") + str(e["when"].day), "Time (CT)": _clock(e["when"]), "Report": e["title"],
-             "Type": "Economic" if E in e["tags"] else ("Grain + livestock" if e["tags"] >= BOTH else
-                                                         ("Grain" if G in e["tags"] else "Livestock")),
+    return [{"Date": e["when"].strftime("%a %b ") + str(e["when"].day), "Time (CT)": "all day" if e.get("notime") else _clock(e["when"]),
+             "Report": e["title"],
+             "Type": "Holiday" if H in e["tags"] else "Economic" if E in e["tags"] else ("Grain + livestock" if e["tags"] >= BOTH else
+                                                                                      ("Grain" if G in e["tags"] else "Livestock")),
              "Source": e["source"], "Notes": e["note"]} for e in events]
 
 
@@ -349,14 +655,18 @@ def _events(today: date):
             raise RuntimeError("; ".join(notes))          # an exception is never cached
         return events
 
-    note = "USDA NASS's release calendar could not be read just now, so NASS reports are missing."
+    note = "Some live release calendars (NASS, EIA, CFTC) could not be read just now, so those reports are missing."
+    def offline():
+        return sort_events(wasde_events() + bls_events() + export_sales_events(today) + export_inspections_events(today)
+                           + holiday_events(today))
+
     if _time.time() < _fail_until:
-        return sort_events(wasde_events() + bls_events()), [note]
+        return offline(), [note]
     try:
         return _good(today.isoformat()), []
     except Exception:  # noqa: BLE001
         _fail_until = _time.time() + _FAIL_BACKOFF_SECONDS
-        return sort_events(wasde_events() + bls_events()), [note]
+        return offline(), [note]
 
 
 def today_ct() -> date:
@@ -389,10 +699,10 @@ def render_tab() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     c1, c2 = st.columns([3, 2])
     with c1:
-        shown = st.pills("Show", ["Grain", "Livestock", "Economic"], selection_mode="multi",
-                         default=["Grain", "Livestock", "Economic"], key="rc_types", label_visibility="collapsed",
-                         help="Turn grain, livestock and economic (CPI, PPI) reports on or off.")
-    scoped = with_any_tag(events, {{"Grain": G, "Livestock": L, "Economic": E}[x] for x in (shown or [])})
+        shown = st.pills("Show", ["Grain", "Livestock", "Economic", "Holidays"], selection_mode="multi",
+                         default=["Grain", "Livestock", "Economic", "Holidays"], key="rc_types", label_visibility="collapsed",
+                         help="Turn grain, livestock, economic (CPI, PPI, EIA) reports and holidays (federal and CME) on or off.")
+    scoped = with_any_tag(events, {{"Grain": G, "Livestock": L, "Economic": E, "Holidays": H}[x] for x in (shown or [])})
     months = []
     y, m = today.year, today.month
     for _ in range(18):                       # last month through a year and a bit ahead
@@ -408,12 +718,15 @@ def render_tab() -> None:
     month_events = [e for e in scoped if (e["when"].year, e["when"].month) == picked]
     st.markdown(f"##### {calendar.month_name[picked[1]]} {picked[0]}: {len(month_events)} reports")
     if not shown:
-        st.caption("Switch at least one of Grain, Livestock or Economic on to see reports.")
+        st.caption("Switch at least one of Grain, Livestock, Economic or Holidays on to see entries.")
     elif month_events:
         st.dataframe(pd.DataFrame(list_rows(month_events)), hide_index=True, width="stretch")
     else:
         st.caption("No reports on the calendar for this month yet.")
     warn = " ".join(notes) or coverage_warning(today)
+    st.caption("CME Globex normal day-session hours: grains " + D.CME_NORMAL_HOURS["grains"] + ", livestock " + D.CME_NORMAL_HOURS["livestock"] + ". "
+               "On the days marked CLOSED neither trades; CME confirms holiday hours about two weeks ahead, so an early close that is not shown yet "
+               "is not yet published. Check cmegroup.com/trading-hours.html before a holiday.")
     st.caption("Times are Central. USDA NASS dates are read live from NASS's release calendar; WASDE dates are USDA's published schedule; "
-               "CPI and PPI come from the Bureau of Labor Statistics. Dates can change: check the agency before you rely on one."
+               "CPI and PPI come from the Bureau of Labor Statistics and the energy reports from EIA (its weekly dates run to the end of the year it has published holiday changes for). Dates can change: check the agency before you rely on one."
                + (f" ⚠ {warn}" if warn else ""))

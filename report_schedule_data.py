@@ -44,3 +44,23 @@ PPI = [
     ("July 2027", date(2027, 8, 10)), ("August 2027", date(2027, 9, 10)), ("September 2027", date(2027, 10, 15)),
     ("October 2027", date(2027, 11, 12)), ("November 2027", date(2027, 12, 15)),
 ]
+
+
+# USDA FAS "Report Release Calendar" (https://www.fas.usda.gov/data/scheduled-reports; it answers a script with 403), read in a browser on
+# 2026-11-12: every Weekly Export Sales release it lists, 8:30 AM ET. Veterans Day (Wed Nov 11) moved the report to Fri Nov 13 and
+# Thanksgiving (Thu Nov 26) to Fri Nov 27. FAS lists only the next two months, so beyond the last date here report_calendar follows FAS's own
+# holiday rule and marks those dates "usual schedule".
+EXPORT_SALES_OFFICIAL = [
+    date(2026, 11, 13), date(2026, 11, 19), date(2026, 11, 27), date(2026, 12, 3),
+    date(2026, 12, 10), date(2026, 12, 17), date(2026, 12, 24), date(2026, 12, 31),
+]
+EXPORT_SALES_TIME_ET = (8, 30)
+EXPORT_INSPECTIONS_TIME_ET = (11, 0)
+COT_TIME_ET = (15, 30)
+
+# CME Globex regular day-session hours (Central) for the two product groups, read from CME's "Holiday and Trading Hours" page
+# (https://www.cmegroup.com/trading-hours.html, 403 to a script) on 2026-11-12 from an ordinary Wednesday:
+CME_NORMAL_HOURS = {"grains": "8:30 AM - 1:20 PM CT day session", "livestock": "8:30 AM - 1:05 PM CT"}
+# The one holiday whose hours CME had published for both groups when this was read: Thanksgiving 2026. Wed Nov 25 normal,
+# Thu Nov 26 closed, Fri Nov 27 opens 8:30 AM and closes 12:05 PM CT (grains and livestock alike).
+CME_THANKSGIVING_2026_EARLY_CLOSE = (date(2026, 11, 27), "8:30 AM - 12:05 PM CT")
