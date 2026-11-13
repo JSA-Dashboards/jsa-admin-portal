@@ -45,7 +45,7 @@ CARS_TO_BU        = 4_000
 MIN_COMPLETE_WEEK = 48
 
 TO_ADDR    = "jsagroup@jpsi.com"
-BCC_ADDR   = "rail@jpsi.com"
+BCC_ADDR   = None       # nobody on BCC: rail@jpsi.com came off on 2026-11-13 (Kolten: "just send to JSA internal and not the rail@jpsi.com")
 SENDER     = os.environ.get("GRAPH_SENDER", "basis-tracker@jpsi.com")
 FROM_NAME  = "JSA Rail Dashboard"
 
@@ -506,7 +506,7 @@ def build_report(df: pd.DataFrame, *, for_preview: bool = False) -> tuple[str, s
 
 # ── Email send ─────────────────────────────────────────────────────────────────
 def _send(subject: str, html: str, inline_images: dict) -> None:
-    """Send via Microsoft Graph with inline PNG attachments and BCC."""
+    """Send via Microsoft Graph with inline PNG attachments, To TO_ADDR only (a BCC is added only when BCC_ADDR is set)."""
     import msal
 
     tenant = os.environ["GRAPH_TENANT_ID"]
@@ -539,9 +539,10 @@ def _send(subject: str, html: str, inline_images: dict) -> None:
         "subject": subject,
         "body":    {"contentType": "HTML", "content": html},
         "toRecipients":  [{"emailAddress": {"address": TO_ADDR}}],
-        "bccRecipients": [{"emailAddress": {"address": BCC_ADDR}}],
         "from": {"emailAddress": {"address": sender, "name": FROM_NAME}},
     }
+    if BCC_ADDR:
+        message["bccRecipients"] = [{"emailAddress": {"address": BCC_ADDR}}]
     if atts:
         message["attachments"] = atts
 
