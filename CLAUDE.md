@@ -210,6 +210,30 @@ Kolten: "add a Tab that is legacy apps" for seven dashboards that still live as 
 as the same tiles as the rest of the page (keys `tile_legacy_N`); each is a link that opens the jpsi.com page in a new tab: Crop Conditions, Crop Progress, Domestic Production, Export Inspections, Export Sales, World S&D, Quarterly Grain
 Stocks (all answered 200 on 11-13; their descriptions are only the title, since the pages carry no description). To add or retire one, edit that list (`test_client_portal.py` checks they are unique jpsi.com links).
 
+## Self-hosted portals: `clients.jpsi.com` and `portal.jpsi.com` (built 2026-11-13, `deploy/`)
+
+Streamlit Community Cloud cannot serve a custom domain, so Kolten chose to run the same code on a droplet of its own: `jsa-portals`, 161.35.113.169 (Ubuntu 24.04, 2 vCPU / 3.9 GB, 2 GB swap). Everything is in `deploy/`: `README.md` (runbook),
+`setup_droplet.sh` (idempotent, run as root over ssh; `--caddy` writes the Caddyfile and reloads, only AFTER the DNS records exist or Caddy keeps failing to get certificates) and `secrets-names.md` (setting names only). Not a new copy of the apps:
+each portal is its own clone of THIS repo (`master`) with its own OS user, venv and secrets, so the client process can never read the staff secrets.
+
+| | client portal | staff portal |
+|---|---|---|
+| name | `clients.jpsi.com` | `portal.jpsi.com` |
+| main file / port (127.0.0.1) | `Client.py` / 8601 | `Home.py` / 8602 |
+| user, clone, venv | `jsa-client`, `/srv/jsa-client/{repo,venv}` | `jsa-staff`, `/srv/jsa-staff/{repo,venv}` |
+| secrets (0600) | `/srv/jsa-client/home/.streamlit/secrets.toml` | `/srv/jsa-staff/home/.streamlit/secrets.toml` |
+| service | `jsa-portal@client` | `jsa-portal@staff` |
+
+- **Deploying a change does NOT happen on push** (Streamlit Cloud does): push, then `ssh root@161.35.113.169 /srv/deploy/update.sh` (pulls both clones, reinstalls requirements only if they changed, restarts both; a restart drops sessions). Streamlit Cloud apps keep
+  redeploying on push as before and stay as the fallback for about a month after cutover.
+- **State at 2026-11-13:** the client portal is installed and RUNNING (health ok, ~60 MB idle); its login verified as `CLIENT_PORTAL_SVC` / `CLIENT_PORTAL_ROLE` (reads, refuses CREATE TABLE). Not reachable by name until IT adds the A records for both names to
+  161.35.113.169 (DNS only, TTL 300); the staff portal has no secrets installed and is not started. Order: DNS, `--caddy`, test https://clients.jpsi.com as a client, watch `free -m` for a day, then the staff portal (strong `ADMIN_PASSWORD` on the server copy first),
+  then tell clients and staff the new addresses. Add both origins to the Legacy Apps hosts' `frame-ancestors` only if embedding is ever wanted (see the Legacy Apps section).
+- **Secrets install traps (all hit on 11-13; the README has the safe commands):** check the clipboard by NAMES before installing (the client block has `CLIENT_PASSWORD` and `SNOWFLAKE_USER=CLIENT_PORTAL_SVC`; a block with ACCOUNTADMIN, `ADMIN_PASSWORD` or `GRAPH_*`, or the Livestock
+  Portal's `PORTAL_PASSPHRASE`, is the wrong app); Windows PowerShell adds a BOM when piping, which hides line 1 (strip with `sed`); never `grep` a secrets file for names with a pattern a PEM key line also matches; leave `ANTHROPIC_API_KEY`, `WA_*`, `TDM_PASSWORD` out of the client copy.
+  `MARS_API_KEY` is missing from the live client app (and so the server copy): Beef Trimmings, Cattle Weights and the CME Feeder Cattle Index tiles need it.
+- Shell scripts are pinned LF in `.gitattributes` (`*.sh text eol=lf`): a CRLF `setup_droplet.sh` fails on the server.
+
 ## Report calendar: "This Week's Reports" and the Reports Calendar tab (2026-11-12)
 
 Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, the economic reports (CPI, PPI) mixed into both, then (same day) EIA
