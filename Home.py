@@ -323,6 +323,18 @@ CLIENT_DESC = {
     "farmer-selling-survey": "Share of the crop farmers report sold, by crop year: corn, soybeans and HRW / SRW / HRS wheat.",
 }
 CLIENT_COMING_SOON = ["CSO & Spread Risk Analyzer", "High/Low Model"]
+
+# The older dashboards that still live as pages on the jpsi.com website (Kolten 2026-11-13: "add a Tab that is legacy apps that we have for these
+# links"). They are links out, opened in a new tab; all seven answered 200 when added. Shown in BOTH portals.
+LEGACY_APPS = [
+    ("Crop Conditions Dashboard", "https://www.jpsi.com/crop-conditions-dashboard/", "Crop conditions."),
+    ("Crop Progress Dashboard", "https://www.jpsi.com/crop-progress-dashboard/", "Crop progress."),
+    ("Domestic Production Dashboard", "https://www.jpsi.com/domestic-production-dashboard/", "Domestic production."),
+    ("Export Inspections Dashboard", "https://www.jpsi.com/export-inspections-dashboard/", "Export inspections."),
+    ("Export Sales Dashboard", "https://www.jpsi.com/export-sales-dashboard/", "Export sales."),
+    ("World S&D Dashboard", "https://www.jpsi.com/world-sd-dashboard/", "World supply and demand."),
+    ("Quarterly Grain Stocks Dashboard", "https://www.jpsi.com/quarterly-grain-stocks-dashboard/", "Quarterly grain stocks."),
+]
 # The standard JSA legal footer, verbatim from the other dashboards (Cost of Carry's DISCLAIMER_FOOTER_HTML, beef cutout,
 # risk analyzer ...), shown at the bottom of the client home page. Only the rule's colour is lighter, for this light page.
 DISCLAIMER_FOOTER_HTML = (
@@ -522,7 +534,7 @@ def render_home():
 
     # Two overall tabs. Only the open one runs (on_change="rerun" + .open), so the
     # Livestock Portal's iframe isn't loaded on every visit to the grain tiles.
-    grain_tab, livestock_tab, calendar_tab = st.tabs(["Grain Apps", "Livestock Apps", "Reports Calendar"], on_change="rerun")
+    grain_tab, livestock_tab, calendar_tab, legacy_tab = st.tabs(["Grain Apps", "Livestock Apps", "Reports Calendar", "Legacy Apps"], on_change="rerun")
     if grain_tab.open:
         with grain_tab:
             report_calendar.render_week("grain", "Grain")      # This Week's Reports, CPI / PPI mixed in
@@ -534,6 +546,9 @@ def render_home():
     if calendar_tab.open:
         with calendar_tab:
             report_calendar.render_tab()
+    if legacy_tab.open:
+        with legacy_tab:
+            _render_legacy()
     if CLIENT:
         strip_kind = "livestock" if livestock_tab.open else "grain"
         strip_data = quotes.fetch(strip_kind)        # the slow part, while the placeholder is still showing
@@ -592,6 +607,20 @@ def _render_livestock():
     _render_tiles(lambda cat: cat == "Livestock")
     if not CLIENT:
         st.caption(f"These also run as the standalone [Livestock Portal]({LIVESTOCK_PORTAL_URL}).")
+
+
+def _render_legacy():
+    """The legacy dashboards on jpsi.com, as the same tiles as the rest of the page; each opens the website page."""
+    st.markdown("<div class='jsa-cat-hdr'>Legacy Apps</div>", unsafe_allow_html=True)
+    st.caption("The earlier dashboards on the jpsi.com website. Each one opens its page on the website.")
+    TILES_PER_ROW = 4
+    for start in range(0, len(LEGACY_APPS), TILES_PER_ROW):
+        cols = st.columns(TILES_PER_ROW)
+        for offset, (title, url, desc) in enumerate(LEGACY_APPS[start:start + TILES_PER_ROW]):
+            with cols[offset]:
+                with st.container(key=f"tile_legacy_{start + offset}"):
+                    st.page_link(url, label=title)
+                    st.markdown(f"<div class='jsa-tile-desc'>{html.escape(desc)}</div>", unsafe_allow_html=True)
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)

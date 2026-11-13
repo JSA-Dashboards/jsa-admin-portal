@@ -204,6 +204,12 @@ Field check page stays hidden) and with one `replace` that hides the 🔄 NASS r
 mirrored into this PUBLIC repo** (Kolten approved that on 11-10; before it was history only). The cost to watch is the one that took it off staff: a heavy first load,
 now in the client app's process. `test_client_portal.py` pins the client-only set to exactly `crop-conditions`.
 
+## Legacy Apps tab (2026-11-13)
+
+Kolten: "add a Tab that is legacy apps" for seven dashboards that still live as pages on the jpsi.com website. A fourth home-page tab (after Reports Calendar) in BOTH portals, drawn by `_render_legacy()` from `LEGACY_APPS` in Home.py
+as the same tiles as the rest of the page (keys `tile_legacy_N`); each is a link that opens the jpsi.com page in a new tab: Crop Conditions, Crop Progress, Domestic Production, Export Inspections, Export Sales, World S&D, Quarterly Grain
+Stocks (all answered 200 on 11-13; their descriptions are only the title, since the pages carry no description). To add or retire one, edit that list (`test_client_portal.py` checks they are unique jpsi.com links).
+
 ## Report calendar: "This Week's Reports" and the Reports Calendar tab (2026-11-12)
 
 Kolten: a USDA reports calendar tab for grain and livestock, "This Weeks Reports" on the home page for each, the economic reports (CPI, PPI) mixed into both, then (same day) EIA

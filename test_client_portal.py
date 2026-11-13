@@ -72,3 +72,11 @@ def test_client_only_tiles_are_offered_to_clients():
     only = {t["url_path"] for t in tiles() if t.get("client_only")}
     assert only == {"crop-conditions"}                  # staff left it off on 11-03; add here only on purpose
     assert only <= literal("CLIENT_PAGES")              # a client-only tile nobody can see would be dead weight
+
+
+def test_legacy_apps_are_unique_jpsi_com_links():
+    legacy = literal("LEGACY_APPS")
+    urls = [u for _t, u, _d in legacy]
+    assert len(urls) == len(set(urls)) == 7
+    assert all(u.startswith("https://www.jpsi.com/") and u.endswith("-dashboard/") for u in urls)
+    assert all(t and d for t, _u, d in legacy)
