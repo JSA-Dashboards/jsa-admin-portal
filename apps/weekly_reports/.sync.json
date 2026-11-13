@@ -1,8 +1,8 @@
 {
  "branch": "master",
- "commit": "1b50762bb40c70c2e6ee698d3591545a61b9bacc",
+ "commit": "3b186ec732e2505c52102b76a59a3194954beabc",
  "files": {
-  "app.py": "6cd6e22c67a208ba56c8b5e258f51999154e55f5236b97720ae9f9fc052e59fb"
+  "app.py": "f30c73c89c34a899dc6a59f97635bf279a3f0ca9988075101474e85d1254a943"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",
  "repo": "JSA-Dashboards/livestock-portal",

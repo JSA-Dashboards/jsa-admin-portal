@@ -13,6 +13,8 @@ Tracker ...; use the state ethanol index bids, not individuals"). Each cleaned-u
   IA  also Eastern / Western Iowa ethanol sub-indexes (split at 93.6 W, the Des Moines meridian).
   SD  no river rows; Eastern / Western South Dakota ethanol indexes (split at 97.5 W).
   ND  no river rows; Eastern (Red River Valley) / Western North Dakota ethanol indexes (split at 97.5 W).
+  MI  no river rows, no sub-indexes: the state Ethanol Index and the east rail rows.
+  MO  STL (Illinois-side STL terminals + ADM / Ray-Carroll St. Louis, MO) and New Madrid (ADM, Cargill) river rows, plus the SW MO feed mill index.
   KS  Garden City region (every non-ethanol Kansas location the tracker has within 60 miles of Garden City) plus Northeast / Southwest Kansas ethanol indexes.
   NE  no river rows; Eastern / Central Nebraska ethanol indexes.
 
@@ -38,8 +40,11 @@ NAMED_GROUPS = {
     "OH": (("Toledo", (("ADM", "Toledo, OH"), ("Andersons", "Toledo - Edwin Dr"), ("Andersons", "Toledo - Kuhlman Dr"))),
            ("Cincinnati", (("Cargill", "Cincinnati Kellogg"), ("Cargill", "Cincinnati River Road")))),
 }
+# Missouri: STL = the whole St. Louis river market (the Illinois-side STL terminals plus ADM and Ray-Carroll St. Louis, MO), New Madrid = ADM + Cargill New Madrid
+NAMED_GROUPS["MO"] = (("STL", tuple(sorted(STL_TERMINALS)) + (("ADM", "St. Louis, MO (Elevator)"), ("Ray-Carroll", "St. Louis, MO"))),
+                      ("New Madrid", (("ADM", "New Madrid, MO"), ("Cargill", "New Madrid"))))
 # river-row group names per cleaned state, in display order (a state in here has no pickers; NE and KS have no river rows, KS has the Garden City region instead)
-RIVER_ORDER = {"IL": IL_RIVER_ORDER, **{st: tuple(g for g, _m in groups) for st, groups in NAMED_GROUPS.items()}, "NE": (), "KS": (), "SD": (), "ND": ()}
+RIVER_ORDER = {"IL": IL_RIVER_ORDER, **{st: tuple(g for g, _m in groups) for st, groups in NAMED_GROUPS.items()}, "NE": (), "KS": (), "SD": (), "ND": (), "MI": ()}
 
 # ---- state ethanol SUB-indexes (Kolten, 2026-11-10): the plants of a state split by where they sit. (label, test on (lat, lon)); a plant outside every box (West Nebraska)
 # stays in the state Ethanol Index only. The tracker holds only four Kansas plants, so those indexes are one or two plants each.
@@ -50,6 +55,25 @@ ETHANOL_SUBINDEX = {
     "ND": (("Eastern ND index", lambda lat, lon: lon >= -97.5), ("Western ND index", lambda lat, lon: lon < -97.5)),   # Red River Valley vs the rest
     "KS": (("Northeast KS index", lambda lat, lon: lon >= -98.9), ("Southwest KS index", lambda lat, lon: lon < -98.9)),
 }
+# ---- a FEED MILL index (Kolten, 2026-11-12: "a SW MO feed mill index"): the state's Feed Mill locations inside a box. Feed mills post rarely, so they are read over a
+# long lookback and the row says when the newest bid was posted.
+FEED_INDEX = {"MO": ("SW MO feed mill index", lambda lat, lon: lat < 38.0 and lon < -93.0)}
+FEED_LOOKBACK_DAYS = 60
+FEED_SQL = """
+WITH latest AS (
+  SELECT s.id, s.provider, s.location, s.timestamp,
+         ROW_NUMBER() OVER (PARTITION BY s.provider, s.location ORDER BY s.timestamp DESC) AS rn
+  FROM snapshots s
+  JOIN location_meta lm ON lm.provider = s.provider AND lm.location = s.location
+  WHERE lm.state = %s AND lm.facility_type = 'Feed Mill' AND s.timestamp >= %s
+)
+SELECT l.provider, l.location, l.timestamp AS ts, lm.state, lm.facility_type, lm.delivery_zone, lm.lat, lm.lon, r.grain, r.delivery_month, r.futures_symbol, r.basis_cents, r.is_spot
+FROM latest l
+JOIN location_meta lm ON lm.provider = l.provider AND lm.location = l.location
+JOIN snapshot_rows r ON r.snapshot_id = l.id
+WHERE l.rn = 1 AND r.basis_cents IS NOT NULL
+"""
+
 # ---- a REGION value: every non-ethanol location of the state within `miles` of a centre
 REGION = {"KS": ("Garden City region", (37.9717, -100.8727), 60)}
 
@@ -152,6 +176,19 @@ def ethanol_subindex(rows, state):
         if members:
             out[label] = _average(members)
     return out
+
+
+def feed_index(rows, state):
+    """(label, {(year, month): (average basis ¢, mills)}, newest posting date 'YYYY-MM-DD' or '') for the state's FEED_INDEX box, or None."""
+    if state not in FEED_INDEX:
+        return None
+    label, test = FEED_INDEX[state]
+    mills = [r for r in rows if r.get("facility_type") == "Feed Mill" and r.get("lat") is not None and r.get("lon") is not None
+             and test(float(r["lat"]), float(r["lon"]))]
+    if not mills:
+        return None
+    asof = max((str(r.get("ts") or "")[:10] for r in mills), default="")
+    return label, _average(EI.location_series(mills).values()), asof
 
 
 def region_index(rows, state):

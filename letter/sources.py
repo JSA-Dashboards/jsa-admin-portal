@@ -20,8 +20,10 @@ import importlib.util
 import io
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pandas as pd
 import requests
@@ -50,8 +52,97 @@ AMS_SJ_LS712 = "https://www.ams.usda.gov/mnreports/sj_ls712.txt"
 AMS_3208_PDF = "https://www.ams.usda.gov/mnreports/ams_3208.pdf"
 
 
+# -- ONE DEAD HOST MUST NOT COST THE WHOLE FETCH ------------------------------
+#
+# Added 2026-11-12, after the letter page span twice in a week. Ross: "why is
+# my daily cattle email just spinning when i click fetch latest data?"
+#
+# `mpr.datamart.ams.usda.gov` was accepting connections and never answering.
+# Measured that morning, one fetch of the letter:
+#
+#     cash trade LM_CT150/154    139s  ConnectionError
+#     cash week-to-date by state 113s  RetryError
+#     boxed beef PM LM_XB403      78s  ConnectionError
+#     ---------------------------------------------------------------
+#     331s of 488s total, spent three times over on one dead host
+#
+# NOTHING WAS BROKEN AND NOTHING RAISED OUT. `_try` catches each failure and
+# carries on, so the fetch completes -- eight minutes later, by which time
+# Community Cloud has dropped the socket and the browser is showing a spinner
+# that will never stop. The outage is USDA's; the eight minutes are ours.
+#
+# So the first connection-level failure marks that HOST, and every later call
+# to it in the same run raises immediately instead of waiting out the same
+# timeout again. The three calls above cost one timeout between them.
+#
+# IT TRIPS ON CONNECTION AND TIMEOUT FAILURES, NEVER ON AN HTTP STATUS, and
+# that distinction is the whole safety of it. `Retry` carries a
+# `status_forcelist`, so a report answering 500 four times surfaces as
+# `RetryError` -- which says that one endpoint is unwell and says nothing
+# whatever about the host. Condemning the host on it would skip the cutout
+# because the cash report was sick. requests raises ConnectionError (and
+# ConnectTimeout, which subclasses both) for the connection-level case and
+# RetryError for the status one, so the exception types already draw the line.
+#
+# ONE FAILURE IS ENOUGH because the adapter has already tried four times by
+# then. A false trip costs one run of two missing figures and is recovered by
+# pressing Fetch again; the alternative costs eight minutes every time.
+
+HOST_DOWN_TTL = 120.0
+
+_HOST_DOWN: dict = {}
+
+
+class HostUnreachable(requests.exceptions.ConnectionError):
+    """
+    Raised in place of re-waiting out a host that already failed this run.
+
+    A ConnectionError SUBCLASS on purpose: `build._try` reports whatever is
+    raised and carries on, and every caller that already handles a dead host
+    handles this unchanged.
+    """
+
+
+def reset_hosts() -> None:
+    """Forget every tripped host. `gather()` calls this as its first act."""
+    _HOST_DOWN.clear()
+
+
+def hosts_down() -> list:
+    """The hosts tripped and not yet expired, for the page to name."""
+    now = time.monotonic()
+    return sorted(h for h, t in _HOST_DOWN.items() if now - t < HOST_DOWN_TTL)
+
+
+class _BreakerSession(requests.Session):
+    """
+    A Session that refuses a host it has already seen fail.
+
+    Subclassing rather than wrapping every call site: there are fifteen of
+    them across this module and they all go through Session.request, so one
+    override covers the ones written later too.
+    """
+
+    def request(self, method, url, **kw):
+        host = urlsplit(url).hostname or ""
+        failed_at = _HOST_DOWN.get(host)
+        if failed_at is not None and time.monotonic() - failed_at < HOST_DOWN_TTL:
+            raise HostUnreachable(
+                f"{host} did not respond earlier in this run, so this call was "
+                f"skipped rather than waiting out the same timeout again")
+        try:
+            return super().request(method, url, **kw)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            # Recorded at the FAILURE, not at the attempt: a 120s read timeout
+            # would otherwise start its own TTL two minutes in the past.
+            if not isinstance(exc, HostUnreachable):
+                _HOST_DOWN[host] = time.monotonic()
+            raise
+
+
 def _session(backoff: float = 1.5) -> requests.Session:
-    s = requests.Session()
+    s = _BreakerSession()
     retry = Retry(total=3, backoff_factor=backoff,
                   status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
     s.mount("https://", HTTPAdapter(max_retries=retry))

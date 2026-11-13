@@ -1,6 +1,6 @@
 {
  "branch": "master",
- "commit": "7704eb0089d8e1e560e9b335ee9d4a11903cd217",
+ "commit": "211a729fef365fde15da6be1f940cdeda15044a9",
  "files": {
   "app.py": "38a5d1d39d7cc16056db53a00539000266ce18d4de33e75838da139f75765467",
   "assets/jsa_logo.png": "988a051c0e5acefd01184e3f5462531a3d5a1fcbb573821e2ee3baee6dc0c4c6",
@@ -38,7 +38,7 @@
   "src/jsa_risk/ui/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "src/jsa_risk/ui/blotter.py": "053e45a2057cc637bcb9203668c81ffa587c16e04f24061ec24b37226023f816",
   "src/jsa_risk/ui/cash_position.py": "ecffa008e3c130eb53eef00fbead3e3e9eae663f759e852974ae1db5f4cf1eaf",
-  "src/jsa_risk/ui/charts.py": "9d88368db61ba68ac0f28fd3c024f0471460ebca23ddda5b4a3105cc7b2273cb",
+  "src/jsa_risk/ui/charts.py": "51a8d19a561490f74617c0f7bff3261331589058533fae14ddf48d21b07f56ef",
   "src/jsa_risk/ui/kpi.py": "bcc59c1701f036dea7c91212a0000320351398736146e3a80837f148fcb16e46",
   "src/jsa_risk/ui/market_strip.py": "86d008d215b03917b19f4c46cb5bdefd4add3e943c3b9eec9ae2e4ce8a0a8cf3",
   "src/jsa_risk/ui/theme.py": "fad7028e3b5c0ada08026d62dfc23d6b35d60fefadfa81d8062b14207473f7e1"

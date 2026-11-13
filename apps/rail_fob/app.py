@@ -737,7 +737,7 @@ def _bid_cells_prior_for(source, market, sel_date):
     return cells, eff, prior
 
 
-def _raw_corridor_table(markets, sel_date):
+def _raw_corridor_table(markets, sel_date, labels=None):
     """The raw bid/offer grid for just the given market(s) — same styling as
     the Bids tab, but scoped to only this railroad's own corridor(s) so each
     tab is self-contained."""
@@ -760,7 +760,7 @@ def _raw_corridor_table(markets, sel_date):
         if eff != sel_date:
             yy, mo, dd = eff.split("-")
             asof = f'<span class="asof-chip">as of {int(mo)}/{int(dd)}</span>'
-        label = RAIL_DISPLAY.get(m, m)
+        label = (labels or {}).get(m) or RAIL_DISPLAY.get(m, m)
         html.append(f'<tr><td class="lbl">{label}'
                     f'<span class="rail-chip" style="background:{rcol}">{rail}</span>{asof}</td>')
         for p in periods:
@@ -2060,6 +2060,12 @@ def _cn_location_lookup(lookup_rows, base_fn, make_freight, months, labels, acti
 
 
 def _cn_tab(sel_date):
+    st.caption(f"Posting date **{sel_date}** — change it on the 📋 Bids tab.")
+    st.markdown("### Rail FOB — CN 105s")
+    _raw_corridor_table(["CN 105s", "CN 105s Beans"], sel_date,
+                        labels={"CN 105s": "CN 105s Corn · FOB Champaign / Thomasboro", "CN 105s Beans": "CN 105s Beans · FOB Champaign / Thomasboro"})
+    st.caption("The posted CN 105-car shuttle bids and offers, FOB Champaign / Thomasboro, IL — the base every CN origin's FOB below is carried from "
+               "by the freight difference.")
     st.caption("Raw CN Gulf Export tariff rates (Supplement 41 to Tariff CN 004050-A8), plus "
                "a FOB netback against CIF NOLA from the River FOB Portal — corn and soybeans both, tariff plus CN's fuel surcharge. "
                "Soybeans can instead net against the CN 105s Beans bids (FOB Champaign) from the rail bid archive.")
@@ -3439,7 +3445,7 @@ def _summary_corridors(sel_date, months, cn_src="CN 105s bids", state_level=Fals
 
     # Group 3 and Interior IA are separate columns / rows (Kolten, 2026-11-10: "show Group 3 and Iowa Interior both separate"); each origin's FOB
     # is that base's bid less its discount. Kansas (par to Group 3, an assumption) appears on the State Level only.
-    up_states = {"NE", "IA", "MN"} | ({"KS", "SD", "ND"} if state_level else set())
+    up_states = {"NE", "IA", "MN"} | ({"KS", "SD", "ND", "MO"} if state_level else set())
     for up_label, base in ((("UP Group 3", "Group 3"), ("UP Interior IA", "Interior IA")) if state_level else (("UP G3", "Group 3"), ("UP IIA", "Interior IA"))):
         def up_base_fob(state, m, mode="best", base=base):
             q = base_bid(m, base)
@@ -3551,6 +3557,9 @@ def _state_location_rows(state):
             rows = list(RD._sf_rows(sql, (*params, since)))
             if state in SL.ETHANOL_SUBINDEX:   # IA: the plants too, for the Eastern / Western sub-indexes
                 rows += [r for r in RD._sf_rows(EI.LOC_SQL, (state, since)) if r.get("facility_type") == "Corn Processing"]
+            if state in SL.FEED_INDEX:         # MO: the feed mills, over a longer lookback (they post rarely)
+                feed_since = (date.today() - timedelta(days=SL.FEED_LOOKBACK_DAYS)).isoformat()
+                rows += list(RD._sf_rows(SL.FEED_SQL, (state, feed_since)))
             return rows
         if state in SL.REGION:                 # KS: a region value plus the plants, from one every-type pull
             return list(RD._sf_rows(SL.ALL_SQL, (state, since)))
@@ -3573,6 +3582,8 @@ _SL_RAIL_BY_STATE = {
     "IA": (_SL_CN, _SL_NS, _SL_UP_IIA, _SL_UP_G3, _SL_PNW, _SL_HEREFORD, _SL_COBO),     # his list: UP Interior, UP Group 3, CN, NS, BN PNW, BN Hereford, BN COBO
     "OH": (_SL_EVILLE, _SL_COL, _SL_NS),
     "MN": (_SL_PNW, _SL_HEREFORD, _SL_UP_G3, _SL_UP_IIA),               # Kolten 11-10: "BN PNW, BN Hereford, UP Group 3, UP Interior IA"
+    "MO": (_SL_UP_G3, _SL_UP_IIA, _SL_NS, _SL_CN),                        # Kolten 11-12: "UP, NS, CN"; STL + New Madrid river; SW MO feed mill index
+    "MI": (_SL_COL, _SL_EVILLE, _SL_CN, _SL_NS),                          # Kolten 11-11: "State Ethanol index, CSX COL and Eville, CN and NS"
     "ND": (_SL_HEREFORD, _SL_PNW, _SL_UP_G3, _SL_UP_IIA),               # Kolten 11-11: "do the same with ND"
     "SD": (_SL_HEREFORD, _SL_PNW, _SL_UP_G3, _SL_UP_IIA),               # Kolten 11-11: "BN Hereford & PNW, UP Group 3 & Interior IA"
     "NE": (_SL_UP_G3, _SL_UP_IIA, _SL_HEREFORD, _SL_PNW),               # Kolten 11-10: "UP Group 3 & Interior IA, BN Hereford and PNW" (COBO dropped)
@@ -3631,6 +3642,12 @@ def _state_level_tab(sel_date):
     for lab, series in SL.ethanol_subindex(loc_rows, state).items():      # NE: Eastern / Central; KS: Northeast / Southwest
         n = max(v[1] for v in series.values())
         rows.append(("Processor", lab, f"Avg of {n} plant{'s' if n != 1 else ''}", "", [(series.get((year_of(m), m)) or (None,))[0] for m, _n in months], False))
+    feed = SL.feed_index(loc_rows, state)                                   # MO: the SW MO feed mill index
+    if feed and feed[1]:
+        n = max(v[1] for v in feed[1].values())
+        asof = f", as of {int(feed[2][5:7])}/{int(feed[2][8:10])}" if feed[2] else ""
+        rows.append(("Processor", feed[0], f"Avg of {n} mill{'s' if n != 1 else ''}{asof}", "",
+                     [(feed[1].get((year_of(m), m)) or (None,))[0] for m, _n in months], False))
     for key in sel_plants:
         rows.append(("Processor", lbl(key), "Del", "", [locs[key].get((year_of(m), m)) for m, _n in months], False))
     for group, label, gateway in _SL_RAIL_BY_STATE.get(state, _SL_RAIL_ROWS):
@@ -3752,7 +3769,7 @@ bids_tab, summary_tab, state_tab, csx_tab, ns_tab, bn_tab, cn_tab, up_tab, map_t
 _diesel_weekly = _bn_auto_fsc()[1]
 
 with bids_tab:
-    st.markdown("### Manual Rail Corridors (chat-fed)")
+    st.markdown("### Rail Corridors")
     _manual_date = _sheet_board("manual", MANUAL_SECTIONS, "man", other_keep=set())
 
 with summary_tab:

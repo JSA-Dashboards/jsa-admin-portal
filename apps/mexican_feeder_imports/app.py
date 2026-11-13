@@ -56,6 +56,7 @@ import snowflake_db as db
 import border as bd
 import corn_demand as cdm
 import mx_prices as mxp
+import screwworm as sw
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ─────────────
 JPSI_DARK = "#32373c"
@@ -407,8 +408,14 @@ this_yr = date.today().year
 # context manager, so an unguarded `with tab_corn:` would run the PSD fetch on
 # a client load and render the panel UNFRAMED into their page. The body is
 # behind portal_view.shown(), which tests/test_client_view.py pins.
-tab_crossings, tab_prices, tab_corn = portal_view.tabs(
-    ["Mexican Feeder Crossings", "Mexican Feeder Prices", "Corn Demand"],
+#
+# NEW WORLD SCREWWORM IS IN BOTH VIEWS, unlike Corn Demand beside it. It is a
+# market reading rather than a workbench: screwworm is the reason these ports
+# closed at all, every figure on it is APHIS's own published count, and a
+# client watching the crossings panel has more reason to want it than we do.
+tab_crossings, tab_prices, tab_corn, tab_nws = portal_view.tabs(
+    ["Mexican Feeder Crossings", "Mexican Feeder Prices", "Corn Demand",
+     "New World Screwworm"],
     hide=["Corn Demand"])
 
 with tab_crossings:
@@ -2581,3 +2588,538 @@ if portal_view.shown(tab_corn):
             'against US Census imports &nbsp;·&nbsp; feeding assumptions are '
             'JSA\'s, not USDA\'s</div>',
             unsafe_allow_html=True)
+
+
+# ── New World Screwworm ─────────────────────────────────────────────────────
+# IN BOTH VIEWS. See the note at the tab construction above.
+#
+# A HIDDEN TAB IS HIDDEN, NOT SKIPPED, so the two fetches are behind
+# @st.cache_data rather than running raw on every crossings load -- the same
+# deal the prices tab takes for its Snowflake read.
+with tab_nws:
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def load_nws(schema=sw.SCHEMA):
+        """Two keyless USDA files. No secret, no host to provision, no cron.
+
+        Thirty minutes because APHIS rewrites the Mexican file once a
+        business day at 5 p.m. ET -- the TTL is there to pick a new edition
+        up within the hour, not because anything moves faster than that.
+        """
+        return sw.load_all()
+
+    # PASSED, never left to the default: st.cache_data hashes the arguments it
+    # is CALLED with, so a parameter sitting at its default contributes
+    # nothing to the key and the guard is inert.
+    NW = load_nws(sw.SCHEMA)
+    MXD = (NW or {}).get("mx")
+    USD = (NW or {}).get("us")
+    ROWS = (MXD or {}).get("rows") or []
+    ASOF = sw.as_of(ROWS) if ROWS else None
+
+    st.markdown('<div class="sec-header">New World Screwworm &mdash; '
+                'Confirmed Cases</div>', unsafe_allow_html=True)
+    st.caption(
+        "Screwworm is why these crossings closed. Every figure below is "
+        "APHIS's own published count, on two separate feeds: northern Mexico "
+        "from the case list behind USDA's Current Status page, the United "
+        "States from the Confirmed Detections dashboard.")
+
+    _grid_css = (
+        "<style>"
+        ".nws-grid{display:grid;grid-template-columns:repeat(4,1fr);"
+        "gap:12px;margin:6px 0 2px;}"
+        ".nws-grid.three{grid-template-columns:repeat(3,1fr);}"
+        ".nws-grid .tile{background:" + CARD_BG + ";border:1px solid "
+        + BORDER + ";border-top:3px solid " + JPSI_BLUE + ";"
+        "border-radius:10px;padding:16px 14px;text-align:center;"
+        "box-shadow:0 1px 2px rgba(0,0,0,0.04);}"
+        ".nws-grid .tile-label{font-size:.76rem;color:" + MUTED + ";"
+        "text-transform:uppercase;letter-spacing:.04em;line-height:1.25;"
+        "min-height:2.6em;}"
+        ".nws-grid .tile-value{font-size:1.5rem;font-weight:700;color:"
+        + TEXT + ";white-space:nowrap;margin:.3rem 0 .1rem;}"
+        ".nws-grid .tile-sub{font-size:.72rem;color:" + MUTED + ";"
+        "line-height:1.3;margin-top:.35rem;}"
+        ".nws-grid .tile-delta-neg{color:" + NEG + ";font-size:.8rem;"
+        "font-weight:600;}"
+        ".nws-grid .tile-delta-pos{color:" + POS + ";font-size:.8rem;"
+        "font-weight:600;}"
+        ".nws-grid .tile-delta-neu{color:" + NEU + ";font-size:.8rem;}"
+        "@media (max-width:900px){.nws-grid,.nws-grid.three"
+        "{grid-template-columns:repeat(2,1fr);}}"
+        "</style>")
+
+    # ── The United States, at the top ──────────────────────────────────────
+    # Ross asked for these three above the Mexican row, 2026-11-12.
+    #
+    # STACKED DIRECTLY ABOVE "MEXICAN CASES STILL ACTIVE", THE WORD "ACTIVE"
+    # NOW APPEARS TWICE IN ADJACENT BOXES MEANING TWO DIFFERENT THINGS -- a
+    # real case status here, a 15-day calendar there. That is the whole
+    # hazard this tab was built to warn about, and the warning box that
+    # carried it lives further down beside the chart it needs. So the LABELS
+    # carry it now: each tile names its own country and its own rule, which
+    # is the standing headline rule -- a tile gets screenshotted and read
+    # with nothing above it.
+    #
+    # It renders ABOVE the Mexican guards on purpose, not inside them. The
+    # two feeds fail independently, and the US row has no business
+    # disappearing because APHIS's Mexican file did not answer.
+    if USD and USD.get("months"):
+        _us_ms = USD["months"]
+        _us_now, _us_prev = _us_ms[-1], _us_ms[-2]
+        st.markdown('<div class="sec-header">United States</div>',
+                    unsafe_allow_html=True)
+        st.html(
+            _grid_css
+            + '<div class="nws-grid three">'
+            + f'<div class="tile"><div class="tile-label">US cases still '
+              f'active</div><div class="tile-value">{USD["active"]:,}</div>'
+              f'<div class="tile-sub">every one of them &mdash; still under '
+              f'mitigation, a real case status and not a 15-day clock</div>'
+              f'</div>'
+            + f'<div class="tile"><div class="tile-label">New US domestic '
+              f'cases, {_us_now["label"]}</div><div class="tile-value">'
+              f'{_us_now["domestic"]:,}</div><div class="tile-sub">month to '
+              f'date</div></div>'
+            + f'<div class="tile"><div class="tile-label">New US domestic '
+              f'cases, {_us_prev["label"]}</div><div class="tile-value">'
+              f'{_us_prev["domestic"]:,}</div><div class="tile-sub">the full '
+              f'month</div></div>'
+            + '</div>')
+
+    if not ROWS:
+        st.warning(
+            "APHIS's Mexican case list is not answering "
+            f"({(NW or {}).get('mx_error') or 'no detail'}). Every count on "
+            "this tab comes from that file, so there is nothing to show "
+            "until it returns.")
+    elif ASOF is None:
+        # The audit firing. Status is meant to be a pure function of the two
+        # dates; when it stops being one, every window on this panel is
+        # measuring something it no longer describes.
+        st.error(
+            "APHIS's active/inactive rule no longer matches the dates in its "
+            "own file, so this panel cannot say which cases were active when. "
+            "Nothing is shown rather than a figure that looks right. "
+            f"[Read the list at APHIS]({sw.PAGE_MX})")
+    else:
+        W = sw.wow(ROWS, ASOF)
+        NEAR = sw.nearest(ROWS, ASOF)
+        SNAP = sw.snapshot(ROWS, ASOF)
+
+        # ── Northern Mexico ────────────────────────────────────────────────
+        # THE ROW NEEDS ITS OWN HEADING NOW THAT THE US ROW SITS ABOVE IT.
+        # Without one the freshness line underneath -- which describes the
+        # MEXICAN file and nothing else -- reads as if it dated the US tiles,
+        # and the two sets of boxes read as one set of seven.
+        st.markdown('<div class="sec-header">Northern Mexico &mdash; Within '
+                    f'{sw.MAX_MILES} Miles of the Border</div>',
+                    unsafe_allow_html=True)
+
+        # ── How fresh, in the file's own terms ──────────────────────────────
+        # TWO DATES, AND THEY ANSWER DIFFERENT QUESTIONS. One says how far the
+        # cases reach, the other when APHIS last rewrote the file. They were
+        # two days apart on the edition this was built against, and that gap
+        # IS the publication lag -- which is why the newest week always reads
+        # light. A single "updated" date would hide it.
+        _lm = (MXD or {}).get("last_modified")
+        _lag = ((_lm.date() - ASOF).days if _lm else None)
+        _age = (date.today() - ASOF).days
+        # STALENESS IS JUDGED ON WHEN APHIS LAST WROTE THE FILE, not on how
+        # old its newest case is. Those are different questions and only the
+        # first one is a fault: the publication lag means a perfectly healthy
+        # edition always reaches only to two or three days back, so a rule
+        # on the case date would cry stale every single day. Four days on the
+        # write date clears a Friday edition over a holiday weekend, which is
+        # the case that would otherwise fire for nothing -- and did not fire
+        # over Veterans Day while this was being built.
+        _written_age = ((date.today() - _lm.date()).days if _lm else _age)
+        _stale = _written_age > 4
+        st.markdown(
+            # TWO DATES IN ONE SENTENCE NEED TWO SENTENCES. "...through
+            # Nov 08, written Nov 10 -- four days ago" attaches the age to
+            # whichever date the reader's eye landed on last, and it is wrong
+            # for one of them: Nov 10 was two days ago, not four.
+            '<div class="{cls}">APHIS&rsquo;s list reaches cases confirmed '
+            'through <b>{asof}</b>, {age} day{s} ago.{written} '
+            '{note}</div>'.format(
+                cls=("warnline" if _stale else "srcline"),
+                asof=fmt_date(ASOF),
+                age=_num_word(_age) if _age < 13 else f"{_age:,}",
+                s=("" if _age == 1 else "s"),
+                written=(" APHIS last rewrote the file on "
+                         f"{fmt_date(_lm.date())}." if _lm else ""),
+                note=("It has not been refreshed on its usual business-day "
+                      "cadence." if _stale else
+                      "The cadence is each business day at 5 p.m. ET.")),
+            unsafe_allow_html=True)
+
+        if not sw.in_scope(ROWS):
+            st.warning(
+                "This file used to carry only cases within "
+                f"{sw.MAX_MILES} miles of the US border and no longer does, "
+                "so the counts below are not the border figure the headings "
+                "call them.")
+
+        # ── Mexico headline ────────────────────────────────────────────────
+        # ONE CSS GRID THROUGH st.html, NOT st.columns. The feet wrap to
+        # different line counts, and as columns the row renders ragged -- the
+        # defect CLAUDE.md records for the daily cash tiles, which py_compile,
+        # the suite and get_page_text all pass. Grid items stretch to their
+        # row by default, so equal height is the behaviour rather than
+        # something layered on top. st.html also skips the markdown parser,
+        # which is where a pair of dollar signs becomes inline LaTeX.
+        def _chg(n, settling=False):
+            """A rising case count is bad news to every reader of this page.
+
+            Unlike the price deltas elsewhere in the portal -- where a rally
+            suits the seller and hurts the buyer, so the arrow is left
+            uncoloured -- there is no reader who wants more screwworm. So this
+            one is coloured, rising red.
+            """
+            if n is None:
+                return '<div class="tile-delta-neu">&mdash;</div>'
+            if n == 0:
+                return '<div class="tile-delta-neu">unchanged on the week</div>'
+            kind = "neg" if n > 0 else "pos"
+            arrow = "&#9650;" if n > 0 else "&#9660;"
+            star = "*" if settling else ""
+            return (f'<div class="tile-delta-{kind}">{arrow} {abs(n):,} '
+                    f'on the week{star}</div>')
+
+        _near_v = (f"{NEAR['miles']:,.0f} mi" if NEAR else "&mdash;")
+        _near_s = (f"{NEAR['species'].lower()}, {NEAR['state']}, confirmed "
+                   f"{fmt_date(NEAR['date'], '%b %d')}" if NEAR else
+                   "no active case carries a distance")
+
+        _cards = [
+            (f"Mexican cases within {sw.MAX_MILES} mi of the US border",
+             f"{W['total']:,}", _chg(W["total_change"], True),
+             f"every case APHIS has listed since {fmt_date(SNAP['oldest'])}"),
+            ("Mexican cases still active",
+             f"{W['active']:,}", _chg(W["active_change"], True),
+             f"confirmed within {sw.ACTIVE_DAYS} days of {fmt_date(ASOF)}"),
+            ("Mexican cases now closed",
+             f"{W['inactive']:,}", _chg(W["inactive_change"]),
+             "the total less the active, not a second count"),
+            # The reserved blank: there is no week change for a distance, and
+            # without the empty line this tile's foot floats a row higher than
+            # its three neighbours. The daily cash tiles already paid for this
+            # one -- the spacer has to reach the tile that has nothing to say.
+            ("Nearest active case to the US border",
+             _near_v, '<div class="tile-delta-neu">&nbsp;</div>', _near_s),
+        ]
+        st.html(
+            _grid_css
+            + '<div class="nws-grid">'
+            + "".join(
+                f'<div class="tile"><div class="tile-label">{lab}</div>'
+                f'<div class="tile-value">{val}</div>{dlt}'
+                f'<div class="tile-sub">{sb}</div></div>'
+                for lab, val, dlt, sb in _cards)
+            + "</div>")
+
+        # ── What the week actually did ─────────────────────────────────────
+        # THE TWO LEGS OF THE ACTIVE CHANGE ARE NOT EQUALLY SETTLED and the
+        # reader is told which is which. The aged-out leg is weeks old and
+        # finished; the new leg is still collecting late reports. So the
+        # change is biased DOWN by an amount no single snapshot can measure,
+        # and a flat week may well have been a rising one. That is a caveat
+        # to print, not a correction to apply.
+        _dir = ("up" if W["new_change"] > 0 else
+                "down" if W["new_change"] < 0 else "level")
+        st.markdown(
+            f"**Week over week.** APHIS added **{W['new_7']:,}** new Mexican "
+            f"cases in the seven days to {fmt_date(ASOF)}, against "
+            f"**{W['new_prev_7']:,}** in the seven days before "
+            + ("&mdash; level." if _dir == "level" else
+               f"&mdash; {_dir} {abs(W['new_change']):,}.")
+            + f" The active count moved {W['active_change']:+,}: those "
+              f"{W['new_7']:,} came in while **{W['aged_out']:,}** passed "
+              f"{sw.ACTIVE_DAYS} days old and closed.")
+        st.caption(
+            "\\* Those two sides are not equally settled. The cases that "
+            "closed are weeks old and will not move again; the newest seven "
+            "days are still collecting late reports"
+            + (f" &mdash; APHIS's file reached only to {_lag} day"
+               f"{'' if _lag == 1 else 's'} before it was written."
+               if _lag is not None else ".")
+            + " So the new-case figure and the starred changes read low and "
+              "revise up. No completion factor is applied: there is no way "
+              "to measure one from a single reading.")
+
+        # ── New cases a week ───────────────────────────────────────────────
+        st.markdown('<div class="sec-header">New Mexican Cases a Week</div>',
+                    unsafe_allow_html=True)
+        _blocks = sw.weekly_new(ROWS, ASOF, 16)
+        if _blocks:
+            fig = go.Figure()
+            fig.add_bar(
+                x=[pd.Timestamp(b["end"]) for b in _blocks],
+                y=[b["count"] for b in _blocks],
+                # The settling week is drawn HOLLOW rather than left out.
+                # Dropped it reads as a week with no cases; solid it invites
+                # a comparison against seven finished weeks.
+                marker=dict(
+                    color=[(CARD_BG if b["provisional"] else JPSI_BLUE)
+                           for b in _blocks],
+                    line=dict(color=JPSI_BLUE, width=1.6)),
+                hovertemplate="week ending %{x|%b %d, %Y}<br>"
+                              "%{y:,} new cases<extra></extra>")
+            fig.update_layout(
+                height=300, margin=dict(l=10, r=14, t=10, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11), showlegend=False,
+                bargap=0.25,
+                xaxis=dict(gridcolor=BORDER, title=None),
+                yaxis=dict(gridcolor=BORDER, title="New cases",
+                           tickformat=","))
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                f"Seven-day blocks counted back from {fmt_date(ASOF)}, never "
+                "calendar weeks &mdash; a calendar week is part-finished on "
+                "six days in seven, and differencing three days against "
+                "seven prints a fall that is only the calendar. The hollow "
+                "bar is the week still filling in.")
+
+        # ── Where, and how close ───────────────────────────────────────────
+        st.markdown('<div class="sec-header">Where They Are</div>',
+                    unsafe_allow_html=True)
+        _states = sw.by_state(ROWS, ASOF)
+        _located = [s for s in _states if s["state"] != sw.NO_STATE]
+
+        c_map, c_dist = st.columns([1.45, 1])
+        with c_map:
+            fig = go.Figure()
+            _biggest = max((s["total"] for s in _located), default=1) or 1
+            fig.add_trace(go.Scattergeo(
+                lon=[sw.MX_STATE_COORDS[s["state"]][1] for s in _located],
+                lat=[sw.MX_STATE_COORDS[s["state"]][0] for s in _located],
+                text=[f'{s["state"]} {s["total"]:,}' for s in _located],
+                customdata=[[s["state"], s["total"], s["active"]]
+                            for s in _located],
+                # THE BUBBLES CARRY THEIR OWN NAMES AND COUNTS. Plotly ships
+                # subunit boundaries for the United States and not for Mexico,
+                # so without the text this is five circles on an unlabelled
+                # landmass -- legible by hover and by nothing else, and a
+                # screenshot of it says nothing at all. Five states spread
+                # across the north label cleanly where the eight collinear
+                # crossings above could not.
+                mode="markers+text", textposition="top center",
+                textfont=dict(size=10, color=JPSI_DARK),
+                marker=dict(
+                    size=[s["total"] for s in _located],
+                    sizemode="area", sizeref=2.0 * _biggest / (46.0 ** 2),
+                    sizemin=6, color=JPSI_BLUE, opacity=0.55,
+                    line=dict(width=1, color=JPSI_BLUE)),
+                hovertemplate="<b>%{customdata[0]}</b><br>"
+                              "%{customdata[1]:,} cases<br>"
+                              "%{customdata[2]:,} still active<extra></extra>",
+                name="Cases"))
+            # NO TEXT LABELS ON THE CROSSINGS. Eight of them string along one
+            # line a few degrees apart, so at any size this panel can be the
+            # labels pile into an unreadable block over the border -- which is
+            # exactly the stretch the map exists to show. They carry their
+            # names on hover and in the legend instead.
+            fig.add_trace(go.Scattergeo(
+                lon=[v[1] for v in sw.PORT_COORDS.values()],
+                lat=[v[0] for v in sw.PORT_COORDS.values()],
+                text=[bd.title_port(p) for p in sw.PORT_COORDS],
+                mode="markers",
+                marker=dict(size=9, symbol="triangle-up", color=AMBER,
+                            line=dict(width=0.8, color=CARD_BG)),
+                hovertemplate="%{text}<extra>cattle crossing</extra>",
+                name="Cattle crossings"))
+            fig.update_layout(
+                height=400, margin=dict(l=0, r=0, t=28, b=0),
+                paper_bgcolor=CARD_BG, showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0,
+                            bgcolor="rgba(0,0,0,0)"),
+                font=dict(color=TEXT, size=11),
+                # MERCATOR WITH EXPLICIT RANGES, not scope="north america".
+                # That scope draws a conic projection fitted to the whole
+                # continent and treats the lat/lon ranges as advisory, so the
+                # frame came out showing southern Mexico -- which this panel
+                # is not about -- and squeezed the border into a band an inch
+                # tall. Mercator honours the window as given.
+                geo=dict(projection=dict(type="mercator"), resolution=50,
+                         showcountries=True, countrycolor=MUTED,
+                         showsubunits=True, subunitcolor=BORDER,
+                         showland=True, landcolor=SURFACE2,
+                         showlakes=False, framewidth=0,
+                         bgcolor=CARD_BG, coastlinecolor=MUTED,
+                         coastlinewidth=0.8,
+                         lataxis=dict(range=[22.0, 33.5]),
+                         lonaxis=dict(range=[-116.0, -96.0])))
+            st.plotly_chart(fig, use_container_width=True)
+            # THE BUBBLE SITS AT THE STATE'S MIDDLE, NOT AT THE CASES. For a
+            # state the size of Chihuahua that is a couple of hundred miles
+            # from the line, so the map must not be read for distance -- which
+            # is what the chart beside it is for, off APHIS's own per-case
+            # mileage.
+            _nostate = next((s for s in _states
+                             if s["state"] == sw.NO_STATE), None)
+            # SAYS "MEXICAN" IN THE FIRST THREE WORDS. The map covers both
+            # countries' ground and plots one country's cases, so a reader
+            # who takes the empty north at face value concludes the United
+            # States has none -- when it has 128. The US figures are a
+            # section below and the caption points at them.
+            st.caption(
+                "Mexican cases only, sized by count and sitting at each "
+                "state's centre rather than at the cases themselves "
+                "&mdash; read distance off the chart beside it, which is "
+                "APHIS's own per-case mileage. Triangles are the cattle "
+                "crossings; US cases are counted further down."
+                + (f" {_nostate['total']:,} recent cases are not drawn: "
+                   "SENASICA had not released a state for them."
+                   if _nostate else ""))
+
+        with c_dist:
+            _bands = sw.by_distance(ROWS, ASOF)
+            _labels = [f"{b['low']}-{b['high']} mi" for b in _bands]
+            fig = go.Figure()
+            fig.add_bar(
+                y=_labels, x=[b["count"] for b in _bands], orientation="h",
+                marker_color=JPSI_BLUE, name="All cases",
+                hovertemplate="%{y} from the border<br>%{x:,} cases"
+                              "<extra></extra>")
+            fig.add_bar(
+                y=_labels, x=[b["active"] for b in _bands], orientation="h",
+                marker_color=AMBER, name="Still active",
+                hovertemplate="%{y} from the border<br>%{x:,} active"
+                              "<extra></extra>")
+            fig.update_layout(
+                height=400, margin=dict(l=10, r=10, t=28, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11), barmode="overlay",
+                legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+                xaxis=dict(gridcolor=BORDER, title="Cases", tickformat=","),
+                yaxis=dict(gridcolor=BORDER, title=None,
+                           categoryorder="array",
+                           categoryarray=list(reversed(_labels))))
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("How far from the US line each case was found. APHIS "
+                       "publishes this to the approximate mile.")
+
+        # ── The table ──────────────────────────────────────────────────────
+        _tbl = pd.DataFrame([{
+            "State": (s["state"] if s["state"] != sw.NO_STATE
+                      else "Not yet released"),
+            "Cases": s["total"],
+            "Still active": s["active"],
+            "Closest case": s["nearest"],
+        } for s in _states])
+        st.dataframe(
+            _tbl, use_container_width=True, hide_index=True,
+            column_config={
+                "Cases": st.column_config.NumberColumn(format="%d"),
+                "Still active": st.column_config.NumberColumn(
+                    format="%d",
+                    help=f"Confirmed within {sw.ACTIVE_DAYS} days of "
+                         f"{fmt_date(ASOF)}"),
+                "Closest case": st.column_config.NumberColumn(
+                    format="%d mi",
+                    help="Miles from the US border, APHIS's approximate "
+                         "figure, over every case in the state"),
+            })
+
+        # ── Species ────────────────────────────────────────────────────────
+        _sp = sw.by_species(ROWS, ASOF)
+        _cattle = sw.cattle_share(ROWS, ASOF)
+        _rest = ", ".join(f"{s['species'].lower()} {s['share']:.0%}"
+                          for s in _sp[1:4])
+        st.markdown(
+            f"**Cattle are {_cattle:.0%} of these cases** "
+            f"({_sp[0]['count']:,} of {sum(s['count'] for s in _sp):,}). "
+            f"The rest is mostly {_rest}. Screwworm takes any warm-blooded "
+            "animal, so a dog or a goat found near the line is the same "
+            "surveillance signal as a calf.")
+
+        # ── The United States, by month ────────────────────────────────────
+        # The US TILES are at the top of the tab, above the Mexican row --
+        # Ross, 2026-11-12. What stays here is the monthly shape and the
+        # caveat, which needs the chart beside it to make its point.
+        st.markdown('<div class="sec-header">US Cases by Month</div>',
+                    unsafe_allow_html=True)
+        if not USD or not USD.get("months"):
+            st.info(
+                "APHIS's US dashboard feed is not answering"
+                + (f" ({NW.get('us_error')})" if NW.get("us_error") else "")
+                + f". [Open the dashboard at APHIS]({sw.PAGE_US})")
+        else:
+            _ms = USD["months"]
+            _this, _prev = _ms[-1], _ms[-2]
+            # THE NEWEST MONTH IS PART-FINISHED AND THE AXIS SAYS SO. Drawn
+            # bare it is a true number telling a false story -- eleven days
+            # of November stood taller than the whole of October on the
+            # reading this was built against, which invites exactly the wrong
+            # conclusion about whether the month is running hot. The Mexican
+            # chart above solves the same problem with a hollow bar; a
+            # stacked bar cannot be hollowed legibly, so the LABEL carries it,
+            # which also survives a screenshot.
+            _part = date.today().strftime("%Y-%m")
+            _xs = [(f'{m["label"]} (so far)' if m["month"] == _part
+                    else m["label"]) for m in _ms]
+            fig = go.Figure()
+            fig.add_bar(x=_xs, y=[m["active"] or 0 for m in _ms],
+                        marker_color=AMBER, name="Still active",
+                        hovertemplate="%{x}<br>%{y:,} still active"
+                                      "<extra></extra>")
+            fig.add_bar(x=_xs, y=[m["inactive"] or 0 for m in _ms],
+                        marker_color=JPSI_BLUE, name="Closed",
+                        hovertemplate="%{x}<br>%{y:,} closed<extra></extra>")
+            fig.update_layout(
+                height=270, margin=dict(l=10, r=14, t=28, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11), barmode="stack",
+                legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+                # CATEGORY, NOT TYPE-SNIFFED. Month labels would not bite
+                # today, but the trap beef_trade.annual_figure records is a
+                # bar that is never drawn because plotly built a linear axis
+                # off numeric-looking strings.
+                xaxis=dict(gridcolor=BORDER, title=None, type="category"),
+                yaxis=dict(gridcolor=BORDER, title="US domestic cases",
+                           tickformat=","))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # THE TWO COUNTRIES' "ACTIVE" ARE DIFFERENT MEASUREMENTS and they
+            # sit inches apart on this page. Nothing about the numbers warns
+            # a reader, which is exactly the two-surfaces-one-label failure
+            # this repo records five times over.
+            st.warning(
+                "**\"Active\" does not mean the same thing on the two sides "
+                "of the border.** In Mexico a case is active for "
+                f"{sw.ACTIVE_DAYS} days and then closes on the calendar: "
+                "SENASICA revisits it and, absent new larvae, marks it "
+                "inactive. In the United States it stays active while "
+                "mitigation is under way, which is a real case status "
+                f"&mdash; {_prev['active']:,} of {_prev['label']}'s "
+                f"{_prev['domestic']:,} US cases were still open at this "
+                "reading, at ages a Mexican clock would have closed. The two "
+                "counts are not comparable and must not be added.")
+            st.caption(
+                "USDA's dashboard draws the most recent four months, so the "
+                "bars above are a window rather than the series: the first "
+                "US detection was June 2026 and the all-time total is larger "
+                "than these sum to. [Open APHIS's dashboard]"
+                f"({sw.PAGE_US}) for the all-time count, the county map and "
+                "the fly-trap detections.")
+
+        _unmapped = sw.unmapped_states(ROWS)
+        if _unmapped:
+            # A state missing from a bubble map is indistinguishable from a
+            # state with no cases, which is the worst way for this to fail:
+            # it reads as good news.
+            st.warning(
+                "Not drawn on the map &mdash; no coordinate on file for "
+                + ", ".join(_unmapped)
+                + ". Their cases are in every count and in the table above.")
+
+    st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="srcline">JSA &middot; John Stewart &amp; Associates '
+        '&nbsp;&middot;&nbsp; USDA APHIS: the within-100-miles Mexican case '
+        'list and the Confirmed Detections dashboard, both keyless '
+        '&nbsp;&middot;&nbsp; Mexican case status is SENASICA\'s</div>',
+        unsafe_allow_html=True)

@@ -284,6 +284,12 @@ errors = st.session_state.get("wcr_errors") or _cached_warnings
 # point of the empty pair is that it looks like the loaded one.
 TAB_LABELS = ["Letter", "Cattle Market Rundown Slide"]
 
+# Returned in place of the Sterling payload when its tab is closed. A
+# distinct object rather than an {"error": ...}, so "nobody asked for it
+# yet" cannot be mistaken for "the mailbox failed" -- they read the same
+# to a `.get("error")` test and they are opposite facts.
+_STERLING_IDLE = {"idle": True}
+
 if ctx is None:
     st.info("Press **Fetch latest data** to pull this issue's numbers.")
     # THE TABS STILL DRAW, EMPTY, AND THEN THE PAGE STOPS.
@@ -1322,7 +1328,17 @@ def _rundown_pptx(rows_tuple) -> bytes:
     return buf.getvalue()
 
 
-tab_letter, tab_slide = st.tabs(TAB_LABELS)
+# LAZY, SO THE SLIDE'S MAILBOX FETCH IS NOT ON THE PAGE-LOAD PATH.
+#
+# `on_change="rerun"` is what makes `.open` a real bool; without it a
+# TabContainer's `.open` is None, which is falsy, so the guard below would
+# skip the Sterling fetch for ever and the tab would render empty with
+# nothing saying why. The two go together or neither -- CLAUDE.md records
+# that split, and the crush pages are the counter-example where laziness
+# would break a hidden sibling. Nothing here depends on a hidden tab
+# executing: the slide body is the last block in this file and binds
+# nothing read after it.
+tab_letter, tab_slide = st.tabs(TAB_LABELS, on_change="rerun")
 
 with tab_letter:
 
@@ -1574,9 +1590,21 @@ with tab_slide:
 
     # -- slide 7: Sterling ----------------------------------------------------
     #
-    # A NETWORK CALL IN A TAB THAT RUNS WHETHER OR NOT IT IS ON SCREEN, so it
-    # is cached for an hour. Sterling publishes roughly weekly; an hour is the
-    # same deal the Saturday Slaughter view already takes for its MARS fetch.
+    # IT USED TO RUN WHETHER OR NOT THE TAB WAS ON SCREEN, and on 2026-11-12
+    # that put a live Microsoft Graph call on the page-load path of the one
+    # page Ross writes the letter on. Graph was answering 502 that afternoon
+    # and `sterling.fetch()` took 47s to find out -- 29s of it inside the MSAL
+    # token refresh -- so merely REFRESHING the letter page sat there.
+    #
+    # REFRESHING MADE IT WORSE, which is the part worth keeping. Streamlit
+    # serialises concurrent computation of one cache_data key behind a lock
+    # with no timeout (runtime/caching/cache_utils.py), so the second refresh
+    # did not start afresh: it queued behind the first and inherited its wait.
+    # A user doing the obvious thing could not escape it.
+    #
+    # The hour's cache is still right and still here -- Sterling publishes
+    # roughly weekly -- but a cache cannot help the first call, and the first
+    # call was on every cold container and every lapsed hour.
     st.divider()
     st.markdown("#### Sterling slide (deck slide 7)")
 
@@ -1592,8 +1620,14 @@ with tab_slide:
                                     agmarket=REPO / "assets" / "agmarket-net.png")
         return buf.getvalue()
 
-    _st_data = _sterling_data()
-    if _st_data.get("error"):
+    # ASKED FOR, NOT ASSUMED. `.open` is a real bool because the tabs above
+    # were made lazy; on the Letter tab this costs nothing at all.
+    _st_data = _sterling_data() if tab_slide.open else _STERLING_IDLE
+    if _st_data is _STERLING_IDLE:
+        st.caption("The Sterling margins load when this tab is open — they are "
+                   "a live mailbox fetch, and putting them on every page load "
+                   "is what made this page hang when Graph was slow.")
+    elif _st_data.get("error"):
         st.warning(f"Sterling tracker unavailable — {_st_data['error']}")
     else:
         _we = _st_data.get("week_ending")

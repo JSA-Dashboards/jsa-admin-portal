@@ -1,11 +1,12 @@
 {
  "branch": "master",
- "commit": "1b50762bb40c70c2e6ee698d3591545a61b9bacc",
+ "commit": "3b186ec732e2505c52102b76a59a3194954beabc",
  "files": {
-  "app.py": "4cd50294257fb7f4a73d2f043b62bd45276c2430fba5a011bc502b027c9cf087",
+  "app.py": "da75cd67323f1f3aa7cfb2c88ab28cb96884e9a30a339308510c0c6a1e08838a",
   "border.py": "af29cb8fade98bf2cdaf02e5346695823400246d39286d43287c7b2fe1e51585",
   "corn_demand.py": "28a336b3a1cd3f73b37763e67db092e8f09fb3cd0f0c1da1c6c11b7f687b9262",
   "mx_prices.py": "9946674f160e59b5b032c2ba262969645f81b25438af961a5b89236cea72c49f",
+  "screwworm.py": "9ab916eb0af6380e7339a4e9885569cf306bbb984fd5bbea83a654fb8da059c3",
   "snowflake_db.py": "5daa187f3147e3f8872beb7dee2094a236403f0d35f5780f1af0684228c9c580"
  },
  "note": "GENERATED mirror - edit the source repo, then run sync/sync_apps.py apply",

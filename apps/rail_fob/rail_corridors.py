@@ -34,6 +34,7 @@ CORRIDOR_ORDER   = {n: i for i, (n, _) in enumerate(CORRIDORS)}
 MANUAL_SECTIONS = [
     ("Eastern Rail",     ["CSX Columbus", "CSX Evansville", "NS Ft Wayne", "CSX Freight"]),
     ("Gulf Export Rail", ["CN 105s", "CN 25's"]),
+    ("Beans",            ["CN 105s Beans"]),      # Kolten, 2026-11-12: "add beans into the Rail Corridors tab"
     ("UP Western Rail",  ["UP Group 3", "UP Interior IA", "UP Illinois (Dom)",
                            "UP Illinois (Mex)", "UP 110 Shuttle"]),
     ("BN Western Rail",  ["BN Hereford", "BN PNW", "BN COBO", "BN 110 Shuttle",

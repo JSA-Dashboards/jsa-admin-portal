@@ -274,7 +274,7 @@ def render_pnl_heatmap(
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(size=11),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"pnl_heatmap_{'centred' if centre_on_today else 'total'}")
     _caption_basis(centre, positions, stress, get_contract_price, today, commodity,
                    centre_on_today)
 
@@ -362,7 +362,7 @@ def render_delta_scenario(
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(size=11),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="delta_scenario")
 
     lo, hi = row[0], row[-1]
     st.caption(
@@ -470,7 +470,7 @@ def render_payoff_chart(
         paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="portfolio_payoff")
     if shocks_in_cents(commodity):
         half_c = cents_window(commodity, shock_window)[0]
         view_text, range_text = f"{half_c:g}¢", f"{half_c * 3:g}¢"
@@ -587,7 +587,7 @@ def _render_mini_bar(
             paper_bgcolor="rgba(0,0,0,0)",
             font=dict(size=11),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"greeks_bars_{title}")
 
 
 def render_greeks_bars(

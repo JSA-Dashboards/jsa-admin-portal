@@ -34,6 +34,7 @@ ORIGINS = [
 # every other origin in these states: par to its state's base (a small discount isn't stated)
 GENERIC = {"IA": ("Interior IA", 0), "NE": ("Group 3", 0),
            "SD": ("Interior IA", 0),      # SD: par to Interior IA is an ASSUMPTION (Kolten asked for UP rows on the South Dakota State Level; no SD spread was stated)
+           "MO": ("Group 3", 0),          # MO: par to Group 3 is an ASSUMPTION (Kolten asked for a UP row on the Missouri State Level; no MO spread was stated)
            "ND": ("Interior IA", 0),      # ND: same ASSUMPTION as SD (Kolten asked for UP rows on the North Dakota State Level; no ND spread was stated)
            "KS": ("Group 3", 0)}      # KS: par to Group 3 is an ASSUMPTION (Kolten asked for UP rows on the Kansas State Level; no Kansas spread was stated)
 

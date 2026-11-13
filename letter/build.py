@@ -212,6 +212,21 @@ def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> Non
     problems, and a panel that cries every morning stops being read on the one
     morning it matters.
     """
+    # A DEAD HOST, NAMED ONCE, ABOVE ITS OWN WRECKAGE.
+    #
+    # Every call that hit it has already appended its own line, and the first
+    # of them is a raw urllib3 "HTTPSConnectionPool(host=..., port=443): Max
+    # retries exceeded" -- true, unreadable, and it does not say which of the
+    # letter's figures are now missing. This says both, in one sentence, and
+    # it fires only when a host actually tripped.
+    for host in sources.hosts_down():
+        errors.append(
+            f"{host} did not respond. Every figure from it is missing from this "
+            f"letter -- for the USDA datamart that is the cash trade, the "
+            f"week-to-date cash by state and the afternoon cutout. The fetch "
+            f"stopped retrying it rather than waiting out one timeout per call; "
+            f"press Fetch latest data again once USDA is back.")
+
     # THE 3PM CENTRAL TRAP, AND WHY IT IS EVENING-ONLY. LM_XB403 publishes
     # around 3pm Central. The evening letter is written after that and wants
     # today's close, so anything older means the release has not landed. The
@@ -383,6 +398,12 @@ def select_technicals(ctx: dict) -> None:
 
 
 def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict = None) -> dict:
+    # FIRST ACT OF THE RUN. The host breaker is module state, so without this
+    # a host that failed at breakfast would still be refused at four o'clock.
+    # The TTL is a backstop for callers that are not gather(); this is what
+    # makes "one fetch, one chance per host" true.
+    sources.reset_hosts()
+
     api_key = os.environ.get("MASSIVE_API_KEY", "").strip()
     if not api_key:
         errors.append("MASSIVE_API_KEY not set -- futures and technicals unavailable")

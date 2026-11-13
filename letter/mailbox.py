@@ -121,13 +121,29 @@ def _app():
     cache = msal.SerializableTokenCache()
     if TOKEN_CACHE.exists():
         cache.deserialize(TOKEN_CACHE.read_text(encoding="utf-8"))
+    # TIMEOUT, BECAUSE MSAL'S DEFAULT IS NONE AND NONE MEANS FOREVER.
+    #
+    # msal builds its own requests session and threads this straight through:
+    # ClientApplication.__init__ takes timeout=None and does
+    # `functools.partial(self.http_client.request, timeout=timeout)`. So with
+    # the default, a login.microsoftonline.com that accepts the connection and
+    # never answers -- exactly what mpr.datamart.ams.usda.gov was doing on
+    # 2026-11-12 -- hangs the caller for ever. This was the only unbounded
+    # call on the letter page's load path.
+    #
+    # A silent token refresh is a small POST against a CDN-fronted endpoint;
+    # when it is healthy it answers in under a second. 30s is already far
+    # outside normal and still bounded.
     app = msal.PublicClientApplication(
         client_id=os.environ["GRAPH_CLIENT_ID"],
         authority=f"https://login.microsoftonline.com/{os.environ['GRAPH_TENANT_ID']}",
         token_cache=cache,
+        timeout=MSAL_TIMEOUT,
     )
     return app, cache
 
+
+MSAL_TIMEOUT = 30
 
 _TOKEN_SYNCED = False
 
