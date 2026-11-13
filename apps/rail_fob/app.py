@@ -2479,7 +2479,8 @@ def _shipments_tab():
                 st.cache_data.clear()
                 st.session_state["ship_force_api"] = True
                 st.rerun()
-            st.caption("Loads from bundled data by default; use the button above for the latest.")
+            st.caption("Loads the latest from USDA automatically (re-read at most hourly); the bundled copy is only the fallback "
+                       "if USDA can't be reached. The button above forces a fresh read now.")
             st.caption("KCS reported as a national total only (no state breakdown).")
 
     _secret_token = os.environ.get("USDA_APP_TOKEN", "")
@@ -2500,19 +2501,24 @@ def _shipments_tab():
                 st.error(f"API fetch failed: {e}")
                 st.session_state["ship_force_api"] = False
                 st.rerun()
-    elif _SHIP_PARQUET_PATH.exists():
-        df, last_updated = _ship_load_from_file()
-        data_source = "Bundled"
     else:
-        with st.spinner("Fetching USDA data…"):
-            try:
+        # LIVE FIRST (2026-11-13: the tab had been showing the bundled copy from Aug 26, last week 48 of 2025/26, because only a
+        # button press read USDA, and clients / the view link have no button). The read is ~5 s and cached for an hour, so this
+        # costs one fetch an hour for everybody; the bundled file is only the fallback when USDA cannot be reached.
+        try:
+            with st.spinner("Fetching the latest USDA data…"):
                 df, last_updated = _ship_load_from_api(effective_token)
-                data_source = "LIVE API"
-            except Exception as e:
+            data_source = "LIVE API"
+        except Exception as e:
+            if not _SHIP_PARQUET_PATH.exists():
                 st.error(f"Failed to load data: {e}")
                 st.stop()
+            df, last_updated = _ship_load_from_file()
+            data_source = "Bundled"
+            st.warning(f"USDA's data service could not be reached just now ({str(e)[:120]}), so this is the bundled copy "
+                       f"from {last_updated}, which can be weeks old.")
 
-    badge = ("🟢 LIVE API" if data_source == "LIVE API" else f"🔵 data as of {last_updated}")
+    badge = (f"🟢 LIVE: read from USDA {last_updated}" if data_source == "LIVE API" else f"🔵 bundled data as of {last_updated}")
     st.caption(f"**{badge}**")
 
     all_years = sorted(df['Market Year'].dropna().unique().tolist())
