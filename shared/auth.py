@@ -61,6 +61,16 @@ def require_client_login():
         pass
     expected = expected or os.environ.get("CLIENT_PASSWORD")
 
+    # Individual Microsoft sign-in (shared/signin.py) takes over as soon as the app's Secrets carry a complete [auth]
+    # block; without one this function is exactly the shared-password gate it always was. The shared password then only
+    # opens anything when SIGNIN_PASSWORD_FALLBACK is on (the weeks while clients move over).
+    from shared import signin
+    if signin.is_enabled():
+        signin.require_signin(
+            title="JSA Client Portal", need="client",
+            password_fallback=(expected if expected and signin.password_fallback_enabled() else None))
+        return
+
     if expected and st.session_state.get("_jsa_client_authed"):
         return
 

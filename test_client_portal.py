@@ -20,7 +20,7 @@ def tiles():
 
 
 STAFF_ONLY = {"cso-risk-analyzer", "rma-map", "teams-broadcast", "financial-wire", "grain-desk-status", "ask-ai", "ask-ai",
-              "weekly-cattle-reports", "cattle-market-board"}
+              "weekly-cattle-reports", "cattle-market-board", "portal-access"}
 
 
 def test_staff_only_pages_are_never_in_the_client_list():

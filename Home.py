@@ -285,6 +285,9 @@ LIVE_DASHBOARDS = [
     {"title": "Ask AI", "category": "Admin",
      "desc": "Ask anything about JSA's data, see what the oversight bots flagged, and what changed in the latest WASDE.",
      "page": "admin_pages/ask_ai.py", "url_path": "ask-ai"},
+    {"title": "Portal Access", "category": "Admin",
+     "desc": "Who may sign in to the client portal: add people, switch them off, see the list.",
+     "page": "admin_pages/portal_access.py", "url_path": "portal-access"},
 ]
 
 # The livestock family lives in its own deployed app (JSA-Dashboards/livestock-portal), which has
@@ -682,4 +685,8 @@ _NARROW_CSS = """
 </style>
 """
 st.markdown(_NARROW_CSS, unsafe_allow_html=True)
+if CLIENT:
+    # "Signed in as ... Sign out" for someone who came in with Microsoft sign-in; draws nothing for the password route.
+    from shared import signin
+    signin.render_account_bar()
 pg.run()
